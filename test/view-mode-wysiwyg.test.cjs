@@ -456,9 +456,10 @@ test('点击遮罩块须先撤遮罩再落光标（CM5 会钳制标记区间内�
   // （2026-10-09 实测：点多行块中部，光标恒落到块尾/块首行，用户反复点偏）。
   // 落光标前必须先 setWysiwygActiveBlock 撤掉本块标记，让目标行成为真实源码行；
   // 活动块索引按「目标行」查（增量刷新后闭包 idx 可能已位移，行→块才是准的）。
-  const hits = md.match(/setWysiwygActiveBlock\(self\.wysiwygBlockIndexAt\(/g) || [];
+  // 2026-10-14 起走 _wysiwygBlockIndexAtFresh（防抖窗口内块表滞后守卫，见专项测试）
+  const hits = md.match(/setWysiwygActiveBlock\(self\._wysiwygBlockIndexAtFresh\(/g) || [];
   assert.ok(hits.length >= 2, `表格/普通两个点击分支都须先撤目标块遮罩，实得 ${hits.length}`);
-  const firstAct = md.search(/setWysiwygActiveBlock\(self\.wysiwygBlockIndexAt\(/);
+  const firstAct = md.search(/setWysiwygActiveBlock\(self\._wysiwygBlockIndexAtFresh\(/);
   const firstSel = md.search(/cm\.setSelection\(/);
   assert.ok(firstAct >= 0 && firstSel > firstAct, '撤遮罩发生在 setSelection 之后（标记未清时落光标必被 CM5 钳制）');
 });
@@ -1011,6 +1012,19 @@ test('编辑态排版对齐渲染态（2026-10-14 用户截图反馈）：plain-
   assert.match(ptRule, /font-size: var\(--wysiwyg-text-size, 16px\)/, 'plain-text 字号未同步「预览字号」设置');
   assert.match(ptRule, /line-height: 1\.7/, 'plain-text 行高未对齐渲染态 1.7');
   assert.match(ptRule, /color: var\(--text-primary\)/, 'plain-text 颜色未对齐渲染态正文色');
+  // 2026-10-14 用户截图二轮：① 块内空行（松散列表项间）不挂 plain-text——本类行高 1.7
+  // 特异性高于空行塌缩规则（.CodeMirror .cm-wysiwyg-blank .CodeMirror-line 12px），
+  // 挂了会把空行撑回全高 → 列表编辑态「多出来很多空白行」
+  const plainLoop = wsrc.indexOf('this._wysiwygPlainLines = [];');
+  assert.ok(plainLoop > 0, '缺 plain-text 挂行循环');
+  assert.match(wsrc.slice(plainLoop, plainLoop + 700),
+    /\(cm\.getLine\(lineNo\) \|\| ''\)\.trim\(\) === ''\) continue/, 'plain-text 挂行循环未跳过块内空行');
+  // ② gfm token 色中和：标题 cm-header（蓝）/列表 cm-variable-2（海军蓝）/引用 cm-quote（绿）
+  // 等 token span 嵌在渲染化 span 内，内层 color 压过继承 → 编辑态文字发蓝。
+  // plain-text 行内所有 cm-* span 统一 color:inherit
+  const tokIdx = css.indexOf('.wysiwyg-plain-text span[class*="cm-"]');
+  assert.ok(tokIdx > 0, '缺少 gfm token 色中和规则（.wysiwyg-plain-text span[class*="cm-"]）');
+  assert.match(css.slice(tokIdx, tokIdx + 200), /color: inherit/, 'token 色中和规则未设 color: inherit');
 });
 
 test('表格单元格就地源码编辑（Phase 2 / R5，2026-10-13）：点击进格编辑、提交回写+重渲、三处守卫齐备', () => {
@@ -1425,4 +1439,74 @@ test('表格交互 2026-10-14 四项修复：表后落行/Enter 切格/点空白
   assert.match(tgblk, /before\.trim\(\) !== ''/, '守卫未限定「插入前行为空白」（已有内容的行不是分隔空行）');
   assert.match(tgblk, /this\.cm\.on\('compositionend'/, '缺 IME compositionend 补下移（组合期跳过、组合落定后下移）');
   assert.match(src, /this\._ensureWysiwygTableTypeGuard\(\);/, '输入守卫未在遮罩挂载流程接线');
+});
+
+test('遮罩点击防抖窗口守卫：输入后 250ms 内点其他块遮罩不得整篇闪烁（S38 全格式矩阵实锤的竞态）', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  // 块表在 change 后 250ms 防抖才重切；窗口内点遮罩时实时行号查旧表漏块 → -1 →
+  // setWysiwygActiveBlock(-1) 撤掉当前活动块 → 整篇瞬间全遮罩闪一下。-1 时须同步轻
+  // 切块（computeWysiwygBlocks(true) parseOnly，不渲染）用最新表再查。
+  const fIdx = src.indexOf('_wysiwygBlockIndexAtFresh(line) {');
+  assert.ok(fIdx > 0, '缺 _wysiwygBlockIndexAtFresh（遮罩点击的防抖窗口块表守卫）');
+  const fblk = src.slice(fIdx, fIdx + 700);
+  assert.match(fblk, /this\.computeWysiwygBlocks\(true\)/, '守卫未做 parseOnly 轻切块（只切边界不渲染，廉价同步）');
+  assert.match(fblk, /idx = this\.wysiwygBlockIndexAt\(line\);/, '轻切块后未按最新表重查索引');
+  // 遮罩 mousedown 的两条活动块落点（普通点击 + 块编辑按钮）都必须走 Fresh 版
+  assert.match(src, /self\.setWysiwygActiveBlock\(self\._wysiwygBlockIndexAtFresh\(line\)\);/,
+    '遮罩普通点击未走 _wysiwygBlockIndexAtFresh（防抖窗口内点击会整篇遮罩闪烁）');
+  assert.match(src, /self\.setWysiwygActiveBlock\(self\._wysiwygBlockIndexAtFresh\(r\.from\.line\)\);/,
+    '块编辑按钮点击未走 _wysiwygBlockIndexAtFresh（同一竞态）');
+});
+
+test('幽灵 Enter 吞除：WebView2 中文 IME 选字确认残影键不再多续列表行（2026-10-14 用户反馈「列表回车后光标落新行的下一行」）', () => {
+  const fsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'format.js'), 'utf8');
+  const coreSrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'editor-core.js'), 'utf8');
+  // ① Enter 键处理体（extraKeys 'Enter' 绑定，editor-core L170-171）开头有幽灵窗守卫：
+  // 组合刚结束 250ms 内返回（undefined = 键被消费，codemirror.js doHandleBinding 语义）
+  const hIdx = fsrc.indexOf('_handleTableEnter(cm) {');
+  assert.ok(hIdx > 0, '缺 _handleTableEnter（Enter 键映射处理体）');
+  const hblk = fsrc.slice(hIdx, hIdx + 1200);
+  assert.match(hblk, /this\._lastCompositionEnd && Date\.now\(\) - this\._lastCompositionEnd < 250\) return;/,
+    '缺幽灵 Enter 吞除窗守卫（组合刚结束的残影 Enter 会多续一条列表行 → 真实 Enter 再续一条 → 光标在新行下面一行）');
+  // ② 时间戳必须来自输入域的原生 DOM compositionend：CM 5.65.18 不触发用户级
+  // compositionstart/end 编辑器事件（cm.on 处理器不执行，官方源码已核），
+  // 挂 cm.on 上的时间戳永远是 undefined → 守卫失效
+  assert.match(coreSrc, /getInputField\(\)\.addEventListener\('compositionend', \(\) => \{[\s\S]{0,80}this\._lastCompositionEnd = Date\.now\(\);/,
+    '幽灵 Enter 时间戳未挂输入域原生 DOM compositionend（cm.on compositionend 在 CM 5.65.18 不触发）');
+});
+
+test('token 中和 + 同身 span 渲染色重申（CM5 合并同区间 marker 成同身 span）', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  // 中和规则本体：plain-text 行内所有 cm- token span 继承（压掉 gfm 蓝/海军蓝/绿/紫）
+  assert.match(css, /wysiwyg-plain-text span\[class[*]="cm-"\] \{[\s\S]{0,40}color: inherit;/,
+    'token 中和规则本体丢失（编辑态文字会恢复 gfm token 色）');
+  // CM5 把 token 区间与渲染化区间完全重合的两个 marker 合并成同一个 span
+  //（cm-quote + wysiwyg-quote-text 同身、cm-header + wysiwyg-heading-hash 同身）；
+  // 中和规则 (0,4,1) 压过渲染化颜色规则 (0,3,0) → 同身 span 的渲染色被洗掉
+  //（引用正文次级色被洗成主色、列表符号透明被洗成实色，2026-10-14 全格式矩阵实测）。
+  // 必须以 (0,5,1) 同前缀重申「有渲染色设计」的类（规则序在中和之后）。
+  const oIdx = css.indexOf('class*="wysiwyg-quote-text"]');
+  assert.ok(oIdx > 0, '缺同身 span 渲染色重申（引用正文的 --text-secondary 会被中和规则洗成主色）');
+  const oblk = css.slice(Math.max(0, oIdx - 900), oIdx + 1200);
+  assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-quote-text"\][\s\S]{0,300}wysiwyg-quote-prefix[\][\s\S]{0,120}color: var\(--text-secondary\);/,
+    '引用正文/前缀次级色未用 (0,5,1) 重申');
+  assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-heading-hash"\][\s\S]{0,120}color: var\(--text-secondary\);/,
+    '标题 # 前缀次级色未用 (0,5,1) 重申');
+  assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-inline-link"\][\s\S]{0,160}color: var\(--accent-color\);/,
+    '链接主题色未用 (0,5,1) 重申');
+  assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-inline-marker"\][\s\S]{0,400}wysiwyg-list-bullet[\][\s\S]{0,300}wysiwyg-task-box[\][\s\S]{0,120}color: transparent;/,
+    '标记透明/列表符号透明/任务框透明未用 (0,5,1) 重申（源字符会压住 ::before 渲染符号）');
+});
+
+test('下划线渲染化：<u> 原生 HTML 标签在编辑态同渲染观感（2026-10-14 全格式矩阵用户要求）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const pIdx = wsrc.indexOf('function parseWysiwygInlineSpans(text) {');
+  assert.ok(pIdx > 0, '缺 parseWysiwygInlineSpans');
+  const pblk = wsrc.slice(pIdx, pIdx + 4200);
+  assert.match(pblk, /reUnderline = \/\^<u>\(\[\^<\\n\][+]\)<\\\/u>\//, '缺 <u></u> 行内形态正则（单标签成对、不含嵌套标签/换行）');
+  assert.match(pblk, /kind = 'underline'/, '缺 underline 分支');
+  assert.match(pblk, /push\(start, start \+ 3, 'wysiwyg-inline-marker'\);[\s\S]{0,120}push\(start \+ 3, end - 4, 'wysiwyg-underline'\);/,
+    '开/闭标签宽度不对称（<u> 3 字符 / </u> 4 字符）未单独处理（走了对称 tick 分支会错位）');
+  assert.match(css, /\.wysiwyg-underline \{ text-decoration: underline; \}/, '缺 .wysiwyg-underline 渲染样式（与渲染态 <u> 观感一致）');
 });

@@ -1489,8 +1489,9 @@ try {
   }
 
   // ---------- S35：光标行单行灰底 + 编辑态排版=渲染态（2026-10-14 用户截图反馈） ----------
+  // 文档：标题(0) / 空(1) / 松散列表(2-5，行4=项间空行) / 围栏(6-8) / 段落(9)
   {
-    console.log('\n=== S35：光标行单行灰底 + 编辑态排版对齐渲染态 ===');
+    console.log('\n=== S35：光标行单行灰底 + 编辑态排版对齐渲染态（含 token 色中和/空行塌缩） ===');
     const p35 = await page.evaluate(() => window.__runPlainTextDecor2026());
     if (p35.err) {
       console.log('  ⚠ 场景失败: ' + p35.err);
@@ -1498,8 +1499,18 @@ try {
     } else {
       const checks35 = [];
       const sleep35 = (ms) => new Promise(r => setTimeout(r, ms));
-      // ① 点列表遮罩（行2）进块：只有光标行（行2）灰底，块内行1/3 无底
-      const mp = await page.evaluate(() => window.__s35maskPoint(2));
+      const PRIMARY = 'rgb(34, 38, 46)'; // --text-primary 默认值 #22262e
+      const SECONDARY = 'rgb(102, 109, 121)'; // --text-secondary 默认值 #666d79
+      const TRANSPARENT = 'rgba(0, 0, 0, 0)';
+      // ① 初始活动标题行：gfm cm-header token（默认主题蓝色）不得出现——token span 颜色
+      //    只能是正文色（中和继承）/次级色（# 前缀渲染色，同身 span 重申）/透明（标记）
+      console.log('  标题行 token 色: ' + JSON.stringify(p35.initial.headingTokens));
+      checks35.push(['标题行：cm-header token span 存在且无主题蓝（=正文色/次级色/透明）',
+        Array.isArray(p35.initial.headingTokens) && p35.initial.headingTokens.length > 0 &&
+        p35.initial.headingTokens.every((c) => c === PRIMARY || c === SECONDARY || c === TRANSPARENT)]);
+      checks35.push(['标题行：挂 plain-text 行类', p35.initial.headingPlain === true]);
+      // ② 点列表遮罩（行3）进块：只有光标行灰底（块内其余行无底）
+      const mp = await page.evaluate(() => window.__s35maskPoint(3));
       if (!mp) {
         console.log('  ⚠ 列表遮罩定位失败');
         fail++;
@@ -1509,24 +1520,28 @@ try {
         const b = await page.evaluate(() => ({
           activeIdx: window.__s35ed._wysiwygActiveIdx,
           cursorLine: window.__s35ed.cm.getCursor().line,
-          bg1: window.__s35bg(1), bg2: window.__s35bg(2), bg3: window.__s35bg(3),
+          bg2: window.__s35bg(2), bg3: window.__s35bg(3), bg5: window.__s35bg(5),
         }));
         console.log('  点列表后: ' + JSON.stringify(b));
         // 光标落哪行由遮罩竖向比例决定（点击点=遮罩中心）：断言「只有光标行灰底」
-        const expectBg = { 1: b.bg1, 2: b.bg2, 3: b.bg3 };
-        const others = [1, 2, 3].filter((n) => n !== b.cursorLine);
+        const expectBg = { 2: b.bg2, 3: b.bg3, 5: b.bg5 };
+        const others = [2, 3, 5].filter((n) => n !== b.cursorLine);
         checks35.push(['列表块：只有光标行灰底（块内其余行无底）',
-          b.activeIdx === 1 && b.cursorLine >= 1 && b.cursorLine <= 3 &&
-          expectBg[b.cursorLine] === true && others.every((n) => expectBg[n] === false)]);
-        // ② 光标块内移动（行1）：灰底跟随
-        await page.evaluate(() => window.__s35cursor(1, 5));
-        await sleep35(150);
-        const b2 = await page.evaluate(() => ({ bg1: window.__s35bg(1), bg2: window.__s35bg(2) }));
-        console.log('  光标移到行1: ' + JSON.stringify(b2));
-        checks35.push(['灰底随光标在块内移动（行1 有底、行2 撤底）', b2.bg1 === true && b2.bg2 === false]);
-        // ③ 活动列表行排版 = 渲染态（预览字族 + 16px + 行高1.7 + 正文色）+ 行内粗体嵌套
+          b.activeIdx === 1 && b.cursorLine >= 2 && b.cursorLine <= 5 &&
+          (expectBg[b.cursorLine] || b.cursorLine === 4) &&
+          others.every((n) => expectBg[n] === false)]);
+        // ③ 松散列表项间空行（行4）保持塌缩 12px、不挂 plain-text；项行保持正常行高
+        const h4 = await page.evaluate(() => window.__s35lineH(4));
+        const h3 = await page.evaluate(() => window.__s35lineH(3));
+        const p4 = await page.evaluate(() => window.__s35plain(4));
+        console.log(`  空行4高度=${h4}px 项行3高度=${h3}px 空行plain=${p4}`);
+        checks35.push(['松散列表项间空行：保持塌缩（≤15px）且不挂 plain-text',
+          h4 != null && h4 <= 15 && p4 === false]);
+        checks35.push(['列表项行：正常行高（≈27px，未被塌缩误伤）', h3 != null && h3 >= 25 && h3 <= 32]);
+        // ④ 活动列表行排版 = 渲染态（预览字族 + 16px + 行高1.7 + 正文色）+ 行内粗体嵌套
+        //    + gfm cm-variable-2 token（默认主题海军蓝）必须中和为正文色
         const t = await page.evaluate(() => {
-          const ln = window.__s35lineEl(1);
+          const ln = window.__s35lineEl(2);
           if (!ln) return null;
           const cs = getComputedStyle(ln);
           const bold = Array.from(ln.querySelectorAll('span'))
@@ -1534,17 +1549,29 @@ try {
           return {
             plain: (ln.className || '').indexOf('wysiwyg-plain-text') >= 0,
             ff: cs.fontFamily, fs: cs.fontSize, lh: cs.lineHeight, color: cs.color, bold,
+            tokens: Array.from(ln.querySelectorAll('span[class*="cm-"]'))
+              .map((s) => getComputedStyle(s).color),
           };
         });
-        console.log('  行1 排版: ' + JSON.stringify(t));
+        console.log('  行2 排版: ' + JSON.stringify(t));
         checks35.push(['活动列表行：plain-text 行类 + 预览字族', t && t.plain === true && t.ff.indexOf('Segoe UI') >= 0]);
         checks35.push(['活动列表行：字号 16px + 行高 27.2px（=16×1.7，与渲染态一致）',
           t && t.fs === '16px' && t.lh === '27.2px']);
         checks35.push(['活动列表行：正文色 --text-primary（#22262e）',
-          t && t.color === 'rgb(34, 38, 46)']);
+          t && t.color === PRIMARY]);
         checks35.push(['活动列表行：行内 **加粗** 渲染化（与批次 A 一致）', t && t.bold === true]);
-        // ④ 点围栏遮罩（行6）：代码块整块灰盒（容器观感）+ 源文行不挂 plain-text
-        const fp = await page.evaluate(() => window.__s35maskPoint(6));
+        checks35.push(['活动列表行：gfm 列表 token span（cm-variable-2 等）无海军蓝（=正文色/透明）',
+          t && Array.isArray(t.tokens) && t.tokens.length > 0
+          && t.tokens.every((c) => c === PRIMARY || c === TRANSPARENT)]);
+        // ⑤ 光标块内移动（行5）：灰底跟随
+        await page.evaluate(() => window.__s35cursor(5, 2));
+        await sleep35(150);
+        const b2 = await page.evaluate(() => ({ bg5: window.__s35bg(5), bg2: window.__s35bg(2), bg3: window.__s35bg(3) }));
+        console.log('  光标移到行5: ' + JSON.stringify(b2));
+        checks35.push(['灰底随光标在块内移动（行5 有底、行2/3 无底）',
+          b2.bg5 === true && b2.bg2 === false && b2.bg3 === false]);
+        // ⑥ 点围栏遮罩（行7）：代码块整块灰盒（容器观感）+ 源文行不挂 plain-text
+        const fp = await page.evaluate(() => window.__s35maskPoint(7));
         if (!fp) {
           console.log('  ⚠ 围栏遮罩定位失败');
           fail++;
@@ -1553,30 +1580,324 @@ try {
           await sleep35(250);
           const f = await page.evaluate(() => ({
             activeIdx: window.__s35ed._wysiwygActiveIdx,
-            bg5: window.__s35bg(5), bg6: window.__s35bg(6), bg7: window.__s35bg(7),
-            p5: window.__s35plain(5), p6: window.__s35plain(6), p7: window.__s35plain(7),
+            bg6: window.__s35bg(6), bg7: window.__s35bg(7), bg8: window.__s35bg(8),
+            p6: window.__s35plain(6), p7: window.__s35plain(7), p8: window.__s35plain(8),
           }));
           console.log('  点围栏后: ' + JSON.stringify(f));
           checks35.push(['代码块：整块灰盒（首/中/末行均有底）',
-            f.activeIdx === 2 && f.bg5 === true && f.bg6 === true && f.bg7 === true]);
-          checks35.push(['代码块：源文行不挂 plain-text（保持等宽源文）',
-            f.p5 === false && f.p6 === false && f.p7 === false]);
-          // ⑤ 进尾段落块：单行灰底 + plain-text（围栏块撤底）
-          await page.evaluate(() => window.__s35cursor(8, 2));
+            f.activeIdx === 2 && f.bg6 === true && f.bg7 === true && f.bg8 === true]);
+          checks35.push(['代码块：源文行不挂 plain-text（保持等宽源文 + 语法色）',
+            f.p6 === false && f.p7 === false && f.p8 === false]);
+          // ⑦ 进尾段落块：单行灰底 + plain-text（围栏块撤底）
+          await page.evaluate(() => window.__s35cursor(9, 1));
           await sleep35(250);
           const g = await page.evaluate(() => ({
             activeIdx: window.__s35ed._wysiwygActiveIdx,
-            bg8: window.__s35bg(8), bg5: window.__s35bg(5),
-            p8: window.__s35plain(8),
+            bg9: window.__s35bg(9), bg7: window.__s35bg(7),
+            p9: window.__s35plain(9),
           }));
           console.log('  进尾段落后: ' + JSON.stringify(g));
           checks35.push(['段落块：光标行灰底 + plain-text（原代码块撤底）',
-            g.activeIdx === 3 && g.bg8 === true && g.bg5 === false && g.p8 === true]);
+            g.activeIdx === 3 && g.bg9 === true && g.bg7 === false && g.p9 === true]);
         }
       }
       for (const [label, ok] of checks35) {
         console.log(`  ${ok ? '✓' : '✗'} ${label}`);
         if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S36：列表回车新行光标位置（2026-10-14 用户反馈：光标落到新行的下一行） ----------
+  {
+    console.log('\n=== S36：列表回车新行光标位置 ===');
+    const p36 = await page.evaluate(() => window.__runListEnterCursor());
+    if (p36.err) {
+      console.log('  ⚠ 场景失败: ' + p36.err);
+      fail++;
+    } else {
+      const sleep36 = (ms) => new Promise(r => setTimeout(r, ms));
+      const checks36 = [];
+      // 点列表遮罩进块（真实点击），光标置到第二项（行4）末尾，模拟「编辑到行尾按回车」
+      await page.mouse.click(p36.maskPoint.x, p36.maskPoint.y);
+      await sleep36(250);
+      const len4 = await page.evaluate(() => window.__s36lineLen(4));
+      await page.evaluate(({ n, ch }) => window.__s36cursor(n, ch), { n: 4, ch: len4 });
+      const st0 = await page.evaluate(() => window.__s36state());
+      console.log('  回车前: ' + JSON.stringify(st0));
+      // 真实 Enter（trusted 键盘事件，走 continuelist 续行）
+      await page.keyboard.press('Enter');
+      await sleep36(80);
+      const st1 = await page.evaluate(() => window.__s36state());
+      console.log('  回车后 80ms: ' + JSON.stringify(st1));
+      await sleep36(400);
+      const st2 = await page.evaluate(() => window.__s36state());
+      console.log('  回车后 480ms（含 250ms 防抖刷新）: ' + JSON.stringify(st2));
+      // 断言：新行 = 行5（'- ' 续行），光标 80ms/480ms 都停在行5（新行本身，不是其下一行）
+      checks36.push(['回车后 80ms：光标在新行（行5）且新行是续行标记 "- "',
+        st1.cursor.line === 5 && st1.lines[1] === '- ']);
+      checks36.push(['回车后 480ms（防抖刷新后）：光标仍在新行（行5），未被挪到下一行',
+        st2.cursor.line === 5 && st2.lines[1] === '- ']);
+      for (const [label, ok] of checks36) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S37：幽灵 Enter 吞除窗（2026-10-14 用户反馈：列表回车后光标落新行的下一行） ----------
+  {
+    console.log('\n=== S37：幽灵 Enter 吞除窗（WebView2 中文 IME 残影键） ===');
+    const p37 = await page.evaluate(() => window.__runListEnterGhost());
+    if (p37.err) {
+      console.log('  ⚠ 场景失败: ' + p37.err);
+      fail++;
+    } else {
+      const sleep37 = (ms) => new Promise(r => setTimeout(r, ms));
+      const checks37 = [];
+      // 点列表遮罩进块，光标置到第二项（行3）末尾
+      await page.mouse.click(p37.maskPoint.x, p37.maskPoint.y);
+      await sleep37(250);
+      await page.evaluate(({ n, ch }) => window.__s37cursor(n, ch), { n: 3, ch: p37.line3Len });
+      const s0 = await page.evaluate(() => window.__s37state());
+      console.log('  幽灵键前: ' + JSON.stringify({ cursor: s0.cursor, lineCount: s0.lineCount }));
+      // ① 幽灵 Enter：compositionend 后立刻（窗口内）按 Enter → 必须被吞（不产生新行）
+      const g = await page.evaluate(() => window.__s37ghost());
+      await page.keyboard.press('Enter'); // 距 compositionend 仅一次往返（<250ms 窗口内）
+      await sleep37(80);
+      const s1 = await page.evaluate(() => window.__s37state());
+      console.log('  幽灵 Enter 后 80ms: ' + JSON.stringify({ cursor: s1.cursor, lineCount: s1.lineCount, tsSet: g.tsSet }));
+      checks37.push(['组合刚结束的幽灵 Enter 被吞：行数不变、光标不动',
+        g.tsSet === true && s1.lineCount === s0.lineCount
+        && s1.cursor.line === s0.cursor.line && s1.cursor.ch === s0.cursor.ch]);
+      // ② 真实 Enter：窗口外（+350ms）按 Enter → 正常续行，光标停在新行（不是新行下面一行）
+      await sleep37(350);
+      await page.keyboard.press('Enter');
+      await sleep37(80);
+      const s2 = await page.evaluate(() => window.__s37state());
+      console.log('  真实 Enter 后 80ms: ' + JSON.stringify({ cursor: s2.cursor, lineCount: s2.lineCount, newLine: s2.lines[4] }));
+      checks37.push(['窗口外真实 Enter：续行 "- " 生成，光标在新行（行4）而非其下一行',
+        s2.lineCount === s0.lineCount + 1 && s2.lines[4] === '- '
+        && s2.cursor.line === 4 && s2.cursor.ch === 2]);
+      for (const [label, ok] of checks37) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S38：全格式点击/换行矩阵（2026-10-14 用户要求：模拟点击全格式回归） ----------
+  {
+    console.log('\n=== S38：全格式点击/换行矩阵 ===');
+    const p38 = await page.evaluate(() => window.__runAllFormats());
+    if (p38.err) {
+      console.log('  ⚠ 场景失败: ' + p38.err);
+      fail++;
+    } else {
+      const sleep38 = (ms) => new Promise(r => setTimeout(r, ms));
+      const c38 = [];
+      const chk38 = (label, ok, extra) => {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}` + (extra ? '  ' + extra : ''));
+        if (!ok) fail++;
+      };
+      const allToksOk = (info) => Array.isArray(info.toks) && info.toks.length > 0 && info.toks.every(t => t.ok);
+      const spanOf = (info, cls) => (info.spans || []).find(s => s.cls.indexOf(cls) !== -1);
+      // 初始：光标在行0（标题）→ 标题块活动，其余 7 块全部渲染遮罩
+      const masked0 = await page.evaluate(() => window.__s38maskedBlocks());
+      const h0 = await page.evaluate(() => window.__s38spanInfo(0));
+      chk38('初始：7 个块渲染遮罩（标题块活动）', masked0.length === 7, JSON.stringify(masked0));
+      const hts1 = spanOf(h0, 'wysiwyg-heading-text-1');
+      chk38('标题行：正文 span 渲染尺寸 32px + 粗体 700（对齐渲染态 h1）',
+        !!hts1 && hts1.fs === '32px' && hts1.fw === '700', JSON.stringify(hts1));
+      chk38('标题行：token 色继承（gfm cm-header 蓝被中和）', allToksOk(h0),
+        'toks=' + JSON.stringify((h0.toks || []).map(t => t.color)));
+      chk38('标题行：挂 plain-text 行类', h0.plain === true);
+      // ① 点段落遮罩：标题恢复渲染 + 段落进渲染样式编辑（内联全家族）
+      const ptPara = await page.evaluate(() => window.__s38maskPoint(2));
+      chk38('段落块有渲染遮罩（可点）', !!ptPara);
+      if (ptPara) {
+        await page.mouse.click(ptPara.x, ptPara.y);
+        await sleep38(250);
+        const m1 = await page.evaluate(() => ({ m0: window.__s38masked(0), m2: window.__s38masked(2) }));
+        chk38('点段落后：标题块恢复渲染遮罩、段落源文态', m1.m0 === true && m1.m2 === false, JSON.stringify(m1));
+        const pi = await page.evaluate(() => window.__s38spanInfo(2));
+        const b = spanOf(pi, 'wysiwyg-bold'), it = spanOf(pi, 'wysiwyg-italic'),
+          hl = spanOf(pi, 'wysiwyg-highlight'), st = spanOf(pi, 'wysiwyg-strike');
+        chk38('段落：加粗 span 字重 700', !!b && b.fw === '700', JSON.stringify(b));
+        chk38('段落：斜体 span 斜体', !!it && it.fst === 'italic', JSON.stringify(it));
+        chk38('段落：高亮 span 非透明底', !!hl && hl.bg !== 'rgba(0, 0, 0, 0)', JSON.stringify(hl));
+        chk38('段落：删除线 span line-through', !!st && (st.deco || '').indexOf('line-through') !== -1, JSON.stringify(st));
+        chk38('段落：token 色继承（cm-variable-2 等被中和）', allToksOk(pi),
+          'toks=' + JSON.stringify((pi.toks || []).map(t => t.color)));
+        chk38('段落：plain-text 行类', pi.plain === true);
+        // ② 点标题二遮罩（光标去其他行）：段落恢复渲染
+        const ptH2 = await page.evaluate(() => window.__s38maskPoint(4));
+        chk38('标题二块有渲染遮罩（可点）', !!ptH2);
+        if (ptH2) {
+          await page.mouse.click(ptH2.x, ptH2.y);
+          await sleep38(250);
+          const m2 = await page.evaluate(() => ({ m2: window.__s38masked(2), m4: window.__s38masked(4) }));
+          chk38('点标题二后：段落恢复渲染遮罩、标题二源文态', m2.m2 === true && m2.m4 === false, JSON.stringify(m2));
+          const h2i = await page.evaluate(() => window.__s38spanInfo(4));
+          const hts2 = spanOf(h2i, 'wysiwyg-heading-text-2');
+          chk38('标题二：正文 span 24px + 粗体', !!hts2 && hts2.fs === '24px' && hts2.fw === '700', JSON.stringify(hts2));
+          // ③ 再次点段落遮罩：重新在渲染样式下编辑
+          const ptPara2 = await page.evaluate(() => window.__s38maskPoint(2));
+          chk38('段落块再次有渲染遮罩（可再次点击）', !!ptPara2);
+          if (ptPara2) {
+            await page.mouse.click(ptPara2.x, ptPara2.y);
+            await sleep38(250);
+            const pi2 = await page.evaluate(() => window.__s38spanInfo(2));
+            chk38('再次点段落：内联装饰重新挂全（可再编辑）',
+              !!spanOf(pi2, 'wysiwyg-bold') && !!spanOf(pi2, 'wysiwyg-highlight') && allToksOk(pi2));
+          }
+          // ④ 段落行尾 Enter：新空行、光标在新行（段落不续前缀）
+          const paraLine = await page.evaluate(() => window.__s38find('加粗文字'));
+          await page.evaluate(({ n, ch }) => window.__s38cursor(n, ch), { n: paraLine, ch: await page.evaluate((n) => window.__s38lineLen(n), paraLine) });
+          await page.keyboard.press('Enter');
+          await sleep38(120);
+          const se1 = await page.evaluate(() => window.__s38state());
+          chk38('段落 Enter：新空行生成、光标停在新行（合理换行）',
+            se1.lines[paraLine + 1] === '' && se1.cursor.line === paraLine + 1 && se1.cursor.ch === 0,
+            JSON.stringify({ cursor: se1.cursor, next: se1.lines[paraLine + 1] }));
+        }
+      }
+      // ⑤ 无序列表：装饰 + Enter 续行
+      const ul2 = await page.evaluate(() => window.__s38find('无序项二'));
+      const ptUl = await page.evaluate((n) => window.__s38maskPoint(n), ul2);
+      chk38('无序列表块有渲染遮罩（可点）', !!ptUl);
+      if (ptUl) {
+        await page.mouse.click(ptUl.x, ptUl.y);
+        await sleep38(250);
+        const mUl = await page.evaluate((n) => ({ a: window.__s38masked(n - 1), b: window.__s38masked(n) }), ul2);
+        chk38('点列表后：整块源文态（两项都解罩）', mUl.a === false && mUl.b === false, JSON.stringify(mUl));
+        const iA = await page.evaluate((n) => window.__s38spanInfo(n), ul2 - 1);
+        const iB = await page.evaluate((n) => window.__s38spanInfo(n), ul2);
+        chk38('列表项：圆点符号渲染化（wysiwyg-list-bullet）', !!spanOf(iA, 'wysiwyg-list-bullet') && !!spanOf(iB, 'wysiwyg-list-bullet'));
+        chk38('列表项：正文预览字族 span + plain-text', !!spanOf(iA, 'wysiwyg-list-text') && iA.plain && iB.plain);
+        chk38('列表项：行内 ** / == 渲染化', !!spanOf(iA, 'wysiwyg-bold') && !!spanOf(iB, 'wysiwyg-highlight'));
+        chk38('列表项：token 色继承', allToksOk(iA) && allToksOk(iB));
+        await page.evaluate(({ n, ch }) => window.__s38cursor(n, ch), { n: ul2, ch: await page.evaluate((n) => window.__s38lineLen(n), ul2) });
+        await page.keyboard.press('Enter');
+        await sleep38(120);
+        const se2 = await page.evaluate(() => window.__s38state());
+        chk38('列表 Enter：续行 "- "、光标停在新行',
+          se2.lines[ul2 + 1] === '- ' && se2.cursor.line === ul2 + 1 && se2.cursor.ch === 2,
+          JSON.stringify({ cursor: se2.cursor, next: se2.lines[ul2 + 1] }));
+      }
+      // ⑥ 有序列表
+      const ol2 = await page.evaluate(() => window.__s38find('有序项二'));
+      const ptOl = await page.evaluate((n) => window.__s38maskPoint(n), ol2);
+      chk38('有序列表块有渲染遮罩（可点）', !!ptOl);
+      if (ptOl) {
+        await page.mouse.click(ptOl.x, ptOl.y);
+        await sleep38(250);
+        const iO = await page.evaluate((n) => window.__s38spanInfo(n), ol2);
+        chk38('有序项：序号 span（wysiwyg-ol-marker）+ 斜体渲染化', !!spanOf(iO, 'wysiwyg-ol-marker') && !!spanOf(iO, 'wysiwyg-italic'));
+        chk38('有序项：token 色继承 + plain-text', allToksOk(iO) && iO.plain === true);
+        await page.evaluate(({ n, ch }) => window.__s38cursor(n, ch), { n: ol2, ch: await page.evaluate((n) => window.__s38lineLen(n), ol2) });
+        await page.keyboard.press('Enter');
+        await sleep38(120);
+        const se3 = await page.evaluate(() => window.__s38state());
+        chk38('有序列表 Enter：续行 "3. "、光标停在新行',
+          se3.lines[ol2 + 1] === '3. ' && se3.cursor.line === ol2 + 1 && se3.cursor.ch === 3,
+          JSON.stringify({ cursor: se3.cursor, next: se3.lines[ol2 + 1] }));
+      }
+      // ⑦ 引用块
+      const q2 = await page.evaluate(() => window.__s38find('引用第二行'));
+      const ptQ = await page.evaluate((n) => window.__s38maskPoint(n), q2);
+      chk38('引用块有渲染遮罩（可点）', !!ptQ);
+      if (ptQ) {
+        await page.mouse.click(ptQ.x, ptQ.y);
+        await sleep38(250);
+        const iQ = await page.evaluate((n) => window.__s38spanInfo(n), q2);
+        chk38('引用行：> 竖条 + 前缀 + 正文 span（次级色）',
+          !!spanOf(iQ, 'wysiwyg-quote-bar') && !!spanOf(iQ, 'wysiwyg-quote-prefix') && !!spanOf(iQ, 'wysiwyg-quote-text'));
+        const qt = spanOf(iQ, 'wysiwyg-quote-text');
+        chk38('引用行：内联 == 高亮渲染化（块级+行内嵌套装饰）', !!spanOf(iQ, 'wysiwyg-highlight'));
+        // 引用正文必须 = 渲染态 blockquote 的次级色（CM5 会把 cm-quote 与 wysiwyg-quote-text
+        // 合并成同一个 span，token 中和规则若命中它会把次级色洗成主色 → 与渲染态不一致）
+        const secRgb = await page.evaluate(() => {
+          const probe = document.createElement('span');
+          probe.style.color = 'var(--text-secondary)';
+          document.body.appendChild(probe);
+          const c = getComputedStyle(probe).color;
+          probe.remove();
+          return c;
+        });
+        chk38('引用行：正文/前缀 = 次级色（与渲染态 blockquote 一致，token 色同身跟随/标记透明）',
+          !!qt && qt.color === secRgb && (iQ.toks || []).length > 0
+          && (iQ.toks || []).every(t => t.color === qt.color || t.color === 'rgba(0, 0, 0, 0)'),
+          'quote=' + (qt && qt.color) + ' secondary=' + secRgb
+          + ' toks=' + JSON.stringify((iQ.toks || []).map(t => t.color)));
+        await page.evaluate(({ n, ch }) => window.__s38cursor(n, ch), { n: q2, ch: await page.evaluate((n) => window.__s38lineLen(n), q2) });
+        await page.keyboard.press('Enter');
+        await sleep38(120);
+        const se4 = await page.evaluate(() => window.__s38state());
+        chk38('引用 Enter：续行 "> "、光标停在新行',
+          se4.lines[q2 + 1] === '> ' && se4.cursor.line === q2 + 1 && se4.cursor.ch === 2,
+          JSON.stringify({ cursor: se4.cursor, next: se4.lines[q2 + 1] }));
+      }
+      // ⑧ 任务列表
+      const t2 = await page.evaluate(() => window.__s38find('已完成任务'));
+      const ptT = await page.evaluate((n) => window.__s38maskPoint(n), t2);
+      chk38('任务列表块有渲染遮罩（可点）', !!ptT);
+      if (ptT) {
+        await page.mouse.click(ptT.x, ptT.y);
+        await sleep38(250);
+        const iT = await page.evaluate((n) => window.__s38spanInfo(n), t2);
+        const iT0 = await page.evaluate((n) => window.__s38spanInfo(n), t2 - 1);
+        const box = spanOf(iT, 'wysiwyg-task-box'), box0 = spanOf(iT0, 'wysiwyg-task-box');
+        chk38('任务行：复选框渲染化（[x] 勾选态 / [ ] 未勾选态）',
+          !!box && box.cls.indexOf('checked') !== -1 && !!box0 && box0.cls.indexOf('checked') === -1,
+          JSON.stringify({ box: box && box.cls, box0: box0 && box0.cls }));
+        await page.evaluate(({ n, ch }) => window.__s38cursor(n, ch), { n: t2, ch: await page.evaluate((n) => window.__s38lineLen(n), t2) });
+        await page.keyboard.press('Enter');
+        await sleep38(120);
+        const se5 = await page.evaluate(() => window.__s38state());
+        chk38('任务列表 Enter：续行 "- [ ] "、光标停在新行',
+          se5.lines[t2 + 1] === '- [ ] ' && se5.cursor.line === t2 + 1 && se5.cursor.ch === 6,
+          JSON.stringify({ cursor: se5.cursor, next: se5.lines[t2 + 1] }));
+      }
+      // ⑨ 下划线段落
+      const u2 = await page.evaluate(() => window.__s38find('下划线文字'));
+      const ptU = await page.evaluate((n) => window.__s38maskPoint(n), u2);
+      chk38('下划线段落块有渲染遮罩（可点）', !!ptU);
+      if (ptU) {
+        await page.mouse.click(ptU.x, ptU.y);
+        await sleep38(250);
+        const iU = await page.evaluate((n) => window.__s38spanInfo(n), u2);
+        const uSpan = spanOf(iU, 'wysiwyg-underline');
+        chk38('下划线：<u> 文本渲染化（text-decoration: underline，标签透明）',
+          !!uSpan && (uSpan.deco || '').indexOf('underline') !== -1, JSON.stringify(uSpan));
+        // gfm 不给 <u> HTML 挂 token 类 → 该行可能无 cm-* span（无 token 可中和，属正常）
+        chk38('下划线：token 色继承（若有）+ plain-text',
+          (iU.toks || []).every(t => t.ok) && iU.plain === true);
+        await page.evaluate(({ n, ch }) => window.__s38cursor(n, ch), { n: u2, ch: await page.evaluate((n) => window.__s38lineLen(n), u2) });
+        await page.keyboard.press('Enter');
+        await sleep38(120);
+        const se6 = await page.evaluate(() => window.__s38state());
+        chk38('下划线段落 Enter：新空行、光标停在新行（不续 <u> 前缀）',
+          se6.lines[u2 + 1] === '' && se6.cursor.line === u2 + 1 && se6.cursor.ch === 0,
+          JSON.stringify({ cursor: se6.cursor, next: se6.lines[u2 + 1] }));
+      }
+      // ⑩ 标题 Enter 合理响应：新空行（标题不续 #）
+      const hLine = await page.evaluate(() => window.__s38find('标题一格式测试'));
+      const ptH = await page.evaluate((n) => window.__s38maskPoint(n), hLine);
+      chk38('标题块有渲染遮罩（可点）', !!ptH);
+      if (ptH) {
+        await page.mouse.click(ptH.x, ptH.y);
+        await sleep38(250);
+        const ih = await page.evaluate((n) => window.__s38spanInfo(n), hLine);
+        chk38('再次点标题：装饰重新挂全（可再编辑）', !!spanOf(ih, 'wysiwyg-heading-text-1') && allToksOk(ih));
+        await page.evaluate(({ n, ch }) => window.__s38cursor(n, ch), { n: hLine, ch: await page.evaluate((n) => window.__s38lineLen(n), hLine) });
+        await page.keyboard.press('Enter');
+        await sleep38(120);
+        const se7 = await page.evaluate(() => window.__s38state());
+        chk38('标题 Enter：新空行、光标停在新行（标题不续 # 前缀）',
+          se7.lines[hLine + 1] === '' && se7.cursor.line === hLine + 1 && se7.cursor.ch === 0
+          && (se7.lines[hLine] || '').indexOf('# ') === 0,
+          JSON.stringify({ cursor: se7.cursor, next: se7.lines[hLine + 1] }));
       }
     }
   }

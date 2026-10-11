@@ -27,6 +27,15 @@
   </div>
 </div>
 <script src="src/lib/codemirror/codemirror.js"></script>
+<!-- gfm 模式必须加载（与 index.html L499-510 一致，overlay.js 是 gfm 的依赖）：
+     markdown 模式给标题/列表/引用行发 cm-header/cm-variable-2/cm-quote 等 token span
+     （默认主题蓝/海军蓝/绿），不加载则 CM 静默回落 null mode，
+     「编辑态 token 色泄漏」回归测不出来 -->
+<script src="src/lib/codemirror/mode/markdown/markdown.js"></script>
+<script src="src/lib/codemirror/addon/mode/overlay.js"></script>
+<script src="src/lib/codemirror/mode/gfm/gfm.js"></script>
+<!-- continuelist：列表回车自动续行（与 index.html L511 一致）——列表回车光标行为回归必需 -->
+<script src="src/lib/codemirror/addon/edit/continuelist.js"></script>
 <script src="src/lib/unified-bundle.js"></script>
 <script src="src/lib/highlight.js/highlight.min.js"></script>
 <link rel="stylesheet" href="src/lib/katex/katex.min.css">
@@ -39,6 +48,10 @@
 <script src="src/modules/render-post.js"></script>
 <script src="src/modules/wysiwyg.js"></script>
 <script src="src/modules/empty-hint.js"></script>
+<!-- format.js：真实 _handleTableEnter（Enter 键映射的处理体，editor-core L171 绑定它）
+     ——列表回车续行 + 幽灵 Enter 吞除窗都在这个函数里，必须挂真实实现才测得到
+     （2026-10-14 用户反馈「列表回车后光标落新行的下一行」的回归前提） -->
+<script src="src/modules/format.js"></script>
 <script>
 // 对比 harness：真实 CM5 + 真实 UnifiedRenderer + 真实 wysiwyg/empty-hint 遮罩代码。
 // 由 scripts/wysiwyg-browser-check.mjs 驱动，结果写回 window.__RESULT / __RESULT2。
@@ -167,8 +180,25 @@
     const host = document.getElementById('editor');
     host.innerHTML = '';
     // lineNumbers: true 与真实 app 一致（app 建 CM 时恒开行号），
-    // 进入所见即所得后由 applyWysiwygEditorChrome 关掉——可验证「去行号」行为
-    const cm = CodeMirror(host, { value: doc, lineWrapping: true, lineNumbers: true });
+    // 进入所见即所得后由 applyWysiwygEditorChrome 关掉——可验证「去行号」行为。
+    // ⚠️ mode:'gfm' 必须与真实 app 一致（editor-core L161）：null mode 不产 token span，
+    // 漏测「gfm token 色（cm-header 蓝 / cm-variable-2 海军蓝…）压过渲染化 span 色」
+    // 的编辑态颜色回归（2026-10-14 用户截图）。
+    // ⚠️ extraKeys.Enter 也必须与 app 一致（editor-core L170-171 → format.js
+    // _handleTableEnter → 非表格行走 _newlineAndIndent = 列表续行命令）：默认键位 Enter
+    // 是裸换行，测不出列表回车续行 + 光标行为（2026-10-14 用户反馈「回车后光标落新行的
+    // 下一行」的复现前提）
+    const cm = CodeMirror(host, {
+      // inputStyle 与真实 app 一致（editor-core L163）：列表回车光标行为在
+      // contenteditable 输入管线下才有可比性（2026-10-14 回车光标反馈复现前提）
+      value: doc, mode: 'gfm', lineWrapping: true, lineNumbers: true,
+      inputStyle: 'contenteditable',
+      extraKeys: {
+        // 与真实 app 同一处理体（editor-core L170-171）：非表格行 → 列表续行；
+        // 含「组合刚结束 250ms 内吞掉幽灵 Enter」守卫（2026-10-14 列表回车光标反馈）
+        'Enter': (cmx) => ed._handleTableEnter(cmx),
+      },
+    });
     cm.setSize('700px', '600px');
     // 阅读模式参照物：#preview 的字体/字号/行高是 applySettings 写内联样式的，
     // 这里复刻真实默认值（16px / 1.7），wysiwyg 遮罩必须与之完全一致
@@ -190,11 +220,24 @@
       activeTab: null,
     };
     if (overrides) Object.assign(base, overrides);
-    const ed = Object.assign(base, window.TMWysiwyg.mixin, window.TMEmptyHint.mixin);
+    const ed = Object.assign(base, window.TMWysiwyg.mixin, window.TMEmptyHint.mixin,
+      (window.TMFormat && window.TMFormat.mixin) || {});
     ed.viewMode = 'wysiwyg';
     // 模拟 editor-core 的事件接线（真实 app 中 cursorActivity/change 都接到这里）
     cm.on('cursorActivity', () => ed.syncWysiwygActiveBlock());
     cm.on('change', () => { if (ed.viewMode === 'wysiwyg') ed.refreshWysiwygBlocks(); ed.updateEmptyLineHint(); });
+    // 模拟 editor-core 的 IME 组合接线：⚠️ CM 5.65.18 不触发用户级 composition 编辑器
+    // 事件（cm.on 不执行），幽灵 Enter 吞除窗时间戳必须挂输入域的原生 DOM compositionend
+    //（与真实 app 完全一致；见 format.js _handleTableEnter 守卫注释）
+    ed._wysiwygComposing = false;
+    cm.on('compositionstart', () => { ed._wysiwygComposing = true; });
+    cm.on('compositionend', () => {
+      ed._wysiwygComposing = false;
+      if (ed.viewMode === 'wysiwyg') ed.refreshWysiwygBlocks();
+    });
+    try {
+      cm.getInputField().addEventListener('compositionend', () => { ed._lastCompositionEnd = Date.now(); });
+    } catch (_) { /* 忽略 */ }
     return { cm, ed, host };
   }
 
@@ -2086,14 +2129,19 @@
   // ① 活动列表块：只有光标行挂灰底（块内其余行无底），光标块内移动时跟随；
   // ② 活动块源文行排版与渲染态遮罩一致：预览字族 + 16px（--wysiwyg-text-size 回落）
   //    + 行高 1.7 + --text-primary 色（.wysiwyg-plain-text 行类）；
-  // ③ 代码围栏块例外：整块灰盒（容器观感）且源文行不挂 plain-text（保持等宽）。
+  // ③ 代码围栏块例外：整块灰盒（容器观感）且源文行不挂 plain-text（保持等宽）；
+  // ④ gfm token 色中和：标题行 cm-header（默认主题蓝）/列表行 cm-variable-2（海军蓝）
+  //    等 token span 的 color 必须继承为 --text-primary（2026-10-14 用户截图「编辑态发蓝」）；
+  // ⑤ 松散列表项间空行保持塌缩（12px）——plain-text 行类不得覆盖空行塌缩行高
+  //    （2026-10-14 用户截图「列表多出来很多空白行」）。
   window.__runPlainTextDecor2026 = async function () {
     const TDOC35 = [
-      '段落首行（普通段落）。',
-      '- 列表第一项 **加粗** 内容。',
-      '- 列表第二项内容。',
-      '- 列表第三项内容。',
+      '## 软件特色功能速览',
       '',
+      '- ⚡ **极速轻量**：基于 Rust + Tauri v2。',
+      '- 🌐 **实时预览所见即所得**：左边写、右边渲染。',
+      '',
+      '- 🕐 **智能大纲导航**：一键跳转任意章节。',
       '```js',
       'const x = 1;',
       '```',
@@ -2140,12 +2188,216 @@
         const r = mask.getBoundingClientRect();
         return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
       };
+      // 某行全部 cm-* token span 的计算色（验证 gfm token 色已被 plain-text 规则中和；
+      // 空数组 = 该行无 token span，驱动另行处理）
+      window.__s35tokenColors = function (lineNo) {
+        const ln = window.__s35lineEl(lineNo);
+        if (!ln) return null;
+        return Array.from(ln.querySelectorAll('span[class*="cm-"]'))
+          .map((s) => getComputedStyle(s).color);
+      };
+      // 某行实测高度（空行塌缩 12px / 正常行 ≈27px）
+      window.__s35lineH = function (lineNo) {
+        const ln = window.__s35lineEl(lineNo);
+        return ln ? Math.round(ln.getBoundingClientRect().height * 10) / 10 : null;
+      };
       window.__s35ed = ed; // 诊断钩子
       out.initial = {
         activeIdx: ed._wysiwygActiveIdx,
-        bg0: window.__s35bg(0),
-        mask12: !!window.__s35maskPoint(2),
-        mask6: !!window.__s35maskPoint(6),
+        headingTokens: window.__s35tokenColors(0),
+        headingPlain: window.__s35plain(0),
+        maskList: !!window.__s35maskPoint(3),
+        maskFence: !!window.__s35maskPoint(7),
+      };
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    return out;
+  };
+
+  // ---------- S36：列表回车新行光标位置（2026-10-14 用户反馈：光标落到新行的下一行） ----------
+  // 松散列表（项间空行，用户真实文档形态）：点遮罩进块 → 光标置项末 → 驱动真实按 Enter
+  // （continuelist 续行）→ 分别读 80ms / 450ms 光标位置（450ms 覆盖 250ms 防抖刷新路径）。
+  window.__runListEnterCursor = async function () {
+    // 首行段落 + 光标初始在段落（行0）→ 列表块（行2-6）才挂遮罩，可走真实点击进块
+    const TDOC36 = [
+      '普通段落行',
+      '',
+      '- 第一项内容',
+      '',
+      '- 第二项内容',
+      '',
+      '- 第三项内容',
+    ].join('\n');
+    const { cm, ed } = makeEditor(TDOC36);
+    ed.renderWysiwygMasks();
+    await sleep(300);
+    const out = {};
+    try {
+      window.__s36cursor = function (line, ch) {
+        cm.focus();
+        cm.setCursor({ line: line, ch: ch });
+      };
+      window.__s36state = function () {
+        const c = cm.getCursor();
+        return {
+          cursor: { line: c.line, ch: c.ch },
+          lines: [cm.getLine(c.line - 1), cm.getLine(c.line), cm.getLine(c.line + 1)],
+          activeIdx: ed._wysiwygActiveIdx,
+        };
+      };
+      window.__s36lineLen = function (n) {
+        return (cm.getLine(n) || '').length;
+      };
+      // 列表遮罩中心坐标（驱动真实点击进块）
+      const coords = cm.charCoords({ line: 4, ch: 0 }, 'page');
+      let el = document.elementFromPoint(coords.left - window.scrollX + 2, coords.top - window.scrollY + 2);
+      const mask = el && el.closest ? el.closest('.wysiwyg-block-mask') : null;
+      if (!mask) throw new Error('列表遮罩未挂载');
+      const r = mask.getBoundingClientRect();
+      out.maskPoint = { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    return out;
+  };
+
+  // ---------- S37：幽灵 Enter 吞除窗（2026-10-14 用户反馈：列表回车后光标落新行的下一行） ----------
+  // WebView2/Chromium 中文 IME 时序怪癖：选字确认的 Enter 会在 compositionend 后残留一个
+  // isComposing=false 的 keydown。extraKeys Enter 处理体（_handleTableEnter）必须吞掉窗口内
+  // 的幽灵键（不产生换行）；窗口外用户真实 Enter 正常续行，光标停在新行（不是新行下面一行）。
+  window.__runListEnterGhost = async function () {
+    const TDOC37 = [
+      '普通段落行',
+      '',
+      '- 第一项内容',
+      '- 第二项内容',
+      '- 第三项内容',
+    ].join('\n');
+    const { cm, ed } = makeEditor(TDOC37);
+    ed.renderWysiwygMasks();
+    await sleep(300);
+    const out = {};
+    try {
+      window.__s37state = function () {
+        const c = cm.getCursor();
+        return {
+          cursor: { line: c.line, ch: c.ch },
+          lineCount: cm.lineCount(),
+          lines: cm.getValue().split('\n'),
+        };
+      };
+      window.__s37cursor = function (line, ch) {
+        cm.focus();
+        cm.setCursor({ line: line, ch: ch });
+      };
+      // 模拟 IME 组合结束：浏览器原生 DOM compositionend 发到输入域（CM 5.65 不触发用户级
+      // 编辑器事件，app 的吞除窗时间戳就挂在这个 DOM 事件上——见 makeEditor 接线）
+      window.__s37ghost = function () {
+        const field = cm.getInputField();
+        field.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '第二项内容' }));
+        return { tsSet: ed._lastCompositionEnd != null };
+      };
+      const coords = cm.charCoords({ line: 3, ch: 0 }, 'page');
+      let el = document.elementFromPoint(coords.left - window.scrollX + 2, coords.top - window.scrollY + 2);
+      const mask = el && el.closest ? el.closest('.wysiwyg-block-mask') : null;
+      if (!mask) throw new Error('列表遮罩未挂载');
+      const r = mask.getBoundingClientRect();
+      out.maskPoint = { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      out.line3Len = (cm.getLine(3) || '').length;
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    return out;
+  };
+
+  // ---------- S38：全格式点击/换行矩阵（2026-10-14 用户要求：Playwright 模拟点击全格式回归） ----------
+  // 覆盖：标题/段落内联（加粗、斜体、高亮、删除线、下划线）/无序/有序/任务列表/引用块。
+  // 每个块验证：渲染态遮罩 → 点击进块（渲染样式下编辑：装饰 span + token 色继承）→
+  // 点其他块（本块恢复渲染遮罩）→ 再次点击（重新进渲染样式编辑）→ 行尾 Enter（合理续行）。
+  window.__runAllFormats = async function () {
+    const TDOC38 = [
+      '# 标题一格式测试',
+      '',
+      '普通段落：**加粗文字**、*斜体文字*、==高亮文字==、~~删除线文字~~。',
+      '',
+      '## 特性列表',
+      '',
+      '- 无序项一 **加粗内容**',
+      '- 无序项二 ==高亮内容==',
+      '',
+      '1. 有序项一',
+      '2. 有序项二 *斜体*',
+      '',
+      '> 引用第一行 **引用加粗**',
+      '> 引用第二行 ==引用高亮==',
+      '',
+      '- [ ] 未完成任务',
+      '- [x] 已完成任务',
+      '',
+      '<u>下划线文字</u> 在段落里。',
+    ].join('\n');
+    const { cm, ed } = makeEditor(TDOC38);
+    ed.renderWysiwygMasks();
+    await sleep(300);
+    const out = {};
+    try {
+      // 行内装饰 span 清单（计算样式）+ token 色继承校验 + plain-text 行类
+      window.__s38spanInfo = function (lineNo) {
+        // 视口外（编辑器 600px 高）的行先滚入视图，否则 elementFromPoint 会打到
+        // 页面其他区域（阅读预览面板也有 .preview-content 类）→ 探针误判
+        try { cm.scrollIntoView({ line: lineNo, ch: 0 }, 0); } catch (_) { /* 忽略 */ }
+        const c = cm.charCoords({ line: lineNo, ch: 0 }, 'page');
+        let el = document.elementFromPoint(c.left - window.scrollX + 2, c.top - window.scrollY + 2);
+        const lineEl = el && el.closest ? el.closest('.CodeMirror-line') : null;
+        if (!lineEl) return { err: '行元素未找到' };
+        const spans = [];
+        lineEl.querySelectorAll('span').forEach(sp => {
+          const cn = sp.className || '';
+          if (typeof cn !== 'string' || cn.indexOf('wysiwyg-') === -1) return;
+          const cs = getComputedStyle(sp);
+          spans.push({ cls: cn, fw: cs.fontWeight, fs: cs.fontSize, fst: cs.fontStyle, deco: cs.textDecorationLine, bg: cs.backgroundColor, color: cs.color });
+        });
+        // token 色继承：每个 cm-* span 的颜色必须等于最近的 wysiwyg-* 祖先（无祖先=行色），
+        // 即 gfm token 色被中和、随渲染化 span 继承（2026-10-14 蓝色文字回归的通用断言）
+        const toks = [];
+        lineEl.querySelectorAll('span[class*="cm-"]').forEach(sp => {
+          const cs = getComputedStyle(sp);
+          let anc = sp.parentElement, ancColor = null;
+          while (anc && anc !== lineEl) {
+            const ac = anc.className || '';
+            if (typeof ac === 'string' && ac.indexOf('wysiwyg-') !== -1) { ancColor = getComputedStyle(anc).color; break; }
+            anc = anc.parentElement;
+          }
+          toks.push({ color: cs.color, expect: ancColor, ok: ancColor == null || cs.color === ancColor });
+        });
+        return { spans: spans, toks: toks, plain: lineEl.classList.contains('wysiwyg-plain-text'), lineText: cm.getLine(lineNo) };
+      };
+      window.__s38maskedBlocks = function () {
+        const out2 = [];
+        (ed._wysiwygMarks || new Map()).forEach(function (mark) {
+          const r = mark.find && mark.find();
+          if (r) out2.push({ start: r.from.line, end: r.to.line });
+        });
+        return out2;
+      };
+      window.__s38masked = function (n) {
+        return window.__s38maskedBlocks().some(function (r) { return n >= r.start && n <= r.end; });
+      };
+      window.__s38maskPoint = function (lineNo) {
+        try { cm.scrollIntoView({ line: lineNo, ch: 0 }, 0); } catch (_) { /* 忽略 */ }
+        const c = cm.charCoords({ line: lineNo, ch: 0 }, 'page');
+        let el = document.elementFromPoint(c.left - window.scrollX + 2, c.top - window.scrollY + 2);
+        const mask = el && el.closest ? el.closest('.wysiwyg-block-mask') : null;
+        if (!mask) return null;
+        const r = mask.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      };
+      window.__s38cursor = function (line, ch) { cm.focus(); cm.setCursor({ line: line, ch: ch }); };
+      window.__s38lineLen = function (n) { return (cm.getLine(n) || '').length; };
+      window.__s38find = function (substr) {
+        for (let n = 0; n < cm.lineCount(); n++) {
+          if ((cm.getLine(n) || '').indexOf(substr) !== -1) return n;
+        }
+        return -1;
+      };
+      window.__s38state = function () {
+        const c = cm.getCursor();
+        return { cursor: { line: c.line, ch: c.ch }, lineCount: cm.lineCount(), lines: cm.getValue().split('\n') };
       };
     } catch (e) { out.err = (e && e.message) || String(e); }
     return out;

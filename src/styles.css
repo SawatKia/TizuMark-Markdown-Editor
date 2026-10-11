@@ -3026,6 +3026,8 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-italic { font-style: italic; }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-strike { text-decoration: line-through; color: var(--text-secondary); }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-highlight { background-color: var(--color-warning); border-radius: 3px; }
+/* 下划线：渲染器放行原生 <u> 标签（unified-renderer L1514），编辑态同观感 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-underline { text-decoration: underline; }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-inline-code {
   font-family: var(--font-mono);
   background-color: var(--code-bg);
@@ -3048,6 +3050,46 @@ body.is-resizing .side-btn {
   font-size: var(--wysiwyg-text-size, 16px);
   line-height: 1.7;
   color: var(--text-primary);
+}
+/* gfm 模式 token 色在编辑态必须中和（2026-10-14 用户截图：编辑态文字发蓝、与渲染态
+   不一致）：markdown 模式给标题行发 cm-header（蓝）、列表项按嵌套深度发 cm-variable-2
+   （海军蓝 #05a）/cm-variable-3（#085）/cm-keyword（紫）、引用 cm-quote（绿）、链接
+   cm-link（#00c）；这些 token span 嵌在渲染化 span 内部，内层 color 压过继承 → 文字
+   整行变蓝/绿。统一继承（= 行色 --text-primary 或外层渲染化 span 色，如链接主题色）。
+   cm-header 的 font-weight:bold 保留——标题渲染态本来就是粗体。代码围栏/表格/frontmatter
+   不挂 plain-text，语法色不受影响。
+   ⚠️ 例外（2026-10-14 全格式矩阵实测）：CM5 会把「token 区间与渲染化区间完全重合」的
+   两个 marker 合并成**同一个 span**（如 cm-quote + wysiwyg-quote-text 同身）——本规则
+   若命中它，color:inherit 会压过渲染化 span 自身的颜色规则（本规则 0,4,1 > 0,3,0），
+   把引用正文的次级色洗成主色（与渲染态 blockquote 的 --text-secondary 不一致）。
+   :not([class*="wysiwyg-"]) 跳过「同身 span」，让它走自身渲染化颜色；纯 token span
+   （无 wysiwyg- 类）仍中和。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="cm-"] {
+  color: inherit;
+}
+/* 同身 span 渲染色重申（2026-10-14 全格式矩阵实测）：CM5 把「token 区间与渲染化区间
+   完全重合」的两个 marker 合并成**同一个 span**（如 cm-quote + wysiwyg-quote-text 同身、
+   cm-header + wysiwyg-heading-hash 同身）。上面的中和规则特异性 (0,4,1) 压过渲染化颜色
+   规则 (0,3,0)，会把同身 span 的渲染色也洗掉：引用正文的 --text-secondary 被洗成主色
+   （与渲染态 blockquote 不一致）、列表符号/任务框的透明被洗成实色（源字符压住 ::before
+   渲染符号）。此处用 (0,5,1) 同前缀 + 类属性重申这些颜色（规则序在中和之后，稳赢）。
+   只重申「有渲染色设计」的类；无颜色规则的渲染化类（heading-text/list-text 等）维持
+   中和继承，token 色照旧被压。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-quote-text"],
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-quote-prefix"] {
+  color: var(--text-secondary);
+}
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-heading-hash"] {
+  color: var(--text-secondary);
+}
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-inline-link"] {
+  color: var(--accent-color);
+  text-decoration: underline;
+}
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-inline-marker"],
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-list-bullet"],
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-task-box"] {
+  color: transparent;
 }
 
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask table td.wysiwyg-cell-editing,

@@ -332,15 +332,18 @@
 
   // 行内语法渲染化 span 扫描（2026-10-14 用户要求，Typora 式行内）：对活动块的一行源文
   // 单遍扫描产品支持的行内语法，返回 [{ from, to, cls }] text marker 段表：
-  //   标记段（** / * / _ / ` / [ ] (url) / ~~ / ==）→ wysiwyg-inline-marker
+  //   标记段（** / * / _ / ` / [ ] (url) / ~~ / == / <u></u>）→ wysiwyg-inline-marker
   //     （透明、**保留真实宽度**——光标测量精准，2026-10-14 列表符号 width:0 裁掉
   //      ::before 的教训同此：绝不用 width:0/overflow:hidden）
   //   文本段 → wysiwyg-bold / wysiwyg-italic / wysiwyg-inline-code / wysiwyg-strike /
-  //     wysiwyg-highlight / wysiwyg-inline-link（观感对齐 preview-content 对应元素）
-  // 优先级：行内代码 > 链接 > 粗体 > 斜体 > 删除线 > 高亮；按位置顺序消费、不重叠
-  // （MVP 不做嵌套，如 **a `b` c** 整段按粗体）。图片行 ![]() 不解析（图片活动态
-  // 是独立机制）；下划线变体加词内守卫（snake_case 不误判）。围栏块/表格/frontmatter
-  // 由调用方排除。删除任一标记字符 → 不再成对 → change 钩子重算即自动去样式。
+  //     wysiwyg-highlight / wysiwyg-underline / wysiwyg-inline-link
+  //     （观感对齐 preview-content 对应元素）
+  // 优先级：行内代码 > 链接 > 粗体 > 斜体 > 删除线 > 高亮 > 下划线；按位置顺序消费、
+  // 不重叠（MVP 不做嵌套，如 **a `b` c** 整段按粗体；<u>**x**</u> 整段按下划线）。
+  // 图片行 ![]() 不解析（图片活动态是独立机制）；下划线变体加词内守卫（snake_case
+  // 不误判）；<u> 为渲染器放行的原生 HTML 标签（unified-renderer L1514），仅单标签
+  // 成对、不含嵌套标签/换行的行内形态参与装饰。围栏块/表格/frontmatter 由调用方
+  // 排除。删除任一标记字符 → 不再成对 → change 钩子重算即自动去样式。
   function parseWysiwygInlineSpans(text) {
     const spans = [];
     if (text == null) return spans;
@@ -354,6 +357,7 @@
     const reItUnder = /_([^_\n]+)_/;
     const reStrike = /~~([^~\n]+)~~/;
     const reHighlight = /==([^=\n]+)==/;
+    const reUnderline = /^<u>([^<\n]+)<\/u>/;
     // 下划线变体词内守卫：前/后邻接字母数字下划线即视为标识符（snake_case），不成语法
     const isWordish = (ch) => !!ch && /[A-Za-z0-9_]/.test(ch);
     let i = 0;
@@ -390,6 +394,9 @@
       } else if (c === '=') {
         m = reHighlight.exec(s.slice(i));
         if (m) kind = 'highlight';
+      } else if (c === '<') {
+        m = reUnderline.exec(s.slice(i));
+        if (m) kind = 'underline';
       }
       if (!m) { i++; continue; }
       const start = i;
@@ -403,6 +410,11 @@
         push(start, start + 1, 'wysiwyg-inline-marker');
         push(start + 1, start + 1 + m[1].length, 'wysiwyg-inline-link');
         push(start + 1 + m[1].length, end, 'wysiwyg-inline-marker');
+      } else if (kind === 'underline') {
+        // 开/闭标签宽度不对称（<u> 3 字符 / </u> 4 字符），不走对称 tick 分支
+        push(start, start + 3, 'wysiwyg-inline-marker');
+        push(start + 3, end - 4, 'wysiwyg-underline');
+        push(end - 4, end, 'wysiwyg-inline-marker');
       } else {
         const tick = (kind === 'ital') ? 1 : 2;
         const cls = 'wysiwyg-' + (kind === 'ital' ? 'italic' : kind === 'strike' ? 'strike' : kind === 'highlight' ? 'highlight' : 'bold');
@@ -487,6 +499,19 @@
         if (line >= blocks[k].start && line < blocks[k].end) return k;
       }
       return -1;
+    },
+
+    // 遮罩点击专用：块表可能滞后于输入（change 后的 250ms 防抖刷新未触发），实时行号
+    // 查旧表会漏块返回 -1 → setWysiwygActiveBlock(-1) 会撤掉当前活动块 → 整篇瞬间全遮罩
+    // 闪一下（防抖后才自愈）。-1 时先同步轻切块（parseOnly：只切边界不渲染 HTML，廉价），
+    // 用最新块表再查；防抖刷新随后照常跑（结果相同，幂等）。
+    _wysiwygBlockIndexAtFresh(line) {
+      let idx = this.wysiwygBlockIndexAt(line);
+      if (idx < 0) {
+        try { this._wysiwygBlocks = this.computeWysiwygBlocks(true) || this._wysiwygBlocks; } catch (_) { /* 保留旧表 */ }
+        idx = this.wysiwygBlockIndexAt(line);
+      }
+      return idx;
     },
 
     // ---------------- 渲染 ----------------
@@ -590,7 +615,8 @@
             const r = mark && mark.find ? mark.find() : null;
             if (r) {
               // 先解罩目标块再落光标（与点击定位同一 CM5 clamp 问题）；活动块索引按「目标行」查
-              self.setWysiwygActiveBlock(self.wysiwygBlockIndexAt(r.from.line));
+              //（Fresh：防抖窗口内的点击块表滞后，-1 会误撤当前活动块 → 整篇遮罩闪烁）
+              self.setWysiwygActiveBlock(self._wysiwygBlockIndexAtFresh(r.from.line));
               cm.setSelection({ line: r.from.line, ch: 0 }, { line: r.from.line, ch: 0 }, { scroll: false, origin: '*mouse' });
               try { cm.scrollIntoView({ line: r.from.line, ch: 0 }, 40); } catch (_) { }
               cm.focus();
@@ -697,7 +723,9 @@
             target = r.from.line + Math.floor(ratio * (r.to.line - r.from.line));
           }
           const line = Math.min(Math.max(target, 0), cm.lineCount() - 1);
-          self.setWysiwygActiveBlock(self.wysiwygBlockIndexAt(line));
+          // Fresh：输入后 250ms 防抖窗口内点遮罩时块表行号滞后 → 旧表漏块 -1 → 误撤
+          // 当前活动块（整篇瞬间全遮罩闪烁）；-1 时同步轻切块（parseOnly）再查。
+          self.setWysiwygActiveBlock(self._wysiwygBlockIndexAtFresh(line));
           // 点击锚定：撤遮罩后把该源码行放回点击时的屏幕位置，杜绝点击后视口乱跳
           self._wysiwygClickAnchor = { y: ev.clientY, line };
           // 同上：scroll:false，避免 ensureCursorVisible 抢先滚动导致锚定失效
@@ -2272,6 +2300,10 @@
         this._wysiwygPlainLines = [];
         for (let lineNo = b.start; lineNo < b.end && lineNo < cm.lineCount(); lineNo++) {
           try {
+            // 块内空行（松散列表项间空行等）不挂：本类行高 1.7 特异性高于空行塌缩规则
+            //（.CodeMirror .cm-wysiwyg-blank .CodeMirror-line 12px），挂了会把空行撑回
+            // 全高 → 列表编辑态「多出来很多空白行」（2026-10-14 用户截图）
+            if ((cm.getLine(lineNo) || '').trim() === '') continue;
             const h = cm.getLineHandle(lineNo);
             if (h) {
               cm.addLineClass(h, 'text', 'wysiwyg-plain-text');

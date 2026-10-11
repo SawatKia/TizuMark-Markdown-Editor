@@ -356,6 +356,18 @@
           this._wysiwygComposing = false;
           if (this.viewMode === 'wysiwyg') this.refreshWysiwygBlocks();
         });
+        // ⚠️ CM 5.65.18 不触发用户级 compositionstart/end 编辑器事件（上面两个 cm.on
+        //    处理器实际不执行，官方源码与 vendor 版一致，2026-10-14 核过 npm 5.65.18）。
+        //    幽灵 Enter 吞除窗时间戳必须挂在输入域的浏览器原生 DOM 事件上：WebView2/
+        //    Chromium 中文 IME 选字确认的 Enter 会在 compositionend 后残留一个
+        //    isComposing=false 的 keydown（format.js _handleTableEnter 用它吞除幽灵键，
+        //    与表格格编辑同一规则——2026-10-14 用户反馈「列表回车后光标落新行的下一行」
+        //    根因：幽灵键多续一条列表行，真实 Enter 又续一条 → 光标在新行下面一行）
+        try {
+          this.cm.getInputField().addEventListener('compositionend', () => {
+            this._lastCompositionEnd = Date.now();
+          });
+        } catch (_) { /* 编辑器已销毁等，忽略 */ }
   
         this.cm.on('cursorActivity', () => {
           const cursor = this.cm.getCursor();

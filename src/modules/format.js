@@ -211,6 +211,15 @@
       // ③ 分隔行不规范（如 |--|）→规范为 | --- |；④ 各行列数不统一→缺失行补空白格；
       // ⑤ 单元格不规范（如 |内容 |）→规范为 | 内容 |。
       _handleTableEnter(cm) {
+        // WebView2/Chromium 中文 IME 时序怪癖：compositionend 可能先于「选字确认的
+        // Enter」keydown 到达（此刻 isComposing=false）——该 Enter 是 IME 确认键的残影，
+        // 不是用户想换行。若当真处理：列表行会多出一条续行，用户真正的 Enter 又再续一行
+        // → 用户看到「光标在新起那行的下一行」（2026-10-14 用户反馈「列表按回车新起一行
+        // 没问题，但光标回到新行的下一行」的根因）。与表格格编辑同一规则（wysiwyg.js
+        // L1215-1224）：组合刚结束 250ms 内的 Enter 一律吞掉；用户真正的换行 Enter 在
+        // 更晚按下，正常生效。extraKeys 处理器返回 undefined = 键被消费（codemirror.js
+        // doHandleBinding：bound(cm) != Pass → preventDefault），不产生换行。
+        if (this._lastCompositionEnd && Date.now() - this._lastCompositionEnd < 250) return;
         const TABLE_ROW_RE = /^\|.*\|\s*$/;
         const TABLE_SEPARATOR_RE = /^\|\s*[-:][-:\s]*\|/;
         const pos = cm.getCursor();
