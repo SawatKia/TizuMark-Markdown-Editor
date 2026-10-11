@@ -437,4 +437,10 @@ GitHub Release 需上传与 Gitee Release 相同的 4 个文件（NSIS + MSI + �
 - 与功能无关的本地产物/目录（如 `.opencode/`、构建归档 `release/`、`screenshots/` 等）不纳入提交。
   
 - 提交/推送是红线操作，必须用户明确说"提交/commit"或"推送/push"后才执行，且执行前先确认。
+
+## 测试纪律（2026-10-14 用户明确要求）
+
+- **每个需求改动后只跑与改动相关的测试，不跑全量 `npm test`**（全量由用户主动进行，加快开发进度）。
+- WYSIWYG 相关改动的"相关测试" = `node test/view-mode-wysiwyg.test.cjs` + `node scripts/wysiwyg-browser-check.mjs`（后者是 wysiwyg 专项回归，一次跑完全部 wysiwyg 场景，不算全量）。
+- 其他模块改动同理：只跑对应模块的测试文件。
   

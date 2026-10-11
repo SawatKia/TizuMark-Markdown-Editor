@@ -330,6 +330,90 @@
     return out.join('\n');
   }
 
+  // 行内语法渲染化 span 扫描（2026-10-14 用户要求，Typora 式行内）：对活动块的一行源文
+  // 单遍扫描产品支持的行内语法，返回 [{ from, to, cls }] text marker 段表：
+  //   标记段（** / * / _ / ` / [ ] (url) / ~~ / ==）→ wysiwyg-inline-marker
+  //     （透明、**保留真实宽度**——光标测量精准，2026-10-14 列表符号 width:0 裁掉
+  //      ::before 的教训同此：绝不用 width:0/overflow:hidden）
+  //   文本段 → wysiwyg-bold / wysiwyg-italic / wysiwyg-inline-code / wysiwyg-strike /
+  //     wysiwyg-highlight / wysiwyg-inline-link（观感对齐 preview-content 对应元素）
+  // 优先级：行内代码 > 链接 > 粗体 > 斜体 > 删除线 > 高亮；按位置顺序消费、不重叠
+  // （MVP 不做嵌套，如 **a `b` c** 整段按粗体）。图片行 ![]() 不解析（图片活动态
+  // 是独立机制）；下划线变体加词内守卫（snake_case 不误判）。围栏块/表格/frontmatter
+  // 由调用方排除。删除任一标记字符 → 不再成对 → change 钩子重算即自动去样式。
+  function parseWysiwygInlineSpans(text) {
+    const spans = [];
+    if (text == null) return spans;
+    const s = String(text);
+    const push = (from, to, cls) => { if (to > from) spans.push({ from: from, to: to, cls: cls }); };
+    const reCode = /``([^`\n]+)``|`([^`\n]+)`/;
+    const reLink = /\[([^\[\]\n]+)\]\(([^()\n]*)\)/;
+    const reBoldStar = /\*\*([^*\n]+)\*\*/;
+    const reBoldUnder = /__([^_\n]+)__/;
+    const reItStar = /\*([^*\n]+)\*/;
+    const reItUnder = /_([^_\n]+)_/;
+    const reStrike = /~~([^~\n]+)~~/;
+    const reHighlight = /==([^=\n]+)==/;
+    // 下划线变体词内守卫：前/后邻接字母数字下划线即视为标识符（snake_case），不成语法
+    const isWordish = (ch) => !!ch && /[A-Za-z0-9_]/.test(ch);
+    let i = 0;
+    while (i < s.length) {
+      let m = null;
+      let kind = null;
+      const c = s.charAt(i);
+      if (c === '`') {
+        m = reCode.exec(s.slice(i));
+        if (m) kind = 'code';
+      } else if (c === '[') {
+        if (i > 0 && s.charAt(i - 1) === '!') { i++; continue; } // 图片行保持源码
+        m = reLink.exec(s.slice(i));
+        if (m) kind = 'link';
+      } else if (c === '*') {
+        m = reBoldStar.exec(s.slice(i));
+        if (m) kind = 'bold';
+        else { m = reItStar.exec(s.slice(i)); if (m) kind = 'ital'; }
+      } else if (c === '_') {
+        // 词内守卫：开/闭 `_` 紧邻字母数字下划线 → 标识符（snake_case），不成语法
+        if (!isWordish(s.charAt(i - 1))) {
+          const bM = reBoldUnder.exec(s.slice(i));
+          const tM = bM ? null : reItUnder.exec(s.slice(i));
+          const picked = bM || tM;
+          if (picked && !isWordish(s.charAt(i + picked[0].length))) {
+            m = picked;
+            kind = bM ? 'bold' : 'ital';
+          }
+        }
+        if (!m) { i++; continue; }
+      } else if (c === '~') {
+        m = reStrike.exec(s.slice(i));
+        if (m) kind = 'strike';
+      } else if (c === '=') {
+        m = reHighlight.exec(s.slice(i));
+        if (m) kind = 'highlight';
+      }
+      if (!m) { i++; continue; }
+      const start = i;
+      const end = i + m[0].length;
+      if (kind === 'code') {
+        const tick = (m[1] !== undefined) ? 2 : 1;
+        push(start, start + tick, 'wysiwyg-inline-marker');
+        push(start + tick, end - tick, 'wysiwyg-inline-code');
+        push(end - tick, end, 'wysiwyg-inline-marker');
+      } else if (kind === 'link') {
+        push(start, start + 1, 'wysiwyg-inline-marker');
+        push(start + 1, start + 1 + m[1].length, 'wysiwyg-inline-link');
+        push(start + 1 + m[1].length, end, 'wysiwyg-inline-marker');
+      } else {
+        const tick = (kind === 'ital') ? 1 : 2;
+        const cls = 'wysiwyg-' + (kind === 'ital' ? 'italic' : kind === 'strike' ? 'strike' : kind === 'highlight' ? 'highlight' : 'bold');
+        push(start, start + tick, 'wysiwyg-inline-marker');
+        push(start + tick, end - tick, cls);
+        push(end - tick, end, 'wysiwyg-inline-marker');
+      }
+      i = end;
+    }
+    return spans;
+  }
   const mixin = {
     // 把整篇源码切成顶层块：[{ start, end, html? }]，end 为 0-based 开区间。
     //
@@ -479,7 +563,8 @@
         // 的目标是轨道 span，非单元格，单元格分支的守卫罩不住它）。
         // 例外（2026-10-13 反馈 #2：表头也要可以编辑）：从表头格自身启动的列拖态放行
         // 到下方单元格分支进格编辑；指针真超阈值移动时 _wysiwygTableDragMove 阈值块
-        // 会先 _wysiwygEndCellEdit(false) 取消编辑再进拖拽。
+        // 只取消「本次按下才触发」的格编辑（按下前已存在的合法编辑保留到释放时提交，
+        // 见 _wysiwygBeginTableDrag 的 cellEditAtDown 与 _wysiwygTableDragUp）。
         if (self._wysiwygTableDrag) {
           const cEl = ev.target && ev.target.closest ? ev.target.closest('td,th') : null;
           const stNow = self._wysiwygTableDrag;
@@ -487,6 +572,12 @@
             cEl === stNow.trs[0].children[stNow.idx];
           if (!ownHeader) { ev.preventDefault(); return; }
         }
+        // 正在编辑的本格：mousedown 交给浏览器原生文本选择（2026-10-14 用户要求：单元格
+        // 文字也要支持选中）。必须在 preventDefault 之前 return——preventDefault 会杀死
+        // 原生选择；不提交、不重进编辑（重进会先提交+重落光标，反把拖选打断）。
+        // CSS 侧配合：.wysiwyg-cell-editing 恢复 user-select:text（遮罩节点默认 none）。
+        const hitCell = ev.target && ev.target.closest ? ev.target.closest('td,th') : null;
+        if (hitCell && self._wysiwygCellEditing && hitCell === self._wysiwygCellEditing.cell) return;
         // 代码块复制按钮：放行 click（拦截 mousedown 会吞掉 click、光标被拽到源码行，
         // 复制按钮点不动）。按钮自身已阻止冒泡，这里只需不 preventDefault。
         if (ev.target && ev.target.closest && ev.target.closest('button.copy-btn')) return;
@@ -509,6 +600,13 @@
         }
         ev.preventDefault();
         try {
+          // 格编辑中 + 按下点在本格以外的任何处（另一格 / 表 wrap 留白 / 另一块遮罩 /
+          // 图片 / 图表 / 工具按钮 / 链接 / 复选框）：先提交本格失焦（2026-10-14 用户要求：
+          // 点击其他行或空白处时单元格失去焦点）。settle=false：不挪光标、不抢焦点、不补
+          // 空行——光标/焦点由下方各分支接管（另一格 → 新格接管；另一块 → 点击映射落光标；
+          // 表 wrap 留白 → 焦点自然归 body）。点本格已在上方 return（原生文本选择）。
+          // 下方分支自带的 commit-first（_wysiwygTableAdd/_wysiwygStartCellEdit）此刻为 no-op。
+          if (self._wysiwygCellEditing) self._wysiwygEndCellEdit(true, false);
           // 图片：打开灯箱（与阅读模式一致）。src 未就绪（相对路径/裂图）时落到行定位，
           // 方便直接编辑图片这一行。
           const imgEl = ev.target && ev.target.closest ? ev.target.closest('img') : null;
@@ -544,8 +642,9 @@
             // 行拖拽 / 顶 gutter 列拖拽已在 pointerdown（先于 mousedown）启动：不启动格编辑。
             // 例外（2026-10-13 反馈 #2：表头也要可以编辑）：表头格是列拖拽把手，但普通
             // 点击（不动）仍应进格编辑——从本表头格自身启动的列拖态放行；指针真超阈值
-            // 移动时 _wysiwygTableDragMove 阈值块会先 _wysiwygEndCellEdit(false) 取消编辑
-            // 再进入拖拽（见该处注释）。
+            // 移动时 _wysiwygTableDragMove 阈值块会先 _wysiwygEndCellEdit(false) 取消
+            // 「本次按下才触发」的格编辑再进入拖拽；按下前已存在的格编辑保留（释放时提交，
+            // 2026-10-14 用户反馈：改完格内容立即拖行/列不得丢内容）。
             const dragSt = self._wysiwygTableDrag;
             if (dragSt) {
               const isOwnHeaderDrag = dragSt.kind === 'col' && dragSt.trs && dragSt.trs[0] &&
@@ -562,6 +661,11 @@
               { x: ev.clientX, y: ev.clientY });
             return;
           }
+          // 表格块遮罩内的其余点击（wrap 上/下留白等杂点）：吞掉不动作——单元格/行列拖
+          // 轨道/增行增列条带/块编辑按钮都已在上方分支派完；再落入下方「按纵向比例映射
+          // 源码行」会整表撤罩变源码态。整表源码的唯一入口 = 块右上「编辑」按钮
+          // （2026-10-14 用户要求：只有点编辑按钮才进源码编辑模式）。
+          if (node.querySelector && node.querySelector('.wysiwyg-table-wrap')) return;
           // 链接：与阅读模式同一分派（页内锚点滚动 / 外链系统浏览器 / .md 开 tab）
           const linkEl = ev.target && ev.target.closest ? ev.target.closest('a') : null;
           if (linkEl && self.handlePreviewLinkClick) {
@@ -1032,9 +1136,9 @@
     _wysiwygStartCellEdit(cellEl, rowIdx, colIdx, clickPoint) {
       const cm = this.cm;
       if (!cm || !cellEl) return;
-      // 已有格在编辑（点另一格 / Tab 切格）：先提交；提交若重建了遮罩，本格的旧 DOM 已离场，
-      // 按 (rowIdx, colIdx) 在新遮罩节点上重新定位
-      if (this._wysiwygCellEditing) this._wysiwygEndCellEdit(true);
+      // 已有格在编辑（点另一格 / Tab 切格）：先提交（settle=false：不挪光标/不补行/不抢焦点，
+      // 新格焦点直接接管）；提交若重建了遮罩，本格的旧 DOM 已离场，按 (rowIdx, colIdx) 重新定位
+      if (this._wysiwygCellEditing) this._wysiwygEndCellEdit(true, false);
       let cell = cellEl;
       if (!cell.isConnected && isFinite(rowIdx) && isFinite(colIdx) && rowIdx >= 0) {
         const mk = this._wysiwygMarks && this._wysiwygMarks.get(this._wysiwygLastCellEditBlockIdx);
@@ -1050,6 +1154,10 @@
     // 按 (rowIdx, colIdx) 在遮罩节点上定位目标格并进入编辑（Tab 导航用：提交后遮罩可能已重建）。
     // blockIdx 缺省 = 上次格编辑的块（Tab 场景）；增行/增列回写后块索引可能位移，须显式传新索引。
     _wysiwygStartCellEditAt(rowIdx, colIdx, blockIdx) {
+      // 已有格在编辑（Tab/Enter 切格）：先提交（settle=false：见 _wysiwygEndCellEdit 注释）——
+      // 状态被新格覆盖后旧格的 blur 守卫（st.cell !== cell）变 no-op，不在此提交则旧格
+      // 已输入的内容丢失（2026-10-14 修复）。
+      if (this._wysiwygCellEditing) this._wysiwygEndCellEdit(true, false);
       const bi = isFinite(blockIdx) ? blockIdx : this._wysiwygLastCellEditBlockIdx;
       const mk = this._wysiwygMarks && this._wysiwygMarks.get(bi);
       const node = mk && mk.replacedWith;
@@ -1086,6 +1194,11 @@
         composing: false,
         lastCompositionEnd: 0,
       };
+      // 格编辑已立 → 重遮罩旧活动块（2026-10-14 用户截图「点表格后下面一行还是源码态」）：
+      // 遮罩 mousedown 接管后 CM 光标/cursorActivity 不再变化，点格前处于源码态的块
+      // （如表格下方的标题）无人失焦重渲，只能在此显式补上。必须在状态立起之后调用
+      // （见 _wysiwygReMaskActiveForCellEdit 注释里的 reCheckSelection 钳制连锁）。
+      this._wysiwygReMaskActiveForCellEdit(idx);
       cell.classList.add('wysiwyg-cell-editing');
       cell.setAttribute('contenteditable', 'true');
       cell.textContent = info.cells[col]; // 显示原始源码文本（无损）
@@ -1111,7 +1224,19 @@
         }
         if (e.key === 'Enter') {
           e.preventDefault();
-          cell.blur();
+          // Enter = 移到下一格（2026-10-14 用户要求）：提交本格后进入同行右邻格；
+          // 无右邻 → 进入下一行首格；无下一行（末行）= 提交并把焦点还给编辑器
+          // （光标落表后行，见 _wysiwygCellEditEndLine）。切格走 _wysiwygStartCellEditAt：
+          // 先提交本格（遮罩重建后在新遮罩上按坐标重新定位目标格）。
+          const n = st.tr.children.length;
+          let nr = st.rowIdx, nc = st.colIdx + 1;
+          if (nc >= n) { nr = st.rowIdx + 1; nc = 0; }
+          const trsNow = Array.from(st.tableEl.querySelectorAll('tr'));
+          if (nr < trsNow.length) {
+            self._wysiwygStartCellEditAt(nr, nc);
+          } else {
+            cell.blur(); // 末行：提交并回编辑器（原行为）
+          }
         } else if (e.key === 'Tab') {
           e.preventDefault();
           const n = st.tr.children.length;
@@ -1177,10 +1302,59 @@
       } catch (_) { /* 选区失败忽略，仍给焦点 */ }
     },
 
+    // 格编辑结束后光标的落位行 = 块后首行。
+    // ⚠️ 块是文档最后块时（b.end == lineCount）clamp 会把光标落到块**最后一行**——仍在
+    //    replacedWith 区间内 → 块被判定活动块撤遮罩，表格变源码态（2026-10-14 用户报：
+    //    「表格下面的一行一旦输入内容，表格就会变成源码格式」：提交后光标就在表上）。
+    //    先在块后补一个空行（新行索引 = 原 b.end）再落光标：空行不属于任何块，
+    //    其上的输入形成新段落块，表格保持渲染态。
+    _wysiwygCellEditEndLine(b) {
+      const cm = this.cm;
+      if (!cm) return -1;
+      const base = b ? b.end : cm.lineCount() - 1;
+      if (b && base >= cm.lineCount()) {
+        try {
+          const last = cm.lineCount() - 1;
+          const ch = cm.getLine(last).length;
+          cm.replaceRange('\n', { line: last, ch }, { line: last, ch }, '+wysiwygTableCell');
+          return base; // 新空行索引 = 原 b.end
+        } catch (_) { /* 失败保持原 clamp */ }
+      }
+      return Math.min(base, cm.lineCount() - 1);
+    },
+
     // 结束单元格编辑。commit=true 提交回写（Enter/失焦/切格/遮罩清理路径）；false 取消恢复。
+    // settle=false = 表格内切格（Tab/Enter/点另一格/增行增列）：提交（或取消）本身照做
+    // （回写 + 重挂遮罩），但**不**把光标挪到块后行、不补空行、不抢焦点——光标/焦点由
+    // 目标格的 _wysiwygStartCellEditOn 直接接管。切格时挪光标会触发活动块判定（表格先
+    // 撤罩再重挂一轮），表格是文档最后块时补空行还会造成用户没请求过的文档变更。
     // ⚠️ 首行即清状态：本方法内 replaceRange → cursorActivity → setWysiwygActiveBlock →
     //    unmask/maskWysiwygBlock 会重入 unmaskWysiwygBlock 的单元格守卫，状态先清则重入为 no-op。
-    _wysiwygEndCellEdit(commit) {
+    // 格编辑启动时把旧活动块（源码态）重新遮罩（2026-10-14 用户反馈：点表格格后，
+    // 点格前正在编辑的块——如表格下方的标题——仍保持源码态+高亮，没「失去焦点」）。
+    // ⚠️ 必须在 _wysiwygCellEditing 立起之后调用：markText(replacedWith) 是 atomic
+    // 标记，落在被遮区间内的 CM 光标会被 reCheckSelection 钳到块末行（仍在块内）并
+    // 触发 cursorActivity → syncWysiwygActiveBlock 会把刚遮的块重新判活动解罩（活动块
+    // 是表格块时更会触发解罩守卫连带自动提交格编辑）；sync 里的格编辑守卫拦下连锁。
+    _wysiwygReMaskActiveForCellEdit(tableIdx) {
+      const cm = this.cm;
+      const prev = this._wysiwygActiveIdx;
+      if (!cm || prev == null || prev < 0 || prev === tableIdx) return;
+      const b = this._wysiwygBlocks && this._wysiwygBlocks[prev];
+      if (!b) {
+        this._wysiwygActiveIdx = -1;
+        this._applyWysiwygActiveHighlight();
+        return;
+      }
+      // 旧块可能刚被编辑过：缓存 html 过期，重渲（与 setWysiwygActiveBlock 的 prev 处理一致）
+      if (b.html !== undefined) { b.html = this.renderWysiwygBlockHtml(b.start, b.end); b.src = this._wysiwygBlockSource(b); }
+      this._wysiwygActiveIdx = -1;
+      this.maskWysiwygBlock(prev);
+      this._applyWysiwygActiveHighlight();
+    },
+
+    _wysiwygEndCellEdit(commit, settle) {
+      if (settle === undefined) settle = true;
       const st = this._wysiwygCellEditing;
       if (!st) return;
       this._wysiwygCellEditing = null;
@@ -1203,9 +1377,12 @@
           }
         } catch (_) { /* 忽略 */ }
         // Esc 取消后焦点同样不得掉在 body 上（见 _wysiwygRestoreEditorFocus）
-        const bC = this._wysiwygBlocks && this._wysiwygBlocks[this.wysiwygBlockIndexAt(st.line)];
-        const endLineC = cm ? Math.min((bC ? bC.end : st.line + 1), cm.lineCount() - 1) : st.line;
-        this._wysiwygRestoreEditorFocus(endLineC);
+        // 切格（settle=false）跳过：光标/焦点由新格接管，不补空行
+        if (settle) {
+          const bC = this._wysiwygBlocks && this._wysiwygBlocks[this.wysiwygBlockIndexAt(st.line)];
+          const endLineC = cm ? this._wysiwygCellEditEndLine(bC) : st.line;
+          this._wysiwygRestoreEditorFocus(endLineC);
+        }
         // 挂起的遮罩刷新同样在取消路径补跑（见提交路径末尾注释）
         if (this._wysiwygPendingRefreshAfterCellEdit) {
           this._wysiwygPendingRefreshAfterCellEdit = false;
@@ -1227,21 +1404,25 @@
         b.src = this._wysiwygBlockSource(b); // 源文本键同步：否则全量增量刷新误判「源未变」
         this.maskWysiwygBlock(blockIdx);
       }
-      // 光标移到块后首行：光标不得留在 replacedWith 区间内（CM 会钳制到标记边缘，
-      // 下次击键会写进块边缘），落在表后空行 = 非活动块，高亮自然收回
-      const endLine = Math.min((b ? b.end : st.line + 1), cm.lineCount() - 1);
-      try {
-        cm.setSelection({ line: endLine, ch: 0 }, { line: endLine, ch: 0 },
-          { scroll: false, origin: '+wysiwygTableCell' });
-        // 同步补焦点：提交路径（Enter/失焦）格 blur 后焦点会掉 body——只挪选区不补
-        // 焦点，用户看到的即「输入完光标没了」（2026-10-13 反馈 B2 残留）。本提交代码
-        // 始终运行在独立 tick（blur 延迟 / 点击路径在 CM mousedown 之前），可直接
-        // cm.focus()，光标立即落在块后行可见；若随后用户点了别处，新焦点自然接管。
-        try { cm.focus(); } catch (_) { /* 忽略 */ }
-      } catch (_) { /* 忽略 */ }
-      // 下一 tick 兜底：同步路径未接住（如焦点被中间事件带走）时按 activeElement
-      // 判定恢复；焦点已被新格/CM 输入域接走则自动跳过。
-      this._wysiwygRestoreEditorFocus(endLine);
+      // 切格（settle=false）到此为止：回写 + 重挂遮罩已完成，光标/焦点由新格接管。
+      if (settle) {
+        // 光标移到块后首行：光标不得留在 replacedWith 区间内（CM 会钳制到标记边缘，
+        // 下次击键会写进块边缘），落在表后空行 = 非活动块，高亮自然收回；
+        // 块是文档最后块时先补空行（见 _wysiwygCellEditEndLine）
+        const endLine = this._wysiwygCellEditEndLine(b);
+        try {
+          cm.setSelection({ line: endLine, ch: 0 }, { line: endLine, ch: 0 },
+            { scroll: false, origin: '+wysiwygTableCell' });
+          // 同步补焦点：提交路径（Enter/失焦）格 blur 后焦点会掉 body——只挪选区不补
+          // 焦点，用户看到的即「输入完光标没了」（2026-10-13 反馈 B2 残留）。本提交代码
+          // 始终运行在独立 tick（blur 延迟 / 点击路径在 CM mousedown 之前），可直接
+          // cm.focus()，光标立即落在块后行可见；若随后用户点了别处，新焦点自然接管。
+          try { cm.focus(); } catch (_) { /* 忽略 */ }
+        } catch (_) { /* 忽略 */ }
+        // 下一 tick 兜底：同步路径未接住（如焦点被中间事件带走）时按 activeElement
+        // 判定恢复；焦点已被新格/CM 输入域接走则自动跳过。
+        this._wysiwygRestoreEditorFocus(endLine);
+      }
       // 格编辑期间被挂起的遮罩刷新（图片/Mermaid/TOC 异步 pass 恰在打字中完成）：
       // 此刻补跑 cm.refresh()，几何补偿不丢。挂起标志在状态清空后置 false 再调用，
       // 避免重入时又判「编辑中」再挂起。
@@ -1492,7 +1673,7 @@
         this._wysiwygBlocks = this.computeWysiwygBlocks();
         this._wysiwygVirtual = !!(this._wysiwygBlocks[0] && this._wysiwygBlocks[0].skipped);
         this._ensureWysiwygScrollHook();
-        this._wysiwygActiveIdx = this.wysiwygBlockIndexAt(cm.getCursor().line);
+        this._wysiwygActiveIdx = this._wysiwygCellEditing ? -1 : this._wysiwygActiveIdxFromCursor();
         if (this._wysiwygMarks) {
           for (const idx of Array.from(this._wysiwygMarks.keys())) this.unmaskWysiwygBlock(idx);
         }
@@ -1509,7 +1690,8 @@
       const idx = maskNode ? parseInt(maskNode.getAttribute('data-block-index'), 10) : NaN;
       const b = (this._wysiwygBlocks && isFinite(idx)) ? this._wysiwygBlocks[idx] : null;
       if (!cm || !b) return;
-      if (this._wysiwygCellEditing) this._wysiwygEndCellEdit(true);
+      // 增行/增列后紧接着进新格编辑：旧格提交用 settle=false（光标由新格接管）
+      if (this._wysiwygCellEditing) this._wysiwygEndCellEdit(true, false);
       const src = this._wysiwygBlockSource(b);
       const newSrc = (kind === 'row' ? addTableRow : addTableColumn)(src);
       if (!newSrc || newSrc === src) return;
@@ -1521,8 +1703,11 @@
       const rows = this._wysiwygBlockSource(nb).split('\n');
       const lastInfo = splitTableRow(rows[rows.length - 1]);
       if (!lastInfo.cells.length) return;
-      // 新格 = 末行末列（增行 = 新末行；增列 = 新末列）→ 直接进格编辑
-      this._wysiwygStartCellEditAt(rows.length - 2, lastInfo.cells.length - 1, newIdx);
+      // 新格 = 新增行/列的第一个单元格（2026-10-14 用户要求：光标要在新增行的第一个单元格）：
+      // 增行 = 新末行首格（tr 序 rows.length-2、第 0 列）；增列 = 新末列表头格（第 0 行、末列）
+      const tRow = (kind === 'row') ? rows.length - 2 : 0;
+      const tCol = (kind === 'row') ? 0 : lastInfo.cells.length - 1;
+      this._wysiwygStartCellEditAt(tRow, tCol, newIdx);
     },
 
     // 行/列拖拽入口（pointerdown，先于 mousedown）：
@@ -1611,6 +1796,10 @@
       const self = this;
       st.maskNode = st.wrap && st.wrap.closest ? st.wrap.closest('.' + MASK_CLASS) : null;
       st.target = st.idx;
+      // 按下时刻已存在的格编辑（用户完成的合法编辑）：4px 阈值处**不取消**，释放时
+      // 源码重建前提交回写（2026-10-14 用户反馈：改完格内容立即拖行/列内容丢失）。
+      // 本次按下才触发的格编辑（表头格按下、不动=误点击）仍是阈值处取消恢复。
+      st.cellEditAtDown = this._wysiwygCellEditing;
       this._wysiwygTableDrag = st;
       st.onMove = (e) => self._wysiwygTableDragMove(e);
       st.onUp = (e) => self._wysiwygTableDragUp(e);
@@ -1666,8 +1855,10 @@
       if (!st.moved) {
         if (Math.abs(e.clientX - st.startX) < 4 && Math.abs(e.clientY - st.startY) < 4) return;
         st.moved = true;
-        // 表头按下可能已触发了格编辑（不动手=点击）：先取消恢复，再真正进入拖拽
-        if (this._wysiwygCellEditing) this._wysiwygEndCellEdit(false);
+        // 本次按下触发的格编辑（表头格按下不动=误点击）：先取消恢复，再真正进入拖拽。
+        // 按下前已存在的格编辑（用户改完内容的合法编辑）不在此取消——取消即内容丢失，
+        // 改到释放时源码重建前提交回写（_wysiwygTableDragUp，2026-10-14 用户反馈）。
+        if (this._wysiwygCellEditing && this._wysiwygCellEditing !== st.cellEditAtDown) this._wysiwygEndCellEdit(false);
         try { document.body.classList.add('wysiwyg-table-dragging'); } catch (_) { }
         if (st.kind === 'row') {
           try { st.trs[st.idx].classList.add('wysiwyg-table-dragging-row'); } catch (_) { }
@@ -1742,6 +1933,8 @@
                 ? others[st.target].getBoundingClientRect().top
                 : st.tableEl.getBoundingClientRect().bottom;
               lineEl.className = 'wysiwyg-table-drop-line wysiwyg-drop-line-row';
+              lineEl.style.left = ''; // 清上一次列拖残留的 inline left（inline 压过 CSS left:0，
+                                      // 无提交的拖拽不重建遮罩时残留会让横线从表格右缘起飞）
               lineEl.style.top = (boundary - wr.top - 1) + 'px'; /* 线厚 2px，居中 = 边界 - 1 */
             } else {
               const headerCells = Array.from(st.trs[0].children);
@@ -1750,6 +1943,7 @@
                 ? others[st.target].getBoundingClientRect().left
                 : st.tableEl.getBoundingClientRect().right;
               lineEl.className = 'wysiwyg-table-drop-line wysiwyg-drop-line-col';
+              lineEl.style.top = ''; // 清上一次行拖残留的 inline top（同理防竖线串位）
               lineEl.style.left = (boundary - wr.left - 1) + 'px'; /* 线厚 2px，居中 = 边界 - 1 */
             }
             lineEl.style.opacity = '1';
@@ -1763,7 +1957,25 @@
       if (!st) return;
       const connected = !!(st.tableEl && st.tableEl.isConnected);
       this._wysiwygEndTableDragState();
-      if (!st.moved || !connected) return;
+      if (!st.moved || !connected) {
+        // 行/列轨道单击（拖拽未真正发生）或遮罩已失效 + 格仍在编辑：提交失焦
+        // （2026-10-14 用户要求：点其他行/空白处单元格失去焦点）。
+        // 例外：表头格普通点击——列拖态是表头格 pointerdown 的既有副产物（表头格兼列拖
+        // 把手，不动手 = 普通格编辑，反馈 #2），此刻的格编辑是合法点击进的，不得提交。
+        // 但真拖过（moved）+ 遮罩已失效时格节点可能已离场，必须立即提交，否则内容丢失。
+        const plainHeaderClick = st.kind === 'col' && st.trs && st.trs[0] &&
+          !!(this._wysiwygCellEditing && st.trs[0].children[st.idx] === this._wysiwygCellEditing.cell);
+        if (this._wysiwygCellEditing && (st.moved || !plainHeaderClick)) this._wysiwygEndCellEdit(true, false);
+        return;
+      }
+      // 拖拽前已存在的格编辑（合法编辑，阈值块未取消）：先提交回写再做源码重建，
+      // 内容才不会在重建中丢失（2026-10-14 用户反馈：改完格内容立即拖行/列丢改动；
+      // 「先点别处再拖」不丢正是因为 blur 提交已先行）。误触格编辑（表头格按下）
+      // 已在阈值块取消，不会到这里。
+      // 提交会重挂本块遮罩、旧表格节点离场：st.maskNode 仅剩 data-block-index 属性
+      // 可读（detached 节点属性不丢），st.tableEl 供 _wysiwygTableRestoreDom 的
+      // 原位释放兜底（作用于离场节点，无害空操作）。
+      if (this._wysiwygCellEditing) this._wysiwygEndCellEdit(true, false);
       // 终位 = move 中按指针算出的落点 st.target（被拖项在新序列中的下标）。
       // 2026-10-13 反馈 #1/#2 起拖拽中不再实时重排 DOM，这里不能读 DOM 序（恒为原序）。
       const to = (typeof st.target === 'number' && isFinite(st.target)) ? st.target : st.idx;
@@ -1791,6 +2003,8 @@
       const connected = !!(st.tableEl && st.tableEl.isConnected);
       this._wysiwygEndTableDragState();
       if (connected && st.moved) this._wysiwygTableRestoreDom(st);
+      // 取消拖拽时若格仍在编辑（轨道单击未超阈值即取消）：提交失焦（同 dragUp 注释）
+      if (this._wysiwygCellEditing) this._wysiwygEndCellEdit(true, false);
     },
 
     _wysiwygTableRestoreDom(st) {
@@ -1843,13 +2057,21 @@
               if (g) {
                 g.style.height = '';
                 g.style.width = '';
+                g.style.top = ''; // 防御：hover 路径本会重写定位，清掉防未来路径漏定位
+                g.style.left = '';
                 g.textContent = '\u22EE\u22EE';
               }
             }
             // 落点指示线隐藏（2026-10-13 反馈 #1/#2：只在拖动态可见）
+            // ⚠️ 必须连 inline 坐标一起清：无提交的拖拽（原位释放/取消）不重建遮罩，同一
+            // drop-line 元素存活到下一次拖拽；行拖/列拖各写各的轴（top/left），残留的
+            // inline 会压过 CSS left:0/top:24px 让另一方向的线串位（2026-10-14 用户截图
+            // 「线跑右边去了」：列拖残留 left=表宽 → 行拖横线从表右缘起飞向右延伸）
             const lineEl = st.wrap.querySelector('.wysiwyg-table-drop-line');
             if (lineEl) {
               lineEl.style.opacity = '0';
+              lineEl.style.left = '';
+              lineEl.style.top = '';
               lineEl.className = 'wysiwyg-table-drop-line';
             }
           }
@@ -1858,11 +2080,15 @@
       try { document.body.classList.remove('wysiwyg-table-dragging'); } catch (_) { }
     },
 
-    // 活动块高亮：把「光标所在块（源码态）」的行加上明显底色，与渲染态块一眼区分
-    //（2026-10-11 用户反馈 #5）。先撤旧行号集合（编辑后行号可能已位移）再按当前
-    // 活动块重挂；_wysiwygActiveIdx 为 -1（光标在块间空行）时只撤不挂。
-    // 调用点：setWysiwygActiveBlock / renderWysiwygMasks / refreshWysiwygBlocks /
-    // _refreshWysiwygFullIncremental / clearWysiwygMasks（撤光）。
+    // 活动块高亮：只给「光标所在行」加底色（2026-10-14 用户要求：列表/引用/段落等块
+    // 原来整块灰底、编辑态与渲染态观感差距大 → 改为仅光标行灰底、随光标在块内移动跟随，
+    // 块内其余行保持无底色的源文态；配合活动块源文态装饰，编辑态整体贴近渲染态）。
+    // 容器块（代码围栏 / 表格）例外，保持「整块灰盒」：渲染态本身就是容器盒，编辑态也应
+    // 是盒（灰盒观感是代码块活动态的既有设计）。先撤旧行号集合（编辑后行号可能已位移）
+    // 再按当前活动块重挂；_wysiwygActiveIdx 为 -1（光标在块间空行）或光标不在块内时只撤不挂。
+    // 调用点：setWysiwygActiveBlock（含同块光标移动路径 = 底色跟随光标）/
+    // renderWysiwygMasks / refreshWysiwygBlocks / _refreshWysiwygFullIncremental /
+    // clearWysiwygMasks（撤光）。
     _applyWysiwygActiveHighlight() {
       const cm = this.cm;
       if (!cm) return;
@@ -1883,19 +2109,220 @@
       const b = (idx != null && idx >= 0 && this._wysiwygBlocks) ? this._wysiwygBlocks[idx] : null;
       if (!b) return;
       const total = cm.lineCount();
+      if (b.start >= total) return;
       const last = Math.min(b.end, total) - 1;
+      // 容器块整块灰盒；其余块只光标行（选区头行，钳进块内）
+      const first = cm.getLine(b.start);
+      const wholeBlock = RE.fence.test((first || '').trim()) || RE.table.test(first || '');
+      let lo = b.start, hi = last;
+      if (!wholeBlock) {
+        let head = null;
+        try { head = cm.getCursor('head'); } catch (_) { /* 忽略 */ }
+        if (head && head.line >= b.start && head.line <= last) { lo = hi = head.line; }
+      }
       this._wysiwygActiveLines = [];
-      for (let n = b.start; n <= last; n++) {
+      for (let n = lo; n <= hi; n++) {
         this._wysiwygActiveLines.push(n);
         try {
           const h = cm.getLineHandle(n);
           if (!h) continue;
           cm.addLineClass(h, 'background', ACTIVE_CLASS);
-          // 首/末行额外挂角类（单行块同一行挂三个类 = 四角全圆）
-          if (n === b.start) cm.addLineClass(h, 'background', ACTIVE_FIRST_CLASS);
-          if (n === last) cm.addLineClass(h, 'background', ACTIVE_LAST_CLASS);
+          // 单行：同一行挂三个类 = 四角全圆；容器整块：首行仅上角、末行仅下角
+          if (n === lo) cm.addLineClass(h, 'background', ACTIVE_FIRST_CLASS);
+          if (n === hi) cm.addLineClass(h, 'background', ACTIVE_LAST_CLASS);
         } catch (_) { /* 忽略 */ }
       }
+    },
+
+    // ---------------- WYSIWYG 活动块源文态装饰（2026-10-14 用户要求，Typora 式） ----------------
+    // 活动块处于未遮罩（源文行）态，按块类型把每行拆若干 text marker 段做「渲染化」显示：
+    //   标题（单行）       ：# 前缀小灰 + 正文渲染尺寸/字重（.wysiwyg-heading-*)，h1–h6
+    //   列表（ul/ol/task） ：• 圆点 / 数字序号 / ☐☑ 复选框 + 正文预览字族（.wysiwyg-list-*）。
+    //                       源字符（-/*/+、[ ]/[x]）宽度收 0 并由 ::before 画出渲染符号
+    //                       （光标仍按源字符定位，编辑语义不变：删掉标记字符即退出列表）
+    //   代码块（围栏）     ：首行 ```lang / 末行 ``` 灰显（.wysiwyg-code-fence）——
+    //                       「编辑态与渲染态的区别就是上下多了三个 `」；灰盒复用活动高亮
+    //                       （--code-bg + 首末行圆角，与渲染代码盒同色同角）
+    //   引用（> 前缀）     ：> 前缀灰显 + 最外层 > 画左竖条（::before）+ 正文预览字体
+    //                       （.wysiwyg-quote-*；删掉 > 即退出引用，与预览 blockquote 观感对齐）
+    //   行内语法（通用）   ：粗体/斜体/行内代码/删除线/高亮/链接——标记字符透明（保留宽度）、
+    //                       文本段渲染化（.wysiwyg-inline-* / -bold / -italic 等，parseWysiwygInlineSpans
+    //                       单遍扫描）；可嵌套在标题/列表/引用的块级 span 内。围栏（代码内容）、
+    //                       表格（格编辑是独立机制）、frontmatter 不参与
+    //   正文排版（通用）   ：非容器块（段落/列表/引用/标题）逐行挂 .wysiwyg-plain-text 行类——
+    //                       预览字族 + 渲染字号（--wysiwyg-text-size，同步「预览字号」设置）+
+    //                       行高 1.7 + --text-primary，编辑态整体与渲染态遮罩同观感（2026-10-14
+    //                       用户要求「编辑时样式要与渲染时的一样」）
+    // 先清后挂幂等（markText 不触发 change，无循环）；调用点：setWysiwygActiveBlock（切块）、
+    // change 钩子（行内编辑）、renderWysiwygMasks / 防抖 / 全量增量刷新尾、clearWysiwygMasks（清）。
+    // 按当前行文本现判类型：行不再符合语法（用户删掉 # / - / 围栏）→ 仅清不挂。
+    _wysiwygApplyActiveDecor(idx) {
+      const cm = this.cm;
+      if (this._wysiwygActiveDecor) {
+        for (const m of this._wysiwygActiveDecor) {
+          try { m.clear(); } catch (_) { /* 已销毁 */ }
+        }
+        this._wysiwygActiveDecor = null;
+      }
+      if (!cm || !this._wysiwygBlocks) return;
+      // 正文排版行类同样先清后挂（行号可能已位移）
+      if (this._wysiwygPlainLines) {
+        for (const n of this._wysiwygPlainLines) {
+          try {
+            const h = cm.getLineHandle(n);
+            if (h) cm.removeLineClass(h, 'text', 'wysiwyg-plain-text');
+          } catch (_) { /* 行已不存在 */ }
+        }
+        this._wysiwygPlainLines = null;
+      }
+      this._syncWysiwygTextSize();
+      if (idx == null || idx < 0 || idx >= this._wysiwygBlocks.length) return;
+      const b = this._wysiwygBlocks[idx];
+      if (!b) return;
+      if (b.start >= cm.lineCount()) return;
+      const first = cm.getLine(b.start);
+      const markers = [];
+      const add = (lineNo, from, to, cls) => {
+        if (to <= from) return;
+        try {
+          markers.push(cm.markText({ line: lineNo, ch: from }, { line: lineNo, ch: to }, { className: cls }));
+        } catch (_) { /* 忽略单段失败 */ }
+      };
+      if (b.end - b.start === 1 && RE.heading.test(first)) {
+        // —— 标题：# 前缀小灰 + 正文渲染尺寸 ——
+        const m = /^#{1,6}(?=\s|$)/.exec(first);
+        if (m) {
+          const level = m[0].length;
+          add(b.start, 0, m[0].length, 'wysiwyg-heading-hash wysiwyg-heading-hash-' + level);
+          add(b.start, m[0].length, first.length, 'wysiwyg-heading-text wysiwyg-heading-text-' + level);
+        }
+      } else if (RE.fence.test(first.trim())) {
+        // —— 代码块：围栏行灰显（语法标志），盒由活动高亮提供 ——
+        add(b.start, 0, first.length, 'wysiwyg-code-fence');
+        const last = Math.min(b.end, cm.lineCount()) - 1;
+        if (last > b.start) {
+          const lastLine = cm.getLine(last);
+          if (/^(`{3,}|~{3,})\s*$/.test(lastLine.trim())) add(last, 0, lastLine.length, 'wysiwyg-code-fence');
+        }
+      } else if ((RE.ul.test(first) || RE.ol.test(first) || RE.task.test(first)) &&
+                 !RE.hr.test(first.trim())) {
+        // —— 列表：逐行处理（含嵌套缩进行、续行）——
+        for (let lineNo = b.start; lineNo < b.end; lineNo++) {
+          if (lineNo >= cm.lineCount()) break;
+          const line = cm.getLine(lineNo);
+          if (line.trim() === '') continue;
+          const taskM = RE.task.exec(line);
+          const ulM = taskM ? null : RE.ul.exec(line);
+          const olM = (taskM || ulM) ? null : RE.ol.exec(line);
+          let textStart = line.length;
+          if (taskM) {
+            const bulletAt = taskM[1].length;
+            // 任务行圆点字符只透明、不画 •（渲染预览里任务项 list-style:none，只有复选框）
+            add(lineNo, bulletAt, bulletAt + 1, 'wysiwyg-list-bullet wysiwyg-task-bullet');
+            const boxAt = bulletAt + 1 + taskM[3].length;
+            add(lineNo, boxAt, boxAt + 3,
+              'wysiwyg-task-box' + (/[xX]/.test(line.charAt(boxAt + 1)) ? ' checked' : ''));
+            textStart = boxAt + 3;
+          } else if (ulM) {
+            const bulletAt = ulM[1].length;
+            add(lineNo, bulletAt, bulletAt + 1, 'wysiwyg-list-bullet');
+            textStart = bulletAt + 1 + ulM[3].length;
+          } else if (olM) {
+            const numAt = olM[1].length;
+            add(lineNo, numAt, numAt + olM[2].length + 1, 'wysiwyg-ol-marker');
+            textStart = numAt + olM[2].length + 1 + olM[4].length;
+          } else {
+            // 续行（缩进延续）：正文段从首个非空白字符起（前导缩进保留）
+            textStart = line.match(/^\s*/)[0].length;
+          }
+          add(lineNo, textStart, line.length, 'wysiwyg-list-text');
+        }
+      } else if (RE.quote.test(first.trimStart())) {
+        // —— 引用：> 前缀灰显 + 最外层 > 左竖条 + 正文预览字体（逐行，含嵌套 >）——
+        for (let lineNo = b.start; lineNo < b.end && lineNo < cm.lineCount(); lineNo++) {
+          const line = cm.getLine(lineNo);
+          if (!line || line.trim() === '') continue; // callout 内空行不装饰
+          const qm = /^(\s*(?:>[ \t]?)+)/.exec(line);
+          if (!qm) continue;
+          add(lineNo, 0, qm[1].length, 'wysiwyg-quote-prefix');
+          const gtAt = line.indexOf('>');
+          if (gtAt >= 0) add(lineNo, gtAt, gtAt + 1, 'wysiwyg-quote-bar');
+          add(lineNo, qm[1].length, line.length, 'wysiwyg-quote-text');
+        }
+      }
+      // —— 行内语法（2026-10-14 用户要求，Typora 式）：围栏/表格/frontmatter 之外的块，
+      //    逐行 parseWysiwygInlineSpans 挂「标记透明 + 文本渲染」span（可嵌套在上面的
+      //    块级 span 内，markText 允许重叠）。行不再成对 → 下次重算自动去样式。
+      const isFenceBlock = RE.fence.test(first.trim());
+      const isTableBlock = !isFenceBlock && RE.table.test(first);
+      const isFrontmatter = b.start === 0 && (first || '').trim() === '---';
+      if (!isFenceBlock && !isTableBlock && !isFrontmatter) {
+        for (let lineNo = b.start; lineNo < b.end && lineNo < cm.lineCount(); lineNo++) {
+          const line = cm.getLine(lineNo);
+          if (!line) continue;
+          const sps = parseWysiwygInlineSpans(line);
+          for (let k = 0; k < sps.length; k++) add(lineNo, sps[k].from, sps[k].to, sps[k].cls);
+        }
+        // —— 正文排版对齐渲染态（2026-10-14 用户要求：编辑时样式要与渲染时一样）：
+        //    围栏/表格/frontmatter 之外的块（段落/列表/引用/标题）逐行挂「预览字族 +
+        //    渲染字号/行高/颜色」行类（与遮罩 .wysiwyg-block-mask.preview-content 同参：
+        //    --font-preview、行高 1.7、--text-primary、字号=用户「预览字号」设置，
+        //    经 --wysiwyg-text-size 同步）。标题/列表符号/行内 span 的 em 系尺寸以此为
+        //    基准，挂上后即与渲染态同字号；行高一致也使块「渲染↔源文」切换高度不变。
+        this._wysiwygPlainLines = [];
+        for (let lineNo = b.start; lineNo < b.end && lineNo < cm.lineCount(); lineNo++) {
+          try {
+            const h = cm.getLineHandle(lineNo);
+            if (h) {
+              cm.addLineClass(h, 'text', 'wysiwyg-plain-text');
+              this._wysiwygPlainLines.push(lineNo);
+            }
+          } catch (_) { /* 忽略 */ }
+        }
+      }
+      this._wysiwygActiveDecor = markers.length ? markers : null;
+    },
+
+    // 编辑态正文字号同步：渲染态遮罩复制 #preview 的计算字号（用户「预览字号」设置，
+    // 默认 16px，含缩放），活动块源文行必须同字号才「编辑=渲染」。把当前值写到 CM
+    // 容器变量 --wysiwyg-text-size（.wysiwyg-plain-text 消费）；仅在变化时写，避免
+    // 每次光标移动都触发样式重算。harness 无 #preview 时回落 settings/16px。
+    _syncWysiwygTextSize() {
+      try {
+        const cm = this.cm;
+        if (!cm || !cm.getWrapperElement) return;
+        let size = '';
+        try {
+          if (this.preview && window.getComputedStyle) {
+            const cs = getComputedStyle(this.preview);
+            if (cs && cs.fontSize) size = cs.fontSize;
+          }
+        } catch (_) { /* 预览元素不可用 */ }
+        if (!size && this.settings && this.settings.previewFontSize) size = this.settings.previewFontSize + 'px';
+        if (!size) return;
+        const wrap = cm.getWrapperElement();
+        if (wrap && wrap.style.getPropertyValue('--wysiwyg-text-size') !== size) {
+          wrap.style.setProperty('--wysiwyg-text-size', size);
+        }
+      } catch (_) { /* 不阻断装饰 */ }
+    },
+
+    // change 钩子：编辑交叠活动块时按当前行文本重算装饰。CM 标记随编辑自动扩缩，
+    // 但语法变化（# 增减、- 删除/添加、围栏开关、勾选态翻转、换行拆分）须整体重算。
+    // IME 组合期顺延到 compositionend 后的防抖刷新尾，不打断输入。
+    _ensureWysiwygActiveDecorHook() {
+      if (this._wysiwygActiveDecorHooked || !this.cm) return;
+      this._wysiwygActiveDecorHooked = true;
+      const self = this;
+      this.cm.on('change', (cm, c) => {
+        if (self.viewMode !== 'wysiwyg' || self._wysiwygComposing) return;
+        if (!c || !c.from || !c.to) return;
+        const idx = self._wysiwygActiveIdx;
+        if (idx == null || idx < 0) return;
+        const b = self._wysiwygBlocks && self._wysiwygBlocks[idx];
+        if (!b) return;
+        if (c.from.line < b.end && c.to.line >= b.start) self._wysiwygApplyActiveDecor(idx);
+      });
     },
 
     // ---------------- 活动块切换（增量） ----------------
@@ -1943,12 +2370,33 @@
       this.unmaskWysiwygBlock(idx);
       this._wysiwygActiveIdx = idx;
       this._restoreWysiwygAnchor();
+      // 活动块源文态装饰（Typora 式：标题#/列表符号/代码围栏）：清旧 + 按新活动块重挂
+      // （普通段落等无装饰块为纯清理，no-op）
+      this._wysiwygApplyActiveDecor(idx);
       // 撤旧块（prev）行的高亮、给新活动块行挂高亮（一次调用同时完成两端）
       this._applyWysiwygActiveHighlight();
     },
 
+    // 按光标行现算活动块（供结构刷新路径调用：拖拽提交/增行增列重渲、防抖重算、全量
+    // 增量刷新）。**已挂遮罩的块不得「激活」**：光标可能正被 reCheckSelection 钳在
+    // 某遮罩块内（格编辑期间被钳到旧活动块末行），现算激活它会解罩回源码态
+    // （2026-10-14 用户截图「点表格后下面一行还是源代码状态」的重犯路径之一）。
+    _wysiwygActiveIdxFromCursor() {
+      const cm = this.cm;
+      if (!cm) return -1;
+      const bi = this.wysiwygBlockIndexAt(cm.getCursor().line);
+      if (bi >= 0 && this._wysiwygMarks && this._wysiwygMarks.has(bi)) return -1;
+      return bi;
+    },
+
     syncWysiwygActiveBlock() {
       if (this.viewMode !== 'wysiwyg' || !this.cm) return;
+      // 格编辑进行中：焦点在格内 contenteditable，任何 CM 块都不该保持源码态。进格编辑
+      // 重遮罩旧块时，被钳制光标（reCheckSelection 推到块末行、仍在块内）会触发本同步——
+      // 必须在此拦下，否则刚遮的块被重新解罩回源码态（2026-10-14 用户截图「点表格后
+      // 下面一行还是源代码状态」的连锁一环）。收尾 settle 在状态清空后才落光标，
+      // 届时本守卫不再拦，活动块照常按光标行现算。
+      if (this._wysiwygCellEditing) { this._restoreWysiwygAnchor(); return; }
       if (!this._wysiwygBlocks) this._wysiwygBlocks = this.computeWysiwygBlocks();
       const line = this.cm.getCursor().line;
       // 光标落在空行：该行临时恢复全高（光标与「输入 / 可插入内容…」提示需要可见），
@@ -2090,6 +2538,9 @@
         // 大文档：块数超限 → 渲染器跳过逐块渲染（skipped），滚动时按视口按需渲染
         this._wysiwygVirtual = !full && !!(this._wysiwygBlocks[0] && this._wysiwygBlocks[0].skipped);
         this._ensureWysiwygScrollHook();
+        this._ensureWysiwygTableClickGuard();
+        this._ensureWysiwygTableTypeGuard();
+        this._ensureWysiwygActiveDecorHook();
 
         this._wysiwygActiveIdx = this.wysiwygBlockIndexAt(cm.getCursor().line);
         if (full) {
@@ -2103,6 +2554,7 @@
         this.flushWysiwygAsyncPasses();
         this.updateWysiwygBlankLines();
         this._applyWysiwygActiveHighlight();
+        this._wysiwygApplyActiveDecor(this._wysiwygActiveIdx);
       } finally {
         this._wysiwygReleasePreRenderLoad();
       }
@@ -2148,11 +2600,13 @@
           self._refreshWysiwygFullIncremental();
           return;
         }
-        // 块重划分（含解析）推迟到此处统一做；索引会位移，活动块按光标行现算
+        // 块重划分（含解析）推迟到此处统一做；索引会位移，活动块按光标行现算。
+        // 格编辑中例外：光标被钳在旧活动块末行，现算会把已遮罩的旧块重新判活动
+        // （解罩回源码态）；格编辑期恒 -1 = 全部遮罩（2026-10-14 同批修复）。
         self._wysiwygBlocks = self.computeWysiwygBlocks();
+        self._wysiwygActiveIdx = self._wysiwygCellEditing ? -1 : self._wysiwygActiveIdxFromCursor();
         self._wysiwygVirtual = !!(self._wysiwygBlocks[0] && self._wysiwygBlocks[0].skipped);
         self._ensureWysiwygScrollHook();
-        self._wysiwygActiveIdx = self.wysiwygBlockIndexAt(self.cm.getCursor().line);
         // 全部撤掉再按视口重挂（非虚拟模式窗口=全文，等效于全量重挂）
         if (self._wysiwygMarks) {
           for (const idx of Array.from(self._wysiwygMarks.keys())) self.unmaskWysiwygBlock(idx);
@@ -2160,6 +2614,7 @@
         self.updateWysiwygViewportMasks();
         self.updateWysiwygBlankLines();
         self._applyWysiwygActiveHighlight();
+        self._wysiwygApplyActiveDecor(self._wysiwygActiveIdx);
       }, 250);
     },
 
@@ -2202,7 +2657,9 @@
       // 未匹配旧遮罩撤除（源文变化/分裂/合并/删除）
       const keptSet = new Set(nextMarks.values());
       this._wysiwygBlocks = newBlocks;
-      this._wysiwygActiveIdx = this.wysiwygBlockIndexAt(cm.getCursor().line);
+      // 格编辑中例外（同 refreshWysiwygBlocks 注释）；_wysiwygActiveIdxFromCursor
+      // 在此以旧 marks 判定（swap 在下方 operation 内），被钳光标落在旧遮罩块 → -1
+      this._wysiwygActiveIdx = this._wysiwygCellEditing ? -1 : this._wysiwygActiveIdxFromCursor();
       try {
         cm.operation(() => {
           for (const mark of Array.from(this._wysiwygMarks.values())) {
@@ -2221,6 +2678,7 @@
       } catch (e) { console.error('[wysiwyg] 全量增量刷新失败:', e); }
       this.updateWysiwygBlankLines();
       this._applyWysiwygActiveHighlight();
+      this._wysiwygApplyActiveDecor(this._wysiwygActiveIdx);
     },
 
     // 视口受限遮罩：小文档（≤ maxBlocks）遮全部非活动块；大文档只遮视口 ± 边距内的块，
@@ -2314,6 +2772,106 @@
           }
         } catch (_) { /* 忽略 */ }
       }
+    },
+
+    // 表格源码态点击守卫（幂等，2026-10-14 用户要求：点表格右侧/下方空白不得让表格变
+    // 源码态，只有块右上「编辑」按钮可进源码模式）：点在表格网格同高的行背景（网格左/右
+    // 空白）或表格末行之下时，CM 坐标映射会把光标落到表格源码行 → 表格块被判活动块撤罩
+    // → 表格变源码。capture 阶段拦截：点击映射行落在某个**已挂遮罩**表格块区间内即
+    // preventDefault（CM 的 onMouseDown 先查 defaultPrevented，见 codemirror.js 的
+    // signalDOMEvent——不挪光标，表格保持渲染态）。遮罩内部点击（格/轨道/条带/按钮）
+    // 由遮罩自己的 mousedown 派发，此处先行排除；表格已是源码态（无遮罩）时不拦，
+    // 正常编辑源码行。
+    _ensureWysiwygTableClickGuard() {
+      if (this._wysiwygTableClickGuarded || !this.cm) return;
+      this._wysiwygTableClickGuarded = true;
+      const self = this;
+      const wrapper = this.cm.getWrapperElement ? this.cm.getWrapperElement() : null;
+      if (!wrapper) return;
+      wrapper.addEventListener('mousedown', (ev) => {
+        if (self.viewMode !== 'wysiwyg' || !ev || ev.button !== 0) return;
+        const t = ev.target;
+        if (!t || !t.closest) return;
+        if (t.closest('.' + MASK_CLASS)) return;     // 遮罩自行派发点击
+        if (t.closest('.CodeMirror-gutter')) return; // 行号 gutter 无表格
+        const cm = self.cm;
+        if (!cm || !cm.coordsChar) return;
+        let pos = null;
+        try { pos = cm.coordsChar({ left: ev.clientX, top: ev.clientY }); } catch (_) { return; }
+        if (!pos || !isFinite(pos.line)) return;
+        const idx = self.wysiwygBlockIndexAt(pos.line);
+        if (idx < 0) return;
+        const mk = self._wysiwygMarks && self._wysiwygMarks.get(idx);
+        const maskNode = mk && mk.replacedWith;
+        if (!maskNode || !maskNode.querySelector || !maskNode.querySelector('.wysiwyg-table-wrap')) return;
+        // 格编辑中点表格外空白（本守卫吞掉区）：同样先提交失焦（2026-10-14 用户要求：
+        // 点空白处单元格失去焦点）；光标仍不动，表格块保持渲染态
+        if (self._wysiwygCellEditing) self._wysiwygEndCellEdit(true, false);
+        ev.preventDefault(); // 光标不动：表格块保持遮罩（渲染）态
+      }, true);
+    },
+
+    // 表下输入守卫（2026-10-14 用户要求 #1 根因修复）：GFM 里表格最后一行**之下紧邻**
+    // 的非空文本行（中间没有空行）会被解析成表格的一行——用户在表格正下方空行上输入
+    // 内容，块表重算就把该行吸进表格、光标行落入表格块 → 判活动块撤罩 →「表格下面
+    // 的一行一旦输入内容，表格就会变成源码格式」。检测「已挂遮罩表格块的末行之下的
+    // （原为空白）行被插入非空白文本」，把输入整体下移一行：空行留在表格与文本之间
+    // （保持分隔），表格保持渲染态，文本成为独立块。
+    // 返回 true = 已下移。
+    _wysiwygPushTypedLineBelowTable(L) {
+      const cm = this.cm;
+      if (!cm || this.viewMode !== 'wysiwyg' || !isFinite(L)) return false;
+      const blocks = this._wysiwygBlocks;
+      if (!blocks || !blocks.length) return false;
+      let bi = -1, above = null;
+      for (let i = 0; i < blocks.length; i++) {
+        if (blocks[i].end === L) { above = blocks[i]; bi = i; break; }
+        if (blocks[i].start > L) break;
+      }
+      if (!above) return false;
+      const mk = this._wysiwygMarks && this._wysiwygMarks.get(bi);
+      const node = mk && mk.replacedWith;
+      if (!node || !node.querySelector || !node.querySelector('.wysiwyg-table-wrap')) return false;
+      const line = cm.getLine(L);
+      if (!line || line.trim() === '') return false;
+      try {
+        cm.replaceRange('\n', { line: L, ch: 0 }, { line: L, ch: 0 }, '+wysiwygTableTypeGuard');
+        cm.setSelection({ line: L + 1, ch: line.length }, { line: L + 1, ch: line.length }, { scroll: false });
+      } catch (_) { return false; }
+      return true;
+    },
+
+    // 表下输入守卫接线（幂等）：
+    // · change：直接输入/粘贴路径（纯插入、单行、原行空白、上方是已挂遮罩表格末行）→ 下移；
+    // · compositionend：中文输入——组合期 change（*compose 拼音串）跳过（组合中移文字
+    //   会打断输入法），compositionend 时文字已落定在该空行上，此时下移。
+    // 防抖重算（250ms）在下移之后的稳定结构上运行，表格块边界不再扩张。
+    _ensureWysiwygTableTypeGuard() {
+      if (this._wysiwygTableTypeGuarded || !this.cm) return;
+      this._wysiwygTableTypeGuarded = true;
+      const self = this;
+      this.cm.on('change', (cm, c) => {
+        // CM5 change 事件参数 = 单个 change 对象 {from, to, text, removed, origin}
+        if (self.viewMode !== 'wysiwyg' || self._wysiwygComposing) return;
+        if (!c || !c.from || !c.to || !Array.isArray(c.text)) return;
+        // 仅纯插入（零宽替换 from==to）：CM5 对零宽插入也报告 removed=['']（长度 1），
+        // 不能按 removed 判「未删内容」，须按 from/to 同点判
+        if (c.from.line !== c.to.line || c.from.ch !== c.to.ch) return;
+        const L = c.from.line;
+        const ins = c.text.join('');
+        if (ins.trim() === '') return; // 纯空白不构成表格行，无需下移
+        const lineNow = cm.getLine(L);
+        // 插入前的行内容（同行纯插入：从当前行内容中挖掉新插文本，它落在 [from.ch, from.ch+len)）
+        const before = lineNow.slice(0, c.from.ch) + lineNow.slice(c.from.ch + ins.length);
+        if (before.trim() !== '') return; // 该行原本有内容（不是分隔空行）
+        self._wysiwygPushTypedLineBelowTable(L);
+      });
+      this.cm.on('compositionend', () => {
+        const cm = self.cm;
+        if (self.viewMode !== 'wysiwyg' || !cm) return;
+        const cur = cm.getCursor();
+        self._wysiwygPushTypedLineBelowTable(cur.line);
+      });
     },
 
     // scroll 钩子（幂等）：虚拟模式下滚动时增量更新视口内遮罩
@@ -2518,6 +3076,14 @@
       // 逐块独立操作 = 数千次 display 更新（万行文档离开模式卡数秒，2026-10-09）
       try {
         cm.operation(() => {
+          // 活动块源文态装饰（text marker：标题/列表/代码围栏）同批清（2026-10-14；
+          // 离开模式/换文档后作废）
+          if (this._wysiwygActiveDecor) {
+            for (const m of this._wysiwygActiveDecor) {
+              try { m.clear(); } catch (_) { /* 已销毁，忽略 */ }
+            }
+            this._wysiwygActiveDecor = null;
+          }
           if (this._wysiwygMarks) {
             for (const mark of Array.from(this._wysiwygMarks.values())) {
               try { mark.clear(); } catch (_) { /* 已销毁，忽略 */ }
@@ -2540,6 +3106,15 @@
               } catch (_) { /* 行已不存在 */ }
             }
           }
+          // 正文排版行类同批撤（2026-10-14：编辑态=渲染态的字号/字族/行高/颜色）
+          if (this._wysiwygPlainLines) {
+            for (const n of this._wysiwygPlainLines) {
+              try {
+                const h = cm.getLineHandle(n);
+                if (h) cm.removeLineClass(h, 'text', 'wysiwyg-plain-text');
+              } catch (_) { /* 行已不存在 */ }
+            }
+          }
         });
       } catch (_) {
         if (this._wysiwygMarks) {
@@ -2551,6 +3126,7 @@
       this._wysiwygBlankLines = null;
       this._wysiwygBlankCurLine = null;
       this._wysiwygActiveLines = null;
+      this._wysiwygPlainLines = null;
       this._wysiwygClickAnchor = null;
       this._wysiwygVirtual = false;
       // 离开全量视图驻留：恢复 CM 默认视口余量（整篇驻留只服务于所见即所得；

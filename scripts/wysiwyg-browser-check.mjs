@@ -373,15 +373,17 @@ try {
   console.log('\n=== S15：活动块背景高亮 ===');
   console.log('  ' + JSON.stringify(hl));
   const checks15 = [
-    [`光标所在块解罩 + 整块灰盒高亮（底色=代码块同色 + 单行块四角全圆）: ${JSON.stringify(hl.inPara)}`,
+    [`光标所在块解罩 + 光标行灰底（底色=代码块同色 + 单行块四角全圆）: ${JSON.stringify(hl.inPara)}`,
       hl.inPara && hl.inPara.line2 === true && hl.inPara.unmasked === true &&
       hl.inPara.para && hl.inPara.para.bg !== 'rgba(0, 0, 0, 0)' &&
       hl.codeBg && hl.inPara.para.bg === hl.codeBg &&
       hl.inPara.para.first === true && hl.inPara.para.last === true],
-    [`移入新块：旧行撤光 + 多行块整块观感（首行仅上角、末行仅下角、中间行无角）: ${JSON.stringify(hl.inList)}`,
-      hl.inList && hl.inList.line2 === false && hl.inList.line12 === true && hl.inList.line13 === true &&
-      hl.inList.rows >= 2 && hl.inList.firstOnlyTop === true && hl.inList.lastOnlyBottom === true &&
-      hl.inList.midCorners === false],
+    [`编辑按钮进多行列表：旧行撤光 + 只有光标行（块首行 12）灰底（块内其余行无底、单行四角全圆）: ${JSON.stringify(hl.inList)}`,
+      hl.inList && hl.inList.cursorLine === 12 && hl.inList.line2 === false && hl.inList.line12 === true &&
+      hl.inList.line13 === false && hl.inList.rows === 1 && hl.inList.singleLineAllCorners === true],
+    [`灰底随光标在块内移动（行 13 有底、行 12 撤底）: ${JSON.stringify(hl.inListFollow)}`,
+      hl.inListFollow && hl.inListFollow.line13 === true && hl.inListFollow.line12 === false &&
+      hl.inListFollow.rows === 1 && hl.inListFollow.singleLineAllCorners === true],
     [`移到块间空行：全部撤光 + 角类清除（块重新遮罩）: ${JSON.stringify(hl.onBlank)}`,
       hl.onBlank && hl.onBlank.activeIdx === -1 && hl.onBlank.line12 === false && hl.onBlank.line13 === false &&
       hl.onBlank.noBgDiv === true],
@@ -483,12 +485,12 @@ try {
       tt.injected && tt.injected.wrap === true && tt.injected.btnHidden === true],
     [`增行：源码 +1 空行（5→6 行，新行全空格）: ${JSON.stringify(tt.addRow)}`,
       tt.addRow && tt.addRow.lines === 6 && tt.addRow.lastRowEmpty === true],
-    [`增行后自动格编辑新末行末格（无缝续输）: ${JSON.stringify(tt.autoEdit1)}`,
-      tt.autoEdit1 && tt.autoEdit1.editable === true && tt.autoEdit1.isLastCell === true],
+    [`增行后自动格编辑新末行首格（无缝续输；2026-10-14：光标在新增行第一个单元格）: ${JSON.stringify(tt.autoEdit1)}`,
+      tt.autoEdit1 && tt.autoEdit1.editable === true && tt.autoEdit1.isFirstCell === true && tt.autoEdit1.rowIsLast === true],
     [`增列：每行 5 根竖线（4 列）+ 分隔行 4 段: ${JSON.stringify(tt.addCol)}`,
       tt.addCol && tt.addCol.cellsPerRow.every((n) => n === 5) && tt.addCol.sepOk === 4],
-    [`增列后自动格编辑新末格: ${JSON.stringify(tt.autoEdit2)}`,
-      tt.autoEdit2 && tt.autoEdit2.isLastCell === true],
+    [`增列后自动格编辑新末列表头格（2026-10-14：光标在新增列第一个单元格）: ${JSON.stringify(tt.autoEdit2)}`,
+      tt.autoEdit2 && tt.autoEdit2.isTh === true && tt.autoEdit2.inThead === true && tt.autoEdit2.isLastCol === true],
     [`行拖拽：r1 拖到 r2 中心 → 数据行序 [r2,r1,r3,空行]（纯函数回写整块）: ${JSON.stringify(tt.rowDrag && tt.rowDrag.order)}`,
       tt.rowDrag && JSON.stringify(tt.rowDrag.order) === JSON.stringify(['r2a', 'r1a', 'r3a', '']) &&
       JSON.stringify(tt.rowDrag.grid) === JSON.stringify([
@@ -896,6 +898,683 @@ try {
         ['表头编辑 Esc 取消恢复（源码不变）', !!(headEsc && headEsc.notEditable && headEsc.text === 'a3' && headEsc.src === '| a3 | c3 | b3 |')],
       ];
       for (const [label, ok] of checks24) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S26：表格交互 2026-10-14 四项修复 ----------
+  // ① 表格是文档最后块：格提交后表后补空行落光标，表下输入不伤表格（合成事件，harness 内）
+  // ③ Enter 切格：右邻 → 下一行首格；末行 = 提交回编辑器（合成事件，harness 内）
+  // ④ 点表格网格右侧空白 → 表格保持遮罩、光标不动（真实点击）；
+  //    只有块右上「编辑」按钮可进源码态（真实点击）。
+  {
+    console.log('\n=== S26：表格交互 2026-10-14 四项修复 ===');
+    const tf = await page.evaluate(() => window.__runTableFixes2026());
+    if (tf.err) {
+      console.log('  ⚠ 场景失败: ' + tf.err);
+      fail++;
+    } else {
+      const cursorNow = () => page.evaluate(() => {
+        const el = document.querySelector('.CodeMirror');
+        const cm = el && el.CodeMirror;
+        return cm ? cm.getCursor() : null;
+      });
+      const tableMasked = () => page.evaluate(() =>
+        !!document.querySelector('div.wysiwyg-block-mask .wysiwyg-table-wrap'));
+      const beforeCursor = await cursorNow();
+      // ④ 真实点击表格网格右缘外 24px（越过 16px 增列条带）→ 不得撤罩/挪光标
+      await page.mouse.click(tf.gridRect.right + 24, tf.gridRect.cy);
+      await new Promise(r => setTimeout(r, 150));
+      const afterRight = {
+        cursor: await cursorNow(),
+        masked: await tableMasked(),
+        noEditing: await page.evaluate(() => !document.querySelector('div.wysiwyg-block-mask table .wysiwyg-cell-editing')),
+      };
+      // ④ 编辑按钮 = 唯一源码入口（真实点击）
+      let afterBtn = null;
+      if (tf.editBtnRect) {
+        await page.mouse.click(tf.editBtnRect.x + tf.editBtnRect.w / 2, tf.editBtnRect.y + tf.editBtnRect.h / 2);
+        await new Promise(r => setTimeout(r, 250));
+        afterBtn = {
+          unmasked: !(await tableMasked()),
+          cursorLine: (await cursorNow() || {}).line,
+        };
+      }
+      console.log('  合成阶段: ' + JSON.stringify({ nav: [tf.navRight, tf.navThird, tf.navWrapRow], exit: tf.exitLastRow, below: tf.typeBelow }));
+      console.log('  右侧空白点击后: ' + JSON.stringify(afterRight));
+      console.log('  编辑按钮点击后: ' + JSON.stringify(afterBtn));
+      const checks26 = [
+        ['表格为文档最后块（场景前提）', tf.tableIsLastBlock === true],
+        ['Enter 进右邻格 + 本格内容已提交', !!(tf.navRight && tf.navRight.moved === true && tf.navRight.prevCommitted === true)],
+        ['Enter 续进第三格', tf.navThird === true],
+        ['Enter 无右邻 → 下一行首格', tf.navWrapRow === true],
+        ['末行 Enter = 提交回编辑器（r3cz 回写、无残留编辑态）', !!(tf.exitLastRow && tf.exitLastRow.committed === true && tf.exitLastRow.noEditing === true)],
+        ['表后落行：补空行 + 光标落新行（不再落进表格遮罩区间）', !!(tf.exitLastRow && tf.exitLastRow.lineGained && tf.exitLastRow.newLineEmpty && tf.exitLastRow.cursorOnNewLine)],
+        ['提交后表格保持遮罩（不判活动块、不变源码态）', !!(tf.exitLastRow && tf.exitLastRow.tableStillMasked && tf.exitLastRow.tableNotActive)],
+        ['表下空行输入：成段落块、表格保持渲染、表源未动', !!(tf.typeBelow && tf.typeBelow.paragraphLine && tf.typeBelow.tableStillMasked && tf.typeBelow.tableNotActive && tf.typeBelow.tableSrcUntouched)],
+        ['点表格右侧空白：表格保持遮罩（不进源码模式）', afterRight.masked === true && afterRight.noEditing === true],
+        ['点表格右侧空白：光标不动', !!(afterRight.cursor && beforeCursor && afterRight.cursor.line === beforeCursor.line && afterRight.cursor.ch === beforeCursor.ch)],
+        ['编辑按钮 = 唯一源码入口（真实点击进源码态、光标落块首行）', !!(afterBtn && afterBtn.unmasked === true && afterBtn.cursorLine === 2)],
+      ];
+      for (const [label, ok] of checks26) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S27：表格拖拽落点线 inline 坐标残留（偶发「线跑右边去了」，2026-10-14） ----------
+  // 步骤1：列3 从顶部列轨拖到末尾（target=表格右缘）原位释放 → 无提交 → 遮罩不重建，
+  //   drop-line 元素存活（带 inline left = 表宽）；
+  // 步骤2：行拖 → 落点横线必须从表格**左缘**开始、宽=表宽（修复前：继承残留 inline
+  //   left，横线从表格右缘起飞、向右延伸出表格——用户截图场景）。
+  {
+    console.log('\n=== S27：表格拖拽落点线残留（线跑右边去了） ===');
+    const dl = await page.evaluate(() => window.__runDropLineLeak2026());
+    if (dl.err) {
+      console.log('  ⚠ 场景失败: ' + dl.err);
+      fail++;
+    } else {
+      const lineState = () => page.evaluate(() => {
+        const l = document.querySelector('div.wysiwyg-block-mask .wysiwyg-table-drop-line');
+        if (!l) return null;
+        const r = l.getBoundingClientRect();
+        return { cls: l.className, left: l.style.left, top: l.style.top, op: l.style.opacity, x: r.x, w: r.width };
+      });
+      // 步骤1：列拖（按列3 正上方列轨 → 拖过末列中线到末尾 → 原位释放不提交）
+      await page.mouse.move(dl.colStart.x, dl.colStart.y);
+      await page.mouse.down();
+      await page.mouse.move(dl.colStart.x + 40, dl.colStart.y, { steps: 6 });
+      const mid1 = await lineState();
+      await page.mouse.up();
+      await new Promise(r => setTimeout(r, 100));
+      const after1 = await lineState();
+      // 步骤2：行拖（按数据行左侧行轨 → 下拖到末尾）
+      await page.mouse.move(dl.rowStart.x, dl.rowStart.y);
+      await page.mouse.down();
+      await page.mouse.move(dl.rowStart.x, dl.rowStart.y + 40, { steps: 6 });
+      const mid2 = await lineState();
+      await page.mouse.up();
+      console.log('  列拖(中): ' + JSON.stringify(mid1) + '  列拖(释放后): ' + JSON.stringify(after1));
+      console.log('  行拖(中): ' + JSON.stringify(mid2));
+      const checks27 = [
+        ['场景前提：表格为文档最后块', dl.tableIsLastBlock === true],
+        ['列拖：落点线=竖线且定位在表右缘（复现残留的最坏值）', !!(mid1 && mid1.cls.indexOf('drop-line-col') >= 0 && mid1.op === '1' && Math.abs(mid1.x - (dl.grid.right - 1)) <= 2)],
+        ['列拖释放：drop-line inline left 已清除（不留残留）', after1 && after1.left === ''],
+        ['行拖：横线从表格左缘开始（「线跑右边去了」不复现）', !!(mid2 && mid2.cls.indexOf('drop-line-row') >= 0 && mid2.op === '1' && Math.abs(mid2.x - dl.grid.left) <= 2)],
+        ['行拖：横线宽=表宽（不再从右缘起飞延伸出表格）', !!(mid2 && Math.abs(mid2.w - dl.grid.w) <= 2)],
+        ['行拖：drop-line 无残留 inline left（每次拖拽自洽）', mid2 && mid2.left === ''],
+      ];
+      for (const [label, ok] of checks27) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S28：点表格格后旧活动块未失焦渲染（偶发视觉 bug，2026-10-14 用户截图） ----------
+  // 步骤1：点表下标题（隔空行）→ 标题转活动块（源码态）——正常行为；
+  // 步骤2：点表格「极速」格 → 格就地编辑；
+  // 期望：标题失焦重新渲染（重新遮罩）、无活动块、表格保持渲染。
+  // 修复前：遮罩 mousedown stopPropagation 后 CM 光标/cursorActivity 不再变化，
+  // 旧活动块无人重遮 → 标题一直源码态+高亮。
+  {
+    console.log('\n=== S28：点表格格后旧活动块失焦渲染 ===');
+    const ca = await page.evaluate(() => window.__runCellActiveBlock2026());
+    if (ca.err) {
+      console.log('  ⚠ 场景失败: ' + ca.err);
+      fail++;
+    } else {
+      const read = () => page.evaluate(() => window.__s28read());
+      // 步骤1：真实点击表下标题 → 标题应转活动块（源码态）、标题块（title）重遮
+      await page.mouse.click(ca.headingRect.x, ca.headingRect.y);
+      await new Promise(r => setTimeout(r, 250));
+      const afterHead = await read();
+      // 步骤2：真实点击表格「极速」格 → 格就地编辑 + 旧活动块（标题）失焦重渲染。
+      // ⚠️ 格坐标必须在步骤1 之后重新测量：点标题会使标题块撤罩（渲染高度 ≠ 源码行高），
+      // 表格随之位移，初始几何已失效（旧坐标会点错到上一行）。
+      const cellRect2 = await page.evaluate(() => {
+        const c = document.querySelector('div.wysiwyg-block-mask table tbody tr:nth-child(2) td:nth-child(3)');
+        if (!c) return null;
+        const r = c.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2, text: c.textContent };
+      });
+      if (!cellRect2 || cellRect2.text !== '极速') {
+        console.log('  ⚠ 步骤2 目标格重定位失败: ' + JSON.stringify(cellRect2));
+        fail++;
+      } else {
+        await page.mouse.click(cellRect2.x, cellRect2.y);
+        await new Promise(r => setTimeout(r, 250));
+        const afterCell = await read();
+        console.log('  初始: ' + JSON.stringify(ca.initial));
+        console.log('  点标题后: ' + JSON.stringify(afterHead));
+        console.log('  点格后: ' + JSON.stringify(afterCell));
+        const checks28 = [
+          ['前提：初始活动块=标题（源码态），表格/表下标题均渲染', ca.initial && ca.initial.activeIdx === 0 && ca.initial.tableMasked === true && ca.initial.headingMasked === true && ca.initial.titleMasked === false],
+          ['点表下标题：标题转活动块（源码态+高亮）、原活动块重遮', afterHead && afterHead.headingMasked === false && afterHead.headingActiveLine === true && afterHead.titleMasked === true],
+          ['点表格格：格进入就地编辑（文本=极速）', afterCell && afterCell.cellEditing === true && afterCell.editingText === '极速'],
+          ['点表格格：表下标题失焦重新渲染（源码态收起）', afterCell && afterCell.headingMasked === true && afterCell.headingActiveLine === false],
+          ['点表格格：无活动块（activeIdx=-1）', afterCell && afterCell.activeIdx === -1],
+          ['点表格格：表格保持渲染（不整表撤罩）', afterCell && afterCell.tableMasked === true],
+        ];
+        for (const [label, ok] of checks28) {
+          console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+          if (!ok) fail++;
+        }
+      }
+    }
+  }
+
+  // ---------- S29：格内文字选中 + 点外部失焦（2026-10-14 用户要求） ----------
+  // ① 进格编辑后真实 down-move-up 拖选 → 应选出格内文本（修复前：preventDefault +
+  //    遮罩 user-select:none 双重拦截，选不中）；
+  // ② 点另一格 → 原格提交、新格编辑（既有行为回归）；
+  // ③ 点表 wrap 下留白 → 单元格失焦提交（修复前：吞掉不动，格保持编辑）；
+  // ④ 再进格 → 点表下段落块 → 单元格失焦提交 + 段落转活动块（修复前：格保持编辑）。
+  {
+    console.log('\n=== S29：格内文字选中 + 点外部失焦 ===');
+    const cs = await page.evaluate(() => window.__runCellSelectFocus2026());
+    if (cs.err) {
+      console.log('  ⚠ 场景失败: ' + cs.err);
+      fail++;
+    } else {
+      const read = () => page.evaluate(() => window.__s29read());
+      // ① 点 cellA 进格编辑
+      await page.mouse.click(cs.cellA.x0, cs.cellA.y);
+      await new Promise(r => setTimeout(r, 200));
+      const inEdit = await read();
+      // 进格后旧活动块（标题）重遮罩 → 渲染高度 ≠ 源码行高 → 表格整体位移，
+      // 坐标必须重测（同 S28 步骤：陈旧坐标会点中上方行）
+      let cellA2 = await page.evaluate(() => {
+        const c = document.querySelector('div.wysiwyg-block-mask table tbody tr td');
+        if (!c || c.textContent !== '甲格文字选中测试内容') return null;
+        const r = c.getBoundingClientRect();
+        return { x0: r.x + 28, y: r.y + r.height / 2, x1: r.x + r.width - 8 };
+      });
+      if (!cellA2) {
+        console.log('  ⚠ 进格后重测 cellA 失败');
+        fail++;
+      }
+      // ① 格内真实拖选（down → move → up）
+      if (cellA2) {
+        await page.mouse.move(cellA2.x0, cellA2.y);
+        await page.mouse.down();
+        await page.mouse.move(cellA2.x1, cellA2.y, { steps: 8 });
+        await page.mouse.up();
+      }
+      await new Promise(r => setTimeout(r, 120));
+      const afterSelect = await read();
+      // ② 点另一格（c2）
+      let cellB2 = await page.evaluate(() => {
+        const c = document.querySelector('div.wysiwyg-block-mask table tbody tr:nth-child(2) td:nth-child(1)');
+        if (!c) return null;
+        const r = c.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2, text: c.textContent };
+      });
+      if (cellB2 && cellB2.text === 'c2') {
+        await page.mouse.click(cellB2.x, cellB2.y);
+        await new Promise(r => setTimeout(r, 200));
+      }
+      const afterOtherCell = await read();
+      // ③ 点表 wrap 下留白（最底 8px 带，避开增行条带）
+      let gutter2 = await page.evaluate(() => {
+        const w = document.querySelector('div.wysiwyg-block-mask .wysiwyg-table-wrap');
+        if (!w) return null;
+        const r = w.getBoundingClientRect();
+        return { x: r.x + 30, y: r.bottom - 4 };
+      });
+      if (gutter2) {
+        await page.mouse.click(gutter2.x, gutter2.y);
+        await new Promise(r => setTimeout(r, 200));
+      }
+      const afterGutter = await read();
+      // ④ 再进格（c2）→ 点表下段落块
+      cellB2 = await page.evaluate(() => {
+        const c = document.querySelector('div.wysiwyg-block-mask table tbody tr:nth-child(2) td:nth-child(1)');
+        if (!c) return null;
+        const r = c.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2, text: c.textContent };
+      });
+      if (cellB2 && cellB2.text === 'c2') {
+        await page.mouse.click(cellB2.x, cellB2.y);
+        await new Promise(r => setTimeout(r, 200));
+      }
+      const inCell2 = await read();
+      const para2 = await page.evaluate(() => {
+        const p = document.querySelector('div.wysiwyg-block-mask p');
+        if (!p) return null;
+        const r = p.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2, text: p.textContent };
+      });
+      if (para2 && para2.text === '表下段落。') {
+        await page.mouse.click(para2.x, para2.y);
+        await new Promise(r => setTimeout(r, 250));
+      }
+      const afterPara = await read();
+      console.log('  进格编辑: ' + JSON.stringify(inEdit));
+      console.log('  格内拖选后: ' + JSON.stringify(afterSelect));
+      console.log('  点另一格后: ' + JSON.stringify(afterOtherCell));
+      console.log('  点下留白后: ' + JSON.stringify(afterGutter));
+      console.log('  再进格: ' + JSON.stringify(inCell2));
+      console.log('  点段落块后: ' + JSON.stringify(afterPara));
+      const checks29 = [
+        ['前提：点格进入就地编辑（格内显示源码文本）', inEdit && inEdit.cellEditing === true && inEdit.editingText === '甲格文字选中测试内容'],
+        ['格内文字可选中：真实拖选选出文本、格保持编辑', afterSelect && afterSelect.selText.length >= 2 && afterSelect.selInCellA === true && afterSelect.cellEditing === true],
+        ['点另一格：原格提交失焦、新格编辑（c2）', afterOtherCell && afterOtherCell.cellEditing === true && afterOtherCell.editingText === 'c2'],
+        ['点表格下留白：单元格失焦（无编辑态、焦点不在格上）', afterGutter && afterGutter.cellEditing === false && afterGutter.activeIsCell === false],
+        ['再进格后点另一块（段落）：单元格失焦提交、段落转活动块（源码态）', inCell2 && inCell2.cellEditing === true && afterPara && afterPara.cellEditing === false && afterPara.paraMasked === false && afterPara.activeIdx >= 0],
+      ];
+      for (const [label, ok] of checks29) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S30：标题活动行「灰 # 前缀 + 渲染文字」（2026-10-14 用户要求，Typora 式） ----------
+  // 修复前：点标题/光标在标题行 → 整行源码（等宽 `## xxx`）；修复后：# 前缀小灰 +
+  // 正文渲染尺寸/字重（.wysiwyg-heading-hash / .wysiwyg-heading-text-{level} 两段
+  // text marker），h1–h6 全覆盖。
+  {
+    console.log('\n=== S30：标题活动行 = 灰#前缀 + 渲染文字（h1–h6） ===');
+    const HD = ['# 一级标题文字', '## 二级标题文字', '### 三级标题文字',
+      '#### 四级标题文字', '##### 五级标题文字', '###### 六级标题文字'];
+    const hd = await page.evaluate(() => window.__runHeadingDecor2026());
+    if (hd.err) {
+      console.log('  ⚠ 场景失败: ' + hd.err);
+      fail++;
+    } else {
+      const read = () => page.evaluate(() => window.__s30read());
+      const initial = await read();
+      console.log('  初始(h1 活动): ' + JSON.stringify(initial));
+      const checks30 = [];
+      checks30.push(['初始：h1 活动行 = # 前缀 + 渲染尺寸(text-1)，其余 6 块遮罩',
+        !!(initial && initial.hash === '#' && (initial.textCls || '').indexOf('wysiwyg-heading-text-1') >= 0 &&
+          initial.text === ' 一级标题文字' && initial.masks === 6)]);
+      let r = await page.evaluate(() => window.__s30rects());
+      for (let n = 2; n <= 6; n++) {
+        if (!r[n]) { checks30.push(['h' + n + '：未找到遮罩（场景异常）', false]); continue; }
+        await page.mouse.click(r[n].x, r[n].y);
+        await new Promise(rr => setTimeout(rr, 200));
+        const st = await read();
+        console.log('  点 h' + n + ' 后: ' + JSON.stringify(st));
+        checks30.push(['点 h' + n + '：活动行 = ' + n + ' 个#前缀 + 渲染尺寸(text-' + n + ')，其余 6 块遮罩',
+          !!(st && st.hash === '#'.repeat(n) && (st.textCls || '').indexOf('wysiwyg-heading-text-' + n) >= 0 &&
+            st.text === ' ' + HD[n - 1].slice(n + 1) && st.masks === 6)]);
+        r = await page.evaluate(() => window.__s30rects());
+      }
+      if (r[1]) {
+        await page.mouse.click(r[1].x, r[1].y);
+        await new Promise(rr => setTimeout(rr, 200));
+        const st = await read();
+        checks30.push(['切回 h1：装饰恢复 1 级（旧装饰已清、无残留）',
+          !!(st && st.hash === '#' && (st.textCls || '').indexOf('wysiwyg-heading-text-1') >= 0 && st.masks === 6)]);
+      } else {
+        checks30.push(['切回 h1：未找到遮罩（场景异常）', false]);
+      }
+      // 行内编辑：活动 h1 行末输入 → 装饰自动跟随（新字符进渲染段、# 前缀不变）
+      await page.keyboard.type('X');
+      await new Promise(rr => setTimeout(rr, 150));
+      const stEdit = await read();
+      console.log('  输入 X 后: ' + JSON.stringify(stEdit));
+      checks30.push(['标题行输入：# 前缀不变、新字符在渲染文字段（装饰自动跟随）',
+        !!(stEdit && stEdit.hash === '#' && stEdit.text === ' 一级标题文字X' &&
+          (stEdit.textCls || '').indexOf('wysiwyg-heading-text-1') >= 0)]);
+      // 点段落 → 全部标题回遮罩（装饰清除）
+      r = await page.evaluate(() => window.__s30rects());
+      if (r.p) {
+        await page.mouse.click(r.p.x, r.p.y);
+        await new Promise(rr => setTimeout(rr, 250));
+        const stP = await read();
+        console.log('  点段落后: ' + JSON.stringify(stP));
+        checks30.push(['点段落：标题装饰清除、标题全回遮罩（段落为活动块未遮罩，余 6）',
+          !!(stP && stP.hash === null && stP.text === null && stP.masks === 6)]);
+      } else {
+        checks30.push(['点段落：未找到遮罩（场景异常）', false]);
+      }
+      for (const [label, ok] of checks30) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S31：列表/代码块活动行渲染化（2026-10-14 用户要求） ----------
+  // 修复前：活动列表/代码块整块源码（`- 项` / `1. 项` / `- [x] 项` / ``` 原样）；
+  // 修复后：• 圆点 / 数字序号 / ☐☑ 复选框 + 正文预览字族；代码块 = 渲染灰盒内编辑 +
+  // 上下围栏灰显（语法标志）。
+  {
+    console.log('\n=== S31：列表/代码块活动行渲染化（ul/ol/task/fence） ===');
+    const lc = await page.evaluate(() => window.__runListCodeDecor2026());
+    if (lc.err) {
+      console.log('  ⚠ 场景失败: ' + lc.err);
+      fail++;
+    } else {
+      const read = () => page.evaluate(() => window.__s31read());
+      const initial = await read();
+      console.log('  初始(ul 活动): ' + JSON.stringify(initial));
+      const checks31 = [];
+      checks31.push(['初始：ul 活动行 = 3 个•圆点 + 条目文字（含嵌套），其余 4 块遮罩',
+        initial.bullets === 3 && initial.listTexts.join('|') === '无序条目一|无序条目二|嵌套条目' &&
+        initial.masks === 4 && initial.activeIdx === 0]);
+      let r = await page.evaluate(() => window.__s31rects());
+      if (!r.ol) {
+        checks31.push(['ol 块：未找到遮罩（场景异常）', false]);
+      } else {
+        await page.mouse.click(r.ol.x, r.ol.y);
+        await new Promise(rr => setTimeout(rr, 200));
+        const st = await read();
+        console.log('  点 ol 后: ' + JSON.stringify(st));
+        checks31.push(['点 ol：数字序号 1./2. 原样渲染 + 条目文字（预览字族）',
+          st.olMarkers.join('|') === '1.|2.' && st.listTexts.join('|') === '有序条目一|有序条目二' &&
+          st.bullets === 0 && st.masks === 4]);
+      }
+      r = await page.evaluate(() => window.__s31rects());
+      if (!r.task) {
+        checks31.push(['task 块：未找到遮罩（场景异常）', false]);
+      } else {
+        await page.mouse.click(r.task.x, r.task.y);
+        await new Promise(rr => setTimeout(rr, 200));
+        const st = await read();
+        console.log('  点 task 后: ' + JSON.stringify(st));
+        checks31.push(['点 task：2 圆点 + 2 复选框（1 勾选）+ 任务文字（含框后源空格间距）',
+          st.bullets === 2 && st.taskBoxes === 2 && st.taskChecked === 1 &&
+          st.listTexts.join('|') === ' 未完成任务| 已完成任务' && st.masks === 4]);
+      }
+      r = await page.evaluate(() => window.__s31rects());
+      if (!r.code) {
+        checks31.push(['code 块：未找到遮罩（场景异常）', false]);
+      } else {
+        await page.mouse.click(r.code.x, r.code.y);
+        await new Promise(rr => setTimeout(rr, 200));
+        const st = await read();
+        console.log('  点 code 后: ' + JSON.stringify(st));
+        checks31.push(['点 code：上下围栏灰显（```js / ```）+ 整块灰盒 4 行',
+          st.fences.join('|') === '```js|```' && st.activeBoxLines === 4 &&
+          st.listTexts.length === 0 && st.masks === 4]);
+        // 行内编辑：代码块内输入 → 装饰稳定（围栏不变）
+        await page.keyboard.type('X');
+        await new Promise(rr => setTimeout(rr, 150));
+        const stE = await read();
+        checks31.push(['代码块内输入：围栏装饰稳定（仍 2 段灰显）',
+          stE.fences.join('|') === '```js|```' && stE.masks === 4]);
+      }
+      r = await page.evaluate(() => window.__s31rects());
+      if (r.para) {
+        await page.mouse.click(r.para.x, r.para.y);
+        await new Promise(rr => setTimeout(rr, 250));
+        const stP = await read();
+        console.log('  点段落后: ' + JSON.stringify(stP));
+        checks31.push(['点段落：列表/代码装饰全清（无残留 span）',
+          stP.bullets === 0 && stP.taskBoxes === 0 && stP.olMarkers.length === 0 &&
+          stP.fences.length === 0 && stP.masks === 4]);
+      } else {
+        checks31.push(['点段落：未找到遮罩（场景异常）', false]);
+      }
+      for (const [label, ok] of checks31) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S32：底部滚动余量（2026-10-14 用户反馈：底部行没法往上滚） ----------
+  {
+    console.log('\n=== S32：底部行滚动余量（底部无行时也能上滚一段） ===');
+    const bs = await page.evaluate(() => window.__runBottomScroll2026());
+    if (bs.err) {
+      console.log('  ⚠ 场景失败: ' + bs.err);
+      fail++;
+    } else {
+      console.log('  初始: ' + JSON.stringify(bs.initial));
+      const bottom = await page.evaluate(() => window.__s32read(true));
+      console.log('  滚到底后: ' + JSON.stringify(bottom));
+      const ok = bottom.padBottomPx >= 150 && bottom.lastLineBottomGap >= 120;
+      console.log('  ' + (ok ? '✓' : '✗') +
+        ' 滚到底后底部行高出底缘 ≥120px（底部滚动余量 ' + Math.round(bottom.padBottomPx) + 'px，实际间距 ' +
+        Math.round(bottom.lastLineBottomGap) + 'px）');
+      if (!ok) fail++;
+    }
+  }
+
+  // ---------- S33：格编辑后拖行/列不丢内容（2026-10-14 用户反馈） ----------
+  {
+    console.log('\n=== S33：格编辑后立即拖行/列，内容不得丢失 ===');
+    const cd = await page.evaluate(() => window.__runCellEditDrag2026());
+    if (cd.err) {
+      console.log('  ⚠ 场景失败: ' + cd.err);
+      fail++;
+    } else {
+      // ① 进格 (1,1) 输入，不点别处，立即拖该行（原位释放）
+      const c = await page.evaluate(() => window.__s33cellRect(1, 1));
+      if (!c) {
+        console.log('  ⚠ 目标格 rect 未取到');
+        fail++;
+      } else {
+        await page.mouse.click(c.x, c.y);
+        await new Promise(r => setTimeout(r, 150));
+        await page.keyboard.type('改', { delay: 50 });
+        await new Promise(r => setTimeout(r, 150));
+        const typed = await page.evaluate(() => window.__s33read());
+        const hp = await page.evaluate(() => window.__s33handlePoint(1));
+        if (!hp) {
+          console.log('  ⚠ 行把手点未取到');
+          fail++;
+        } else {
+          await page.mouse.move(hp.x, hp.y);
+          await page.mouse.down();
+          await page.mouse.move(hp.x, hp.y + 18, { steps: 4 });
+          await new Promise(r => setTimeout(r, 80));
+          await page.mouse.up();
+          await new Promise(r => setTimeout(r, 250));
+          const afterDrag = await page.evaluate(() => window.__s33read());
+          console.log('  输入后: ' + JSON.stringify({ cellEditing: typed.cellEditing, editingText: typed.editingText }));
+          console.log('  拖行（原位）后: ' + JSON.stringify(afterDrag));
+          const checks33a = [
+            ['进格编辑并输入', typed.cellEditing === true && (typed.editingText || '').indexOf('改') >= 0],
+            ['立即拖行后内容不丢（源码含输入内容）', afterDrag.src.indexOf('改') >= 0],
+            ['拖行后格编辑已结束', afterDrag.cellEditing === false],
+          ];
+          for (const [label, ok] of checks33a) {
+            console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+            if (!ok) fail++;
+          }
+          // ③ 实际换位 + 内容保留：进另一格输入，把行拖到不同位置
+          await page.evaluate(() => window.__runCellEditDrag2026());
+          const c2 = await page.evaluate(() => window.__s33cellRect(1, 0));
+          if (!c2) {
+            console.log('  ⚠ 换位场景几何未取到');
+            fail++;
+          } else {
+            await page.mouse.click(c2.x, c2.y);
+            await new Promise(r => setTimeout(r, 150));
+            await page.keyboard.type('甲', { delay: 50 });
+            await new Promise(r => setTimeout(r, 150));
+            // ⚠️ 进格编辑后重读几何：格编辑把旧活动块（表前段落）重遮罩，整表下移，
+            // 点格前读的 rect 已陈旧（按下会落错行）——真实场景人手在把手上随表移动
+            const r2 = await page.evaluate(() => window.__s33rowRect(2));
+            const hp2 = await page.evaluate(() => window.__s33handlePoint(1));
+            if (!r2 || !hp2) {
+              console.log('  ⚠ 换位场景拖拽几何未取到');
+              fail++;
+            } else {
+            await page.mouse.move(hp2.x, hp2.y);
+            await page.mouse.down();
+            await page.mouse.move(hp2.x, r2.y + r2.h * 0.75, { steps: 6 }); // 越过第 2 行中线 → 换位
+            await new Promise(r => setTimeout(r, 80));
+            await page.mouse.up();
+            await new Promise(r => setTimeout(r, 250));
+            const afterMove = await page.evaluate(() => window.__s33read());
+            const lines = afterMove.src.split('\n');
+            const iJia = lines.findIndex((l) => l.indexOf('甲') >= 0);
+            const iSan = lines.findIndex((l) => l.indexOf('行三A') >= 0);
+            console.log('  换位后: ' + JSON.stringify({ iJia, iSan, src: afterMove.src }));
+            const checks33b = [
+              ['实际换位成功（输入行移到行三之后）', iJia > iSan && iJia >= 0],
+              ['换位后内容保留（甲在源码中）', iJia >= 0],
+            ];
+            for (const [label, ok] of checks33b) {
+              console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+              if (!ok) fail++;
+            }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ---------- S34：引用 + 行内语法渲染化（2026-10-14 用户要求，Typora 式） ----------
+  {
+    console.log('\n=== S34：引用前缀 + 行内语法（粗体/斜体/代码/删除线/高亮/链接）渲染化 ===');
+    const id34 = await page.evaluate(() => window.__runInlineDecor2026());
+    if (id34.err) {
+      console.log('  ⚠ 场景失败: ' + id34.err);
+      fail++;
+    } else {
+      const has = (arr, cls) => !!arr && arr.some((c) => c.indexOf(cls) >= 0);
+      const checks34 = [];
+      // ① 挂载后首段即活动块：行内语法 span 应全部就位
+      const l0 = await page.evaluate(() => window.__s34classes(0));
+      console.log('  行0（活动段落）: ' + JSON.stringify(l0));
+      checks34.push(['段落：粗体/斜体/行内代码/删除线/高亮 span 齐备',
+        has(l0, 'wysiwyg-bold') && has(l0, 'wysiwyg-italic') && has(l0, 'wysiwyg-inline-code') &&
+        has(l0, 'wysiwyg-strike') && has(l0, 'wysiwyg-highlight') && has(l0, 'wysiwyg-inline-marker')]);
+      // ⑥ 编辑语义（趁块0未遮罩先做：CM5 光标不能落在被遮罩块内部，会被钳到块末——
+      //    真实用户只能点遮罩进块（光标落行末），setCursor 进遮罩内部不可达）：
+      //    删掉一个 * → 粗体样式消失（change 钩子重算）
+      await page.evaluate(() => window.__s34cursor(0, 11));
+      await new Promise(r => setTimeout(r, 80));
+      await page.keyboard.press('Backspace');
+      await new Promise(r => setTimeout(r, 150));
+      const l0b = await page.evaluate(() => window.__s34classes(0));
+      console.log('  删一个 * 后行0: ' + JSON.stringify(l0b));
+      checks34.push(['删掉一个 * 后粗体样式消失（编辑语义）', !has(l0b, 'wysiwyg-bold')]);
+      // ② 切到链接行：链接文字渲染化 + 标记隐藏
+      await page.evaluate(() => window.__s34cursor(1, 0));
+      await new Promise(r => setTimeout(r, 150));
+      const l1 = await page.evaluate(() => window.__s34classes(1));
+      console.log('  行1（活动链接行）: ' + JSON.stringify(l1));
+      checks34.push(['链接：文字 span + 标记 span（[ ] (url) 隐藏）',
+        has(l1, 'wysiwyg-inline-link') && has(l1, 'wysiwyg-inline-marker')]);
+      // ③ 切到引用第一行：前缀灰显 + 正文渲染字体 + 行内粗体（嵌套 span）
+      await page.evaluate(() => window.__s34cursor(3, 0));
+      await new Promise(r => setTimeout(r, 150));
+      const l3 = await page.evaluate(() => window.__s34classes(3));
+      console.log('  行3（活动引用行）: ' + JSON.stringify(l3));
+      checks34.push(['引用：前缀 span + 正文 span + 行内粗体（引用内嵌套）',
+        has(l3, 'wysiwyg-quote-prefix') && has(l3, 'wysiwyg-quote-text') && has(l3, 'wysiwyg-bold')]);
+      // ④ 切到嵌套引用行：外层 > 画左竖条
+      await page.evaluate(() => window.__s34cursor(4, 0));
+      await new Promise(r => setTimeout(r, 150));
+      const l4 = await page.evaluate(() => window.__s34classes(4));
+      console.log('  行4（活动嵌套引用行）: ' + JSON.stringify(l4));
+      checks34.push(['嵌套引用：外层 > 带竖条 span（wysiwyg-quote-bar）',
+        has(l4, 'wysiwyg-quote-bar') && has(l4, 'wysiwyg-quote-prefix')]);
+      // ⑤ 切到代码块内部行：围栏排除行内解析（** 不得变粗体）
+      await page.evaluate(() => window.__s34cursor(7, 0));
+      await new Promise(r => setTimeout(r, 150));
+      const l6 = await page.evaluate(() => window.__s34classes(6));
+      const l7 = await page.evaluate(() => window.__s34classes(7));
+      console.log('  行6/7（活动代码块）: ' + JSON.stringify({ l6, l7 }));
+      checks34.push(['代码块：围栏行灰显 且 行内 ** 不误判为粗体',
+        has(l6, 'wysiwyg-code-fence') && !has(l7, 'wysiwyg-bold')]);
+      for (const [label, ok] of checks34) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S35：光标行单行灰底 + 编辑态排版=渲染态（2026-10-14 用户截图反馈） ----------
+  {
+    console.log('\n=== S35：光标行单行灰底 + 编辑态排版对齐渲染态 ===');
+    const p35 = await page.evaluate(() => window.__runPlainTextDecor2026());
+    if (p35.err) {
+      console.log('  ⚠ 场景失败: ' + p35.err);
+      fail++;
+    } else {
+      const checks35 = [];
+      const sleep35 = (ms) => new Promise(r => setTimeout(r, ms));
+      // ① 点列表遮罩（行2）进块：只有光标行（行2）灰底，块内行1/3 无底
+      const mp = await page.evaluate(() => window.__s35maskPoint(2));
+      if (!mp) {
+        console.log('  ⚠ 列表遮罩定位失败');
+        fail++;
+      } else {
+        await page.mouse.click(mp.x, mp.y);
+        await sleep35(250);
+        const b = await page.evaluate(() => ({
+          activeIdx: window.__s35ed._wysiwygActiveIdx,
+          cursorLine: window.__s35ed.cm.getCursor().line,
+          bg1: window.__s35bg(1), bg2: window.__s35bg(2), bg3: window.__s35bg(3),
+        }));
+        console.log('  点列表后: ' + JSON.stringify(b));
+        // 光标落哪行由遮罩竖向比例决定（点击点=遮罩中心）：断言「只有光标行灰底」
+        const expectBg = { 1: b.bg1, 2: b.bg2, 3: b.bg3 };
+        const others = [1, 2, 3].filter((n) => n !== b.cursorLine);
+        checks35.push(['列表块：只有光标行灰底（块内其余行无底）',
+          b.activeIdx === 1 && b.cursorLine >= 1 && b.cursorLine <= 3 &&
+          expectBg[b.cursorLine] === true && others.every((n) => expectBg[n] === false)]);
+        // ② 光标块内移动（行1）：灰底跟随
+        await page.evaluate(() => window.__s35cursor(1, 5));
+        await sleep35(150);
+        const b2 = await page.evaluate(() => ({ bg1: window.__s35bg(1), bg2: window.__s35bg(2) }));
+        console.log('  光标移到行1: ' + JSON.stringify(b2));
+        checks35.push(['灰底随光标在块内移动（行1 有底、行2 撤底）', b2.bg1 === true && b2.bg2 === false]);
+        // ③ 活动列表行排版 = 渲染态（预览字族 + 16px + 行高1.7 + 正文色）+ 行内粗体嵌套
+        const t = await page.evaluate(() => {
+          const ln = window.__s35lineEl(1);
+          if (!ln) return null;
+          const cs = getComputedStyle(ln);
+          const bold = Array.from(ln.querySelectorAll('span'))
+            .some((s) => (s.className || '').indexOf('wysiwyg-bold') >= 0);
+          return {
+            plain: (ln.className || '').indexOf('wysiwyg-plain-text') >= 0,
+            ff: cs.fontFamily, fs: cs.fontSize, lh: cs.lineHeight, color: cs.color, bold,
+          };
+        });
+        console.log('  行1 排版: ' + JSON.stringify(t));
+        checks35.push(['活动列表行：plain-text 行类 + 预览字族', t && t.plain === true && t.ff.indexOf('Segoe UI') >= 0]);
+        checks35.push(['活动列表行：字号 16px + 行高 27.2px（=16×1.7，与渲染态一致）',
+          t && t.fs === '16px' && t.lh === '27.2px']);
+        checks35.push(['活动列表行：正文色 --text-primary（#22262e）',
+          t && t.color === 'rgb(34, 38, 46)']);
+        checks35.push(['活动列表行：行内 **加粗** 渲染化（与批次 A 一致）', t && t.bold === true]);
+        // ④ 点围栏遮罩（行6）：代码块整块灰盒（容器观感）+ 源文行不挂 plain-text
+        const fp = await page.evaluate(() => window.__s35maskPoint(6));
+        if (!fp) {
+          console.log('  ⚠ 围栏遮罩定位失败');
+          fail++;
+        } else {
+          await page.mouse.click(fp.x, fp.y);
+          await sleep35(250);
+          const f = await page.evaluate(() => ({
+            activeIdx: window.__s35ed._wysiwygActiveIdx,
+            bg5: window.__s35bg(5), bg6: window.__s35bg(6), bg7: window.__s35bg(7),
+            p5: window.__s35plain(5), p6: window.__s35plain(6), p7: window.__s35plain(7),
+          }));
+          console.log('  点围栏后: ' + JSON.stringify(f));
+          checks35.push(['代码块：整块灰盒（首/中/末行均有底）',
+            f.activeIdx === 2 && f.bg5 === true && f.bg6 === true && f.bg7 === true]);
+          checks35.push(['代码块：源文行不挂 plain-text（保持等宽源文）',
+            f.p5 === false && f.p6 === false && f.p7 === false]);
+          // ⑤ 进尾段落块：单行灰底 + plain-text（围栏块撤底）
+          await page.evaluate(() => window.__s35cursor(8, 2));
+          await sleep35(250);
+          const g = await page.evaluate(() => ({
+            activeIdx: window.__s35ed._wysiwygActiveIdx,
+            bg8: window.__s35bg(8), bg5: window.__s35bg(5),
+            p8: window.__s35plain(8),
+          }));
+          console.log('  进尾段落后: ' + JSON.stringify(g));
+          checks35.push(['段落块：光标行灰底 + plain-text（原代码块撤底）',
+            g.activeIdx === 3 && g.bg8 === true && g.bg5 === false && g.p8 === true]);
+        }
+      }
+      for (const [label, ok] of checks35) {
         console.log(`  ${ok ? '✓' : '✗'} ${label}`);
         if (!ok) fail++;
       }
