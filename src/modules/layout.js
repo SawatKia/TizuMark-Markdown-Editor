@@ -511,6 +511,15 @@
       },
       _jumpToHeadingLine(line) {
         if (!this.cm) return;
+        // 所见即所得：目标标题在遮罩块内时先解罩该块（恢复源码态），否则 CM5 把光标
+        // clamp 到遮罩边缘、heightAtLine 量到的是整块遮罩 → 跳不准（2026-10-12 真机反馈：
+        // 编辑模式能跳到对应内容，所见即所得不行）。解罩后该行变真实行，定位即准确。
+        if (this.viewMode === 'wysiwyg' && typeof this.wysiwygBlockIndexAt === 'function') {
+          const idx = this.wysiwygBlockIndexAt(line);
+          if (idx >= 0 && this._wysiwygMarks && this._wysiwygMarks.has(idx)) {
+            this.setWysiwygActiveBlock(idx);
+          }
+        }
         this.cm.setCursor({ line, ch: 0 });
         this.cm.focus();
         // WebView 中 scrollIntoView 不触发，改用精确滚动公式

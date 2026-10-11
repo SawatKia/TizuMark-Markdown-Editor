@@ -178,3 +178,46 @@ test('slash: 真实路径继续输入字母实时过滤', async () => withEditor
   assert.strictEqual(ed._slashFiltered.length, 1, 'tab 应只匹配 表格(insert-table)');
   assert.strictEqual(ed._slashFiltered[0].action, 'insert-table');
 }));
+
+test('slash: 面板防溢出——光标贴近屏幕底部时翻转到光标上方（2026-10-13「最下面输入被挡住」）', async () => withEditor({ captureInitErr: true }, async (w, ed) => {
+  ed.cm.setValue('');
+  typeSlash(ed, 0, 0);
+  const panel = w.document.getElementById('slash-panel');
+  assert.ok(panel, '面板应存在');
+  // jsdom 无布局：stub 光标坐标 + 面板尺寸（真实浏览器里是实测值）
+  const VH = w.innerHeight || 768;
+  const VW = w.innerWidth || 1024;
+  const PH = 300, PW = 220;
+  Object.defineProperty(panel, 'offsetHeight', { configurable: true, value: PH });
+  Object.defineProperty(panel, 'offsetWidth', { configurable: true, value: PW });
+  const origCoords = ed.cm.cursorCoords;
+  const setCoords = (c) => { ed.cm.cursorCoords = () => c; };
+  try {
+    // ① 光标贴近底部（下方只剩 10px，放不下 300px 面板）→ 翻转到光标上方
+    const bottomCoords = { left: 50, top: VH - 40, right: 50, bottom: VH - 10 };
+    ed._closeSlashPanel();
+    ed.cm.setValue('');
+    setCoords(bottomCoords);
+    typeSlash(ed, 0, 0);
+    assert.strictEqual(ed._slashOpen, true, '应触发面板');
+    const topUp = parseFloat(panel.style.top);
+    assert.strictEqual(topUp, bottomCoords.top - 4 - PH, '下方放不下应翻转到光标上方');
+    assert.ok(topUp + PH <= VH - 8, '翻转后面板必须完整落在视口内');
+    // ② 光标在屏幕中部（下方放得下）→ 保持下方定位（不回归）
+    const midCoords = { left: 50, top: 100, right: 50, bottom: 130 };
+    ed._closeSlashPanel();
+    ed.cm.setValue('');
+    setCoords(midCoords);
+    typeSlash(ed, 0, 0);
+    assert.strictEqual(parseFloat(panel.style.top), midCoords.bottom + 4, '下方放得下时保持光标下方');
+    // ③ 光标贴近右缘 → 左移面板防右溢出
+    const rightCoords = { left: VW - 10, top: 100, right: VW - 10, bottom: 130 };
+    ed._closeSlashPanel();
+    ed.cm.setValue('');
+    setCoords(rightCoords);
+    typeSlash(ed, 0, 0);
+    assert.ok(parseFloat(panel.style.left) + PW <= VW - 8, '贴近右缘应左移，面板不得超出屏幕右缘');
+  } finally {
+    ed.cm.cursorCoords = origCoords;
+  }
+}));

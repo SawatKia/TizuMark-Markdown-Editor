@@ -757,6 +757,21 @@
         await this.ensureTabLoaded(this.activeTab);
         // 确保预览已用新文件内容渲染完（异步），便于后续预览高亮准确定位
         await this.updatePreview();
+        // 所见即所得：目标行在遮罩块内时先解罩该块，否则 setSelection 被 clamp 到遮罩
+        // 边缘、scrollIntoView 落在整块遮罩上（与面包屑/锚点跳转同一成因）。刚切换文件时
+        // 预渲染管线可能还在挂遮罩——等块表就绪（≤2s，已就绪则立即通过）。
+        if (this.viewMode === 'wysiwyg' && typeof this.wysiwygBlockIndexAt === 'function') {
+          const t0 = Date.now();
+          while (Date.now() - t0 < 2000
+            && !(this._wysiwygBlocks && this._wysiwygBlocks.length)
+            && this.cm.lineCount() > 0) {
+            await new Promise((r) => setTimeout(r, 30));
+          }
+          const idx = this.wysiwygBlockIndexAt(pos.line);
+          if (idx >= 0 && this._wysiwygMarks && this._wysiwygMarks.has(idx)) {
+            this.setWysiwygActiveBlock(idx);
+          }
+        }
         this.cm.focus();
         // 计算高亮区间：优先用后端返回的 len；目录搜索 len=0 时按查询在行内定位
         let from = pos, to = pos;

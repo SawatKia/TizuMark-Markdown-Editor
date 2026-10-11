@@ -1851,6 +1851,23 @@ function renderMarkdown(content, options) {
 // options.skipHtml：只切块边界不渲染 html（同样置 skipped 标记）——wysiwyg 全量模式
 // 输入后的增量刷新只需新块边界（既有遮罩按 marker.find() 自动跟随文本，仅重挂变化块）。
 // options.maxBlocks: Infinity：一块不跳（全量预渲染，wysiwyg ≤10000 行进入时的后台步骤）。
+// 链接引用定义行：`[label]: 目标 "可选标题"`（CommonMark；行首缩进 ≤3 空格）。
+// 整篇渲染时定义被引用链接消费、不进正文；逐块渲染时定义单独成块、remark 输出为空——
+// 若按空 html 处理，遮罩会被跳过、定义行以源码裸露（真机「所见即所得里 [ref-example]: URL
+// 出现、阅读模式没有」，2026-10-11 用户反馈）。故整块都是定义行的块改输出零高度占位，
+// 让遮罩把该行盖掉（与阅读模式可见性一致，同缩写定义单独成块的处理思路）。
+const REF_DEF_LINE = /^\s{0,3}\[[^\[\]]+\]:\s*\S+(\s+("[^"]*"|'[^']*'|\([^)]*\)))?\s*$/;
+function isOnlyLinkRefDefs(slice) {
+  const ls = String(slice || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  let has = false;
+  for (const ln of ls) {
+    if (!ln.trim()) continue;
+    if (!REF_DEF_LINE.test(ln)) return false;
+    has = true;
+  }
+  return has;
+}
+
 function renderMarkdownBlocks(content, options) {
   const mdRaw = String(content == null ? '' : content);
   if (!mdRaw.trim()) return [];
@@ -1925,6 +1942,11 @@ function renderMarkdownBlocks(content, options) {
       } catch (e) {
         console.error('renderMarkdownBlocks: 块渲染失败，该块保持源码态:', e);
         html = '';
+      }
+      // 整块都是链接引用定义：渲染为空 → 输出零高度占位（遮罩盖行，与阅读模式一致）。
+      // 只在「源文判定为纯定义」时替换，渲染失败（同样为空）仍保持源码态可见。
+      if (html === '' && slice.trim() && isOnlyLinkRefDefs(slice)) {
+        html = '<div class="wysiwyg-block-hidden"></div>';
       }
     }
     out.push({ start: b.start, end: b.end, html, skipped: b.skipped });

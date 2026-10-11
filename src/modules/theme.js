@@ -235,6 +235,20 @@
         if (kind === 'image') target = 'preview';
         else if (kind === 'text') target = 'edit';
         else target = this._sessionMdViewMode || this.settings.defaultView || 'preview'; // md：会话记忆优先，其次默认视图
+        if (target === 'wysiwyg') {
+          // 所见即所得 + 新文档：旧块表/遮罩全部过期，必须走后台预渲染管线（带 loading 层，
+          // 完成后携缓存块表消费遮罩）。不能靠 applyViewMode 的 50ms 计时器前台同步预渲染
+          // （露数秒源码），更不能什么都不做——「模式本来就是 wysiwyg」时下方常规分支不成立，
+          // 新标签的遮罩永不重建，整篇停在源码态（2026-10-11 用户反馈 #3）。
+          this._lastViewKind = kind;
+          const started = this.beginWysiwygPreRender && this.beginWysiwygPreRender();
+          if (!started) {
+            // 空文档 / 超 1 万行无法预渲染：回退同步 50ms 计时器（虚拟模式只渲视口，轻量）
+            this.viewMode = 'wysiwyg';
+            this.applyViewMode();
+          }
+          return;
+        }
         // 视图布局由「模式 + 类型」共同决定：即使模式没变（如 md 编辑 → 文本编辑），
         // 类型变了也需重新 applyViewMode（重新决定 preview-collapsed 等），否则预览栏不会收起。
         if (target !== this.viewMode || this._lastViewKind !== kind) {
@@ -319,6 +333,9 @@
         this.resetEmptyLineHint();
         // 所见即所得：先清旧遮罩，模式/布局稳定后再重建（applyViewMode 末尾有 50ms 定时器）
         this.clearWysiwygMasks();
+        // 离开所见即所得且预渲染 loading 层仍持有（用户在 50ms 窗口内快切到别的模式，
+        // 下方计时器会被清除、renderWysiwygMasks 永不执行）：在此收尾，覆盖层不残留
+        if (this.viewMode !== 'wysiwyg' && this._wysiwygReleasePreRenderLoad) this._wysiwygReleasePreRenderLoad();
         const editorPane = document.getElementById('editor-pane');
         const previewPane = document.getElementById('preview-pane');
         const btnPreview = document.getElementById('btn-view-preview');

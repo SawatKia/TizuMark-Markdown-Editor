@@ -1,5 +1,5 @@
 /* ========== 主题系统 ========== */
-/* 配色方案由 data-color-scheme 控制：default | forest | nord | dusk | sunset */
+/* 配色方案由 data-color-scheme 控制：default | classic | forest | nord | dusk | sunset */
 /* data-theme="light|dark" 控制明暗 */
 
 /* --- 全局语义色（所有主题共用） --- */
@@ -29,17 +29,59 @@
   --preview-bold-weight: 700;
 }
 
-/* ========== 基准（默认）浅色 ========== */
+/* ========== 默认（浅色） ========== */
+/* 2026-10-11 按用户要求：默认改为纯白背景 + 蓝色主题色（#2563EB，更亮更现代）。
+   原暖灰「基准」配色抽为独立主题 classic（见下方），深色默认保持不变。 */
 :root,
 [data-color-scheme="default"] {
-  --bg-primary: #f8f7f4;
-  --bg-secondary: #eeedec;
-  --bg-toolbar: #e6e5e2;
-  --bg-tab: #e0dfdc;
-  --bg-tab-active: #f8f7f4;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f4f5f7;
+  --bg-toolbar: #eef0f4;
+  --bg-tab: #e9ebf0;
+  --bg-tab-active: #ffffff;
+  --text-primary: #22262e;
+  --text-secondary: #666d79;
+  --border-color: #dfe2e8;
+  --accent-color: #2563eb;
+  --accent-hover: #1e55d0;
+  --accent-pressed: #1946ac;
+  --accent-subtle: rgba(37, 99, 235, 0.07);
+  --accent-muted: rgba(37, 99, 235, 0.15);
+  --accent-text: #ffffff;
+  --color-success: #16a34a;
+  --color-danger: #dc2626;
+  --color-warning: #e8a020;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-hover-strong: rgba(0, 0, 0, 0.09);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.10);
+  --shadow-up-sm: 0 -1px 2px rgba(0, 0, 0, 0.04);
+  --heading-color: var(--text-primary);
+  --heading-h2-color: #1e222a;
+  --heading-h1-color: var(--text-primary);
+  --toc-bg: linear-gradient(135deg, #eef3fc 0%, #e4ecfa 100%);
+  --toc-border: #ccd7f2;
+  --scrollbar-track: #f2f3f5;
+  --scrollbar-thumb: #c2c7cf;
+  --scrollbar-thumb-hover: #a5abb7;
+  --preview-bg: #ffffff;
+  --code-bg: #f4f5f7;
+  --find-bg: #f4f5f7;
+}
+
+/* ========== 经典（浅色） ========== */
+/* 原默认「基准」暖灰配色，2026-10-11 按用户要求抽为独立主题（微调：灰阶统一略提亮、
+   边框与工具栏降一档对比，观感更柔和）。主题色沿用其原有蓝色 #2050d0。 */
+[data-color-scheme="classic"] {
+  --bg-primary: #faf9f7;
+  --bg-secondary: #f0efed;
+  --bg-toolbar: #e8e7e4;
+  --bg-tab: #e2e1de;
+  --bg-tab-active: #faf9f7;
   --text-primary: #2c2c2e;
   --text-secondary: #6e6e72;
-  --border-color: #dcdad7;
+  --border-color: #dfdcd8;
   --accent-color: #2050d0;
   --accent-hover: #1a42b0;
   --accent-pressed: #15358a;
@@ -60,12 +102,12 @@
   --heading-h1-color: var(--text-primary);
   --toc-bg: linear-gradient(135deg, #eef2f8 0%, #e6ecf6 100%);
   --toc-border: #cdd4e8;
-  --scrollbar-track: #f0efec;
-  --scrollbar-thumb: #c4c3c0;
-  --scrollbar-thumb-hover: #a8a7a4;
-  --preview-bg: #f8f7f4;
-  --code-bg: #eeedec;
-  --find-bg: #eeedec;
+  --scrollbar-track: #f2f1ef;
+  --scrollbar-thumb: #c8c7c4;
+  --scrollbar-thumb-hover: #aaa9a6;
+  --preview-bg: #faf9f7;
+  --code-bg: #f0efed;
+  --find-bg: #f0efed;
 }
 
 /* ========== 翠林风 浅色 ========== */
@@ -222,7 +264,8 @@
 
 /* ========== 基准（默认）深色 ========== */
 [data-theme="dark"],
-[data-color-scheme="default"][data-theme="dark"] {
+[data-color-scheme="default"][data-theme="dark"],
+[data-color-scheme="classic"][data-theme="dark"] {
   --bg-primary: #1a1c20;
   --bg-secondary: #1f2126;
   --bg-toolbar: #25272e;
@@ -2161,19 +2204,28 @@ body.is-resizing .side-btn {
 .preview-content table {
   width: 100%;
   max-width: 100%;
-  border-collapse: collapse;
-  margin: 16px 0;
+  /* 2026-07 二轮优化（跟随参考图）：直角 + 均匀 1px 网格 + 浅灰表头，去圆角卡片与斑马纹。
+     separate + 表级外框 1px：外框 1px、内部网格线只画右/下缘（相邻格共享 1px 不叠双线），
+     参考图观感 = 素净直角网格。宽表仍 display:block + overflow-x:auto 不变。
+     上下 margin 16px→12px：表格与前后内容距离缩小（用户反馈）。 */
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--border-color);
+  margin: 12px 0;
   overflow-x: auto;
   display: block;
 }
 
-.preview-content thead { border-bottom: 2px solid var(--border-color); }
-
 .preview-content th, .preview-content td {
   padding: 8px 12px;
-  border: 1px solid var(--border-color);
+  border-top: none;
+  border-left: none;
+  border-right: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
   text-align: left;
 }
+.preview-content th:last-child, .preview-content td:last-child { border-right: none; }
+.preview-content tr:last-child th, .preview-content tr:last-child td { border-bottom: none; }
 
 .preview-content th {
   background-color: var(--bg-secondary);
@@ -2181,7 +2233,7 @@ body.is-resizing .side-btn {
 }
 
 .preview-content tbody tr:nth-child(even) {
-  background-color: var(--bg-secondary);
+  background-color: transparent;
 }
 
 .preview-content tbody tr:hover {
@@ -2734,6 +2786,12 @@ body.is-resizing .side-btn {
   padding-left: 32px;
   padding-right: 32px;
 }
+/* 顶部预留 24px 空间：表上方有列拖拽把手（高 20px）——表格若是文档首行，
+   把手会被滚动容器顶缘裁掉看不见（2026-10-13 用户反馈「表格在最顶部时拉手
+   被遮挡显示不全」）。左右侧已有 32px 行留白（>16px 行把手宽），无需再加。 */
+.editor-container.wysiwyg-mode .CodeMirror-lines {
+  padding-top: 24px;
+}
 
 /* 块遮罩（src/modules/wysiwyg.js）。
    节点同时带 preview-content 类，用以继承预览的全部排版规则 —— 这些规则的作用域是
@@ -2743,6 +2801,7 @@ body.is-resizing .side-btn {
    ⚠️ 不得靠 JS 设 pointer-events:none：那是 overlay 时代的写法，文本已被 replacedWith 替换，
       那样点击会穿透到空白、CM 拿不到有效坐标 → 点不进块（2026-10-06 真机反馈）。 */
 .CodeMirror .wysiwyg-block-mask.preview-content {
+  position: relative; /* 块右上「编辑」按钮的绝对定位锚 */
   flex: none;
   display: block;
   width: 100%;
@@ -2770,6 +2829,289 @@ body.is-resizing .side-btn {
 
 .CodeMirror .wysiwyg-block-mask.preview-content > *:first-child { margin-top: 0; }
 .CodeMirror .wysiwyg-block-mask.preview-content > *:last-child { margin-bottom: 0; }
+
+/* 纯链接引用定义块：阅读模式里定义被引用链接消费、不进正文，所见即所得必须同样
+   不可见。renderMarkdownBlocks 对整块纯定义行输出本占位（零高度），遮罩照常盖行。 */
+.CodeMirror .wysiwyg-block-mask .wysiwyg-block-hidden {
+  height: 0;
+  overflow: hidden;
+}
+
+/* 块右上「编辑」按钮（所见即所得专属 chrome）：hover 显示，样式对齐代码块复制按钮
+   （2026-10-11 用户反馈 #4）。点击行为在 wysiwyg.js 遮罩 mousedown 接管（撤遮罩+定位块首行）。 */
+.block-edit-btn {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  padding: 3px 10px;
+  background-color: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: calc(var(--ui-font-size) * 0.8462);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s, background-color 0.2s;
+  z-index: 6;
+}
+.CodeMirror .wysiwyg-block-mask:hover .block-edit-btn { opacity: 1; }
+.block-edit-btn:hover {
+  background-color: var(--accent-color);
+  color: var(--accent-text);
+  border-color: var(--accent-color);
+}
+/* 代码块：复制按钮已占 pre 右上，编辑按钮左移避让 */
+.CodeMirror .wysiwyg-block-mask:has(> pre) .block-edit-btn { right: 76px; }
+
+/* 活动块（光标所在块、源码态）背景：一整块「编辑区」观感（2026-10-11 用户反馈 #5 引入，
+   2026-10-13 三轮修正：① 修复选择器——addLineClass('background') 的类落在独立的
+   div.CodeMirror-linebackground（行包裹层内绝对定位背景层，left/right:0 满行宽），
+   **不在 pre.CodeMirror-line**，旧规则选 pre 从未真正绘制（浏览器诊断发现）；
+   ② 按「太丑」反馈减重为浅底细条；③ 按「左边一个个小圆角不好看、要像一块编辑」
+   参考图（代码块灰盒）改为本规则）。
+   视觉：底色 = 代码块同色 --code-bg（六套配色/明暗自适应，即参考图灰盒色）；
+   逐行**无**圆角（多行连续成整块），仅块首行上缘 / 末行下缘圆角（JS 额外挂
+   cm-wysiwyg-active-first / -last 行类）→ 整个块读作一个圆角矩形编辑区；
+   无主题色竖条。代码/公式/图表等「显示源码编辑」的块进入源码态时同享此高亮
+   （活动块=源码态，统一机制）。 */
+.editor-container.wysiwyg-mode .CodeMirror div.CodeMirror-linebackground.cm-wysiwyg-active-block {
+  background: var(--code-bg);
+}
+.editor-container.wysiwyg-mode .CodeMirror div.CodeMirror-linebackground.cm-wysiwyg-active-first {
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+.editor-container.wysiwyg-mode .CodeMirror div.CodeMirror-linebackground.cm-wysiwyg-active-last {
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+/* 表格单元格源码编辑态（Phase 2 / R5，2026-10-13）：点渲染表格的格子 → 该格
+   contenteditable 显示原始源码文本；浅底色 + 主题色描边标示「正在编辑这一格」，
+   整表其余部分保持渲染态。源码可能含 ** / \| 等，允许折行保持可读。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask table td.wysiwyg-cell-editing,
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask table th.wysiwyg-cell-editing {
+  background: var(--accent-subtle);
+  outline: 1px solid var(--accent-color);
+  outline-offset: -1px;
+  cursor: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 表格行/列工具（2026-10-13 用户要求；2026-10-13 反馈 #4/#5 改为「边缘条带」，
+   参考有道云笔记样式）：渲染表格被包进 wysiwyg-table-wrap（wysiwyg.js
+   _addWysiwygTableTools）——右缘一条通高竖条（增列）、下缘一条通宽横条（增行），
+   浅灰底 + 细边框 + 居中「＋」。**显示条件 = 鼠标移到表格右边/下边一点（条带自身
+   即悬停区）**，鼠标在表格本体上不再显示（per-strip hover 类，JS 200ms 宽限）。
+   点击增列/增行（纯函数重建整块回写 + 自动进新格编辑）。div/button 不在 S1 结构
+   标签集，阅读模式同构判据不受影响。 */
+/* width: fit-content（2026-10-13 用户截图反馈：增行/增列「＋」离表格很远）——
+   wrap 是块级 div，默认撑满遮罩（= CM 行整宽），而表格网格是内容宽（display:block
+   + width:100% 只把「表格盒」撑满，内部网格仍按列内容收缩、左对齐）。按钮相对 wrap
+   定位：整宽 wrap 会让增列「＋」飞到编辑器最右缘、增行「＋」飞到行水平中心（空行
+   提示条中间），与窄表格相距数百 px 不可点。收窄 wrap 到表格网格宽 → 按钮紧贴表格
+   右缘/下缘。max-width 兜底超宽表（内部 overflow-x 滚动仍生效）。
+   ⚠️ 测试时 table 元素 box ≠ 可见网格（盒是 100% 宽），须量末格 cell 的 rect。 */
+/* 2026-10-13 反馈 #2 起上下留白（增行横条/列轨道收进表格自己行内，不压相邻行）；
+   反馈「顶部大面积空白」→ 上留白 22px 收窄到 12px（下留白 32px 不变：16px 条带 + 余量）。
+   2026-10-13 反馈 #3：增行/增列条带**紧贴表格边框**（无间隙）：竖条 left:100% 零边距、
+   横条顶缘 = 表底缘（bottom:16px = 下留白 32 - 条带 16）。左右留白 = CM 行自身 32px
+   padding（左缘行轨 26px / 右缘竖条 16px 都在该空白带内，不遮挡）。 */
+.wysiwyg-table-wrap { position: relative; width: fit-content; max-width: 100%; padding-top: 24px; padding-bottom: 24px; }
+.wysiwyg-table-wrap > table { margin: 0; }
+.wysiwyg-table-add-col,
+.wysiwyg-table-add-row {
+  position: absolute;
+  display: flex; /* 恒在布局内（display:none 无法被 hover 命中）；可见性用 opacity */
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: auto; /* 条带自身即悬停触发区：透明（未显示）时也恒可命中（反馈 #5） */
+  transition: opacity 0.12s ease;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary, #666d79);
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 6;
+}
+/* 边缘条带（反馈 #4；反馈 #1：两条带宽度统一 16px、长度不变）：增列 = 右缘竖条（与表格
+   同高）、增行 = 下缘横条（通宽、16px 厚、落 wrap 下留白内不压下一行）。
+   2026-10-13 反馈 #3：两条带**紧贴表格边框**——竖条零边距（left:100%）、横条顶缘 = 表底
+   缘（bottom:16px = 下留白 32 - 条带 16），不再有 6/10px 间隙 */
+.wysiwyg-table-add-col { left: 100%; top: 24px; bottom: 24px; width: 16px; margin-left: 0; }
+.wysiwyg-table-add-row { bottom: 8px; left: 0; width: 100%; height: 16px; }
+/* 条带悬停（JS 托管 per-strip 类，_addWysiwygTableTools 维护；反馈 #5：只有鼠标移到
+   表格右边/下边一点才显示，表格本体上不出）：浅灰底 + 细边框 + 「＋」显出。 */
+.wysiwyg-table-wrap.wysiwyg-table-add-col-hover .wysiwyg-table-add-col,
+.wysiwyg-table-wrap.wysiwyg-table-add-row-hover .wysiwyg-table-add-row {
+  opacity: 1;
+  border-color: var(--border-color, #dfe2e8);
+  background: var(--bg-secondary);
+}
+/* 悬停期把表格所在 CM 行 z-index 抬到 3（相邻行均为 2、段落后于表格行会压在上层），
+   让按钮/悬停桥压到下方块内容之上，hover 与点击才落得到按钮。选择器须含 .CodeMirror
+   前缀以压过 codemirror.css 的 `.CodeMirror pre.CodeMirror-line{z-index:2}`（特异性更高）。 */
+.CodeMirror .CodeMirror-line.wysiwyg-table-line-hover { z-index: 3; }
+/* 悬停桥（2026-10-13 用户反馈 #3「增行/增列点不到，鼠标一移就消失」）：右缘增列竖条
+   定位在 wrap 盒外（left:100%），透明伪元素把竖条区域并入 wrap 命中区，形成连续悬停带。
+   2026-10-13 反馈 #3 起竖条紧贴表格（无间隙），桥宽 = 竖条 16px。
+   ⚠️ 2026-10-13 反馈 #2 留白改造后**不再有下缘桥**：增行横条已收进 wrap 下留白（盒内），
+   从表格滑向横条全程都在 wrap 命中区内；若保留下缘桥（top:100% 伸入下一行），悬停表格时
+   下一行首行会被伪元素抢走命中（点击落不进下方段落）。 */
+.wysiwyg-table-wrap::before {
+  content: '';
+  position: absolute;
+  left: 100%;
+  top: 0;
+  bottom: 0;
+  width: 16px; /* = 竖条宽（竖条紧贴表格右缘，无间隙） */
+  pointer-events: none; /* 默认不拦截 */
+}
+/* 仅悬停显示期间桥接空隙（鼠标从表格滑向竖条时保持 hover 连续）；未悬停时不占命中区 */
+.wysiwyg-table-wrap.wysiwyg-table-tools-hover::before {
+  pointer-events: auto;
+}
+/* 直接悬停在条带上保持中性灰（参考图样式；旧小按钮的主题色 hover 已随条带化移除） */
+
+/* 行/列拖拽把手（hover 出现，2026-10-13 用户参考图：把手必须在表格外面）。
+   ⚠️ 必须做成 wrap 上的真实元素（JS 随悬停行/列移动定位），不能是 td/th 伪元素：
+   table 元素盒只有网格宽且是滚动容器（.preview-content table { display:block;
+   overflow-x:auto }），伸到表盒外的伪元素（行把手 left:-16 / 胶囊 top:-20）会被
+   table 裁剪——看不见也命中不到（2026-10-13 实测 elementFromPoint=PRE，拖拽启动不了）；
+   且「把手盒在 tr 盒外而又是 tr:hover 的产物」存在循环依赖（指针移向把手 → :hover
+   失效 → 把手消失）。wrap 的 overflow 为 visible 不裁剪，两个 span 挂 wrap 上即免两坑。
+   行 = 表左缘外 20px 轨道（常驻命中区）+ 灰点阵握点（JS 定位到悬停行中线）；
+   列 = 表上方 22px 轨道（常驻命中区）+ 灰点阵握点（JS 定位到悬停列中心）。
+   ⚠️ 轨道必须常驻（透明）：gutter 在 wrap 盒外，事件按 DOM 树冒泡——鼠标在
+   gutter 时目标必须是 wrap 的后代（轨道），wrap 才收得到 mousemove/pointerdown；
+   轨道若随悬停才显示，「移到行左边一点」时 gutter 里没有可命中的元素（2026-10-13
+   用户第 2/3 条：边缘邻近触发，悬停出灰握点，拖动才蓝高亮——参考图 2/3/6）。 */
+.wysiwyg-table-wrap .wysiwyg-table-row-handle {
+  position: absolute;
+  left: -24px;
+  top: 24px;
+  bottom: 24px;
+  width: 24px;
+  display: block;
+  pointer-events: auto;
+  z-index: 1;
+}
+.wysiwyg-table-wrap .wysiwyg-table-col-pill {
+  position: absolute;
+  top: 0; /* 表上方 24px 带 = wrap 上留白区（把手浮于表上方、不压表头——参考图 1/4） */
+  left: 0;
+  width: 100%;
+  height: 24px;
+  display: block;
+  pointer-events: auto;
+  z-index: 1;
+}
+/* 行握点（可见小把手）：灰点阵 2×3，16×16 圆角小方块，右缘距表左缘恒 6px（与列握点
+   距表顶缘 6px 一致——参考图 1「把手浮于表外、与边框等距」）；JS 定位 top = 悬停行中线 - 8；
+   默认隐藏（opacity 0）。 */
+.wysiwyg-table-wrap .wysiwyg-table-row-grip {
+  position: absolute;
+  right: 6px;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary, #9aa0a8);
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.12s ease, top 0.1s ease-out, left 0.1s ease-out;
+}
+/* 列握点（可见小把手）：灰点阵 2×3，16×16 圆角小方块，底缘距表顶缘恒 6px（与行握点
+   距表左缘 6px 一致）；JS 定位 left = 悬停列中心；默认隐藏（opacity 0）。 */
+.wysiwyg-table-wrap .wysiwyg-table-col-grip {
+  position: absolute;
+  top: 2px;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translateX(-50%);
+  color: var(--text-tertiary, #9aa0a8);
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.12s ease, left 0.1s ease-out;
+}
+/* 悬停高亮已移除（2026-10-13 用户第 6 条：只有拖动时才蓝色高亮；悬停只出灰色握点）。
+   JS 仍挂 wysiwyg-row-hover / wysiwyg-col-hover 类（状态标记，无样式）。
+   阅读模式的行 hover 高亮（.preview-content tbody tr:hover）在 wysiwyg 遮罩上同样
+   生效——须在此豁免，否则悬停行会出浅蓝底（用户第 6 条要求悬停零高亮）。 */
+.editor-container.wysiwyg-mode .wysiwyg-block-mask tbody tr:hover {
+  background-color: transparent;
+}
+/* 拖动中（JS 按下即给轨道加 .wysiwyg-dragging）：握点变蓝底圆角矩形、点变白，
+   点阵保持未按下 ⋮⋮ 2×3 点阵不变（2026-10-14 用户反馈：按下/拖动只背景变蓝，
+   不换成横排点）。行拖 = 竖条（宽 16px × 行高，JS 按被拖行实测设 inline height）；
+   列拖 = 横条（宽 = 被拖列宽 JS inline、最小 26px × 高 16px）。
+   结束态清除 inline 尺寸。 */
+.wysiwyg-table-wrap .wysiwyg-table-row-handle.wysiwyg-dragging .wysiwyg-table-row-grip {
+  background: var(--accent-color);
+  color: var(--bg-primary, #fff);
+  padding: 0;
+  opacity: 1;
+  border-radius: 4px;
+}
+.wysiwyg-table-wrap .wysiwyg-table-col-pill.wysiwyg-dragging .wysiwyg-table-col-grip {
+  background: var(--accent-color);
+  color: var(--bg-primary, #fff);
+  padding: 0;
+  opacity: 1;
+  border-radius: 4px;
+}
+/* 拖动中被拖行/列：浅蓝高亮（2026-10-13 反馈 #1/#2 定稿语义：淡蓝背景 = 被拖行/列，
+   蓝线 = 落点指示线 .wysiwyg-table-drop-line；列原来的「右缘蓝线」inset 阴影已移除——
+   参考图只有一条落点蓝线，双蓝线会混淆）。选择器带 table 前缀抬特异性，
+   压过 .preview-content 的斑马纹（even 行底色）与 th 默认底色。
+   只有真正拖动才高亮，悬停不出高亮（2026-10-13 用户第 6 条反馈） */
+.wysiwyg-table-wrap table tr.wysiwyg-table-dragging-row {
+  background-color: var(--accent-subtle);
+}
+.wysiwyg-table-wrap table td.wysiwyg-table-dragging-col,
+.wysiwyg-table-wrap table th.wysiwyg-table-dragging-col {
+  background-color: var(--accent-subtle);
+}
+/* 落点指示线（2026-10-13 反馈 #1/#2：淡蓝背景 = 被拖行/列、蓝线 = 要拖动到的位置，
+   对齐参考图——拖拽中被拖项留在原位高亮，不再实时重排，蓝线随指针在行间/列间移动）。
+   行拖 = 横线通表宽、列拖 = 竖线通表高（top:24/bottom:24 = 留白内的表体区域）。
+   只在拖动态由 JS 置 opacity:1 并定位（行=style.top、列=style.left），pointer-events:none。
+   线厚 2px（2026-10-14 反馈：3px 改 2px），JS 定位偏移 = 厚度一半 1px。 */
+.wysiwyg-table-drop-line {
+  position: absolute;
+  background: var(--accent-color);
+  border-radius: 2px;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 6;
+  transition: opacity 0.15s ease, top 0.12s ease, left 0.12s ease;
+}
+.wysiwyg-table-drop-line.wysiwyg-drop-line-row { left: 0; width: 100%; height: 2px; }
+.wysiwyg-table-drop-line.wysiwyg-drop-line-col { top: 24px; bottom: 24px; width: 2px; } /* 通表高（顶缘=表顶缘=上留白 24、底缘=表底缘=下留白 24），2px 细线居中于落点边界 */
+
+/* 拖拽进行中：全局禁止选文 */
+body.wysiwyg-table-dragging,
+body.wysiwyg-table-dragging * { cursor: grabbing !important; user-select: none !important; }
 
 /* 块间空行塌缩（类由 wysiwyg.js updateWysiwygBlankLines 管理）。
    空行按全高渲染会让块与块之间隔出整行空白（真机反馈「间隔了很多空行」）；

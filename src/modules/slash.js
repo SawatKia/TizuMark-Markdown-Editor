@@ -166,12 +166,31 @@
         footer.appendChild(manageBtn);
         panel.appendChild(footer);
   
-        // 定位到 / 光标处（window 坐标，配合 position:fixed）；无布局环境（如测试）下
-        // cursorCoords 可能返回 null，跳过定位即可，不影响逻辑。
+        // 定位到 / 光标处（window 坐标，配合 position:fixed）。默认在光标**下方**，但须防
+        // 面板溢出屏幕（2026-10-13 用户报「在文档最下面输入时面板被挡住显示不出来」——
+        // 旧实现恒在光标下方，底部打开就伸出视口被裁）：
+        // ① 光标下方放不下（面板底超出视口 8px 边距）→ 翻转到光标**上方**；
+        // ② 光标贴近屏幕右缘 → 左移面板。翻转后仍不足（面板比屏幕还高）则贴顶兜底。
+        // 量尺寸前先移到屏外显示（同一同步块内无重绘，不会闪现）。
+        // 无布局环境（如测试）下 cursorCoords 可能返回 null，跳过定位即可，不影响逻辑。
         const coords = this.cm.cursorCoords(this._slashStart, 'window');
         if (coords) {
-          panel.style.left = coords.left + 'px';
-          panel.style.top = (coords.bottom + 4) + 'px';
+          panel.classList.remove('hidden');
+          panel.style.left = '-9999px';
+          panel.style.top = '0px';
+          const pw = panel.offsetWidth;
+          const ph = panel.offsetHeight;
+          const vw = window.innerWidth || 0;
+          const vh = window.innerHeight || 0;
+          const margin = 8;
+          let top = coords.bottom + 4;
+          if (vh > 0 && top + ph > vh - margin) top = coords.top - 4 - ph; // 下方放不下 → 翻上
+          top = Math.max(margin, top);
+          let left = coords.left;
+          if (vw > 0 && left + pw > vw - margin) left = vw - margin - pw;   // 右缘防溢出
+          left = Math.max(margin, left);
+          panel.style.left = left + 'px';
+          panel.style.top = top + 'px';
         }
         panel.classList.remove('hidden');
         const sel = panel.querySelector('.slash-item.selected');

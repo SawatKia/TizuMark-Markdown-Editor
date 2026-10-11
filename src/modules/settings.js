@@ -351,6 +351,7 @@
             ariaLabelKey: 'colorScheme',
             optionsProvider: (t) => ([
               { value: 'default', label: t('schemeDefault') },
+              { value: 'classic', label: t('schemeClassic') },
               { value: 'sunset', label: t('schemeSunset') },
               { value: 'forest', label: t('schemeForest') },
               { value: 'nord', label: t('schemeNord') },

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>slash 面板防溢出验证（真实 Chromium + 真实 CM5 布局）</title>
+<!-- 最小依赖：CM5 + 常量（TMConst）+ slash 模块 + 应用样式表（面板 position:fixed/max-height、
+     #editor-wrapper .CodeMirror 高度约束都在 styles.css 里，缺了它布局全错）；不加载完整 app。
+     容器结构对齐真实 app：#editor-wrapper > .CodeMirror（styles.css L1807 的高度规则）。 -->
+<link rel="stylesheet" href="src/lib/codemirror/codemirror.css">
+<link rel="stylesheet" href="src/styles.css">
+<script src="src/lib/codemirror/codemirror.js"></script>
+<script src="src/modules/constants.js"></script>
+<script src="src/modules/slash.js"></script>
+<style>
+  /* 强制高度链：app 的 styles.css 里部分规则依赖真实 app 的 #app/.editor-container
+     结构，本 harness 没有那层结构，必须显式锁死每级高度（!important 防被覆盖） */
+  html, body { margin: 0 !important; height: 100% !important; overflow: hidden !important; }
+  #editor-host { height: calc(100vh - 24px) !important; }
+  #editor-wrapper { height: 100% !important; }
+  #statusbar { height: 24px; line-height: 24px; background: #eee; color: #888; font-size: 12px; padding: 0 8px; box-sizing: border-box; }
+  /* 注：.CodeMirror 的像素高度在 JS 里显式设（不依赖 % 链，harness 无 app 的 .editor-pane flex 结构） */
+</style>
+</head>
+<body>
+<div id="editor-host">
+  <div id="editor-wrapper"></div>
+</div>
+<div id="statusbar">status</div>
+<script>
+(function () {
+  'use strict';
+  const m = window.TMSlash.mixin;
+  // 伪编辑器实例：只提供 _renderSlashPanel 依赖（真实 app 里这些都在 MarkdownEditor 上）
+  function makeEd(cm) {
+    const ed = {
+      cm,
+      settings: { slashOrder: [], slashHidden: [] },
+      _slashOpen: false, _slashQuery: '', _slashSel: 0, _slashFiltered: [], _slashStart: null,
+      _buildSlashCommands: m._buildSlashCommands,
+      _applySlashLayout: m._applySlashLayout,
+      _renderSlashPanel: m._renderSlashPanel,
+      _closeSlashPanel: m._closeSlashPanel,
+      _openSlashPanel: m._openSlashPanel,
+      _slashConfirm() {},
+      executeMenuAction() {},
+      showSlashOrderDialog() {},
+    };
+    return ed;
+  }
+
+  // 与 app.js 一致：#editor-wrapper 直接作为 CodeMirror 容器（编辑器高度约束依赖此结构）
+  const cm = CodeMirror(document.getElementById('editor-wrapper'), {
+    value: 'x',
+    lineWrapping: false,
+    tabSize: 4,
+  });
+  // 本 harness 没有 app 的 .editor-pane flex 链，% 高度解析不稳定 → 直接给 wrapper
+  // 设像素高度（= 视口高 - 状态栏），保证 .CodeMirror-scroll{height:100%} 能形成真实滚动
+  cm.getWrapperElement().style.height = (window.innerHeight - 24) + 'px';
+  const ed = makeEd(cm);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const vw = () => window.innerWidth;
+
+  // mode:
+  //  bottom = 光标在文档**最末行**（视口滚到底）→ 面板下方放不下，必须翻转到光标上方
+  //  mid    = 光标在视口上部 → 下方放得下，保持光标下方（不回归）
+  //  right  = 光标贴近屏幕右缘（动态凑空格数）→ 面板左移，不得超出屏幕右缘
+  async function run(mode) {
+    const lines = [];
+    for (let i = 0; i < 200; i++) lines.push('第 ' + i + ' 行内容 content line');
+    let pos = null;
+    let scrollTarget = null;
+    if (mode === 'bottom') {
+      lines.push('/'); // 最末行：/
+      cm.setValue(lines.join('\n'));
+      cm.refresh(); // setValue 后同步重排：lineInfo/getScrollInfo 的几何值才准确
+      const last = cm.lineCount() - 1;
+      pos = { line: last, ch: 1 };
+      cm.scrollTo(0, cm.getScrollInfo().height); // 滚到文档底
+      cm.setCursor(pos);
+    } else if (mode === 'mid') {
+      lines[150] = '/';
+      cm.setValue(lines.join('\n'));
+      cm.refresh();
+      pos = { line: 150, ch: 1 };
+      // ⚠️ CM5 的 lineInfo() 没有 top 字段（误用会得到 NaN → scrollTo 静默失败）；
+      // 行距内容区顶部的距离用 heightAtLine()
+      cm.scrollTo(0, Math.max(0, cm.heightAtLine(150) - 20)); // 该行贴近视口顶部
+      cm.setCursor(pos);
+    } else if (mode === 'right') {
+      // 动态凑空格数：让 / 的光标 x 落在 (vw-150, vw-8) —— 光标可见贴近右缘、
+      // 且面板（≥220px 宽）必然溢出右缘，从而触发左移
+      let n = 100;
+      for (;;) {
+        lines[150] = ' '.repeat(n) + '/';
+        cm.setValue(lines.join('\n'));
+        const p = { line: 150, ch: n + 1 };
+        const c = cm.cursorCoords(p, 'window');
+        if (!c || c.left >= vw() - 150) { pos = p; break; }
+        n += 20;
+        if (n > 500) { pos = p; break; }
+      }
+      cm.scrollTo(0, Math.max(0, cm.heightAtLine(150) - 20));
+      cm.setCursor(pos);
+    } else {
+      throw new Error('unknown mode: ' + mode);
+    }
+    ed._openSlashPanel(pos);
+    await sleep(60); // 等布局稳定
+    const p = document.getElementById('slash-panel');
+    if (!p) return { mode, error: '面板未创建' };
+    const rect = p.getBoundingClientRect();
+    const coords = cm.cursorCoords(pos, 'window');
+    const si = cm.getScrollInfo();
+    return {
+      mode,
+      scrollAfter: { top: si.top, max: si.height - si.clientHeight },
+      viewport: { vw: window.innerWidth, vh: window.innerHeight },
+      coords,
+      panel: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, w: rect.width, h: rect.height },
+      visible: rect.bottom <= window.innerHeight + 1 && rect.top >= -1 && rect.right <= window.innerWidth + 1 && rect.left >= -1,
+    };
+  }
+
+  window.__run = run;
+  window.__ready = true;
+})();
+</script>
+</body>
+</html>

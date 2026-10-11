@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const { splitBlocks } = require(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'));
+const { splitBlocks, splitTableRow, editTableRowCell } = require(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'));
 
 const split = (md) => splitBlocks(md.split('\n')).map(b => b.lines);
 
@@ -278,4 +278,153 @@ test('remark 切块：多行展示公式内含独占一行的 `=`（setext 下�
   // 公式前后的普通块不受影响
   assert.ok(blocks.some(b => /矩阵乘法/.test(b.html)), '公式前段落块应保留');
   assert.ok(blocks.some(b => /结尾段落/.test(b.html)), '公式后段落块应保留');
+});
+
+test('ref 定义行单独成块：渲染为空时输出 wysiwyg-block-hidden 占位（与阅读模式「不显示定义行」对齐）', () => {
+  // 2026-10-12 真机反馈：阅读模式整篇渲染时 remark 把纯 `[label]: url` 定义块解析为空
+  // （无 html），逐块渲染该块 html='' → 旧实现按「渲染失败」保留源码态 → 所见即所得
+  // 露出定义行而阅读模式隐藏。占位 div 让遮罩把该块盖成高度 0（CSS 塌缩）。
+  const md = ['正文一段 [TizuMark][ref-example]。', '', '[ref-example]: https://example.com "title"', ''].join('\n');
+  const blocks = renderMarkdownBlocks(md, {});
+  // 定义块（行 2..3，0-based [2,4) 或 [2,3)——取决于尾随空行归属）
+  const defBlock = blocks.find(b => /[^\n]*\[ref-example\]:/.test(md.split('\n').slice(b.start, b.end).join('\n')));
+  assert.ok(defBlock, '应存在 ref 定义块');
+  assert.match(defBlock.html, /<div class="wysiwyg-block-hidden"><\/div>/, '纯 ref 定义块必须输出塌缩占位（实际：' + defBlock.html + '）');
+  // 正文块不受影响（引用处跨块还原是 R12 后置项，这里只断言正文块 html 非空）
+  const para = blocks.find(b => b !== defBlock);
+  assert.ok(para && para.html && !/wysiwyg-block-hidden/.test(para.html), '正文块不应被塌缩占位覆盖');
+});
+
+test('占位判据双条件：定义行紧贴段落（无空行）并入段落块 → html 非空 → 不输出占位', () => {
+  // 占位只认「渲染结果为空 且 块内每行都是合法 ref 定义」。无空行时 remark 把定义行并入
+  // 上一段落（URL 变内联链接）→ 整块 html 非空 → 块必须正常显示，不得塌缩吞内容。
+  const blocks = renderMarkdownBlocks('段落文本\n[x]: https://x.example', {});
+  assert.strictEqual(blocks.length, 1, '应切 1 块（定义行并入段落），实际 ' + blocks.length);
+  assert.doesNotMatch(blocks[0].html, /wysiwyg-block-hidden/, 'html 非空的块不得被塌缩占位覆盖');
+  assert.match(blocks[0].html, /<p/, '应渲染为段落');
+  assert.match(blocks[0].html, /段落文本/, '段落内容不得丢失');
+});
+
+test('precompute 防御：renderMarkdownBlocks 返回的块必须全部带合法 start/end（防 undefined 元素进下游 .start）', () => {
+  // 2026-10-12：HMR 混载旧模块时曾出现 "Cannot read properties of undefined (reading 'start')"，
+  // precomputeWysiwygBlocksFull 返回前 filter 畸形条目；渲染器侧同样不得产出畸形块。
+  const md = ['# 标题', '', '段落。', '', '[r]: https://r.example', '', '- a', '- b'].join('\n');
+  const blocks = renderMarkdownBlocks(md, {});
+  for (const b of blocks) {
+    assert.ok(b && typeof b.start === 'number' && typeof b.end === 'number' && b.end > b.start,
+      '渲染器产出的每个块必须带合法 start/end：' + JSON.stringify(b));
+  }
+});
+
+// ---------- 表格行纯函数（splitTableRow / editTableRowCell，Phase 2 单元格就地编辑） ----------
+
+test('splitTableRow：标准带首尾竖线行 → 单元格数组 + 首尾风格标记', () => {
+  const info = splitTableRow('| 列甲 | 列乙 |');
+  assert.deepStrictEqual(info.cells, ['列甲', '列乙']);
+  assert.strictEqual(info.hasLeading, true);
+  assert.strictEqual(info.hasTrailing, true);
+});
+
+test('splitTableRow：无首尾竖线行保持无竖线风格；单元格内 \\| 不切分', () => {
+  const info = splitTableRow('a | b');
+  assert.deepStrictEqual(info.cells, ['a', 'b']);
+  assert.strictEqual(info.hasLeading, false);
+  assert.strictEqual(info.hasTrailing, false);
+  const esc = splitTableRow('| x\\|y | z |');
+  assert.deepStrictEqual(esc.cells, ['x\\|y', 'z'], '转义竖线 \\| 必须留在单元格内，不切分');
+});
+
+test('splitTableRow：空单元格 / 前导与尾随空格 trim', () => {
+  assert.deepStrictEqual(splitTableRow('|  | 空 |  |').cells, ['', '空', '']);
+  assert.deepStrictEqual(splitTableRow('|  带空格  |  z  |').cells, ['带空格', 'z']);
+});
+
+test('editTableRowCell：替换单元格并保留首尾竖线风格', () => {
+  assert.strictEqual(editTableRowCell('| 1 | 2 |', 1, '新值'), '| 1 | 新值 |');
+  assert.strictEqual(editTableRowCell('1 | 2', 0, '新值'), '新值 | 2', '无竖线行回写仍不带首尾竖线');
+});
+
+test('editTableRowCell：新文本中的裸 | 自动转义；原 \\| 保持 \\|（先解后转，幂等）', () => {
+  assert.strictEqual(editTableRowCell('| 1 | 2 |', 1, 'a|b'), '| 1 | a\\|b |');
+  assert.strictEqual(editTableRowCell('| 1 | x\\|y |', 1, 'x\\|y'), '| 1 | x\\|y |', '未改动的转义格回写后保持原样');
+  assert.strictEqual(editTableRowCell('| 1 | x\\|y |', 1, 'x|y'), '| 1 | x\\|y |', '用户删掉反斜杠 → 仍被重新转义');
+});
+
+test('editTableRowCell：colIdx 越界 → 原样返回；换行折叠为空格', () => {
+  assert.strictEqual(editTableRowCell('| 1 | 2 |', 5, 'x'), '| 1 | 2 |');
+  assert.strictEqual(editTableRowCell('| 1 | 2 |', -1, 'x'), '| 1 | 2 |');
+  assert.strictEqual(editTableRowCell('| 1 | 2 |', 1, 'a\nb\rc'), '| 1 | a b c |');
+});
+
+// ---------- 表格结构纯函数（增行/增列/拖拽换位，2026-10-13 用户要求） ----------
+
+const { addTableRow, addTableColumn, moveTableRow, moveTableColumn } =
+  require(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'));
+
+const T3 = ['| a | b |', '| --- | --- |', '| 1 | 2 |', '| 3 | 4 |'].join('\n');
+
+test('addTableRow：末尾增一空行（格数=表头格数），其余行原样', () => {
+  const out = addTableRow(T3);
+  const lines = out.split('\n');
+  assert.strictEqual(lines.length, 5, '行数 +1：' + out);
+  assert.strictEqual(lines[0], '| a | b |');
+  assert.strictEqual(lines[1], '| --- | --- |');
+  assert.strictEqual(lines[2], '| 1 | 2 |');
+  assert.strictEqual(lines[3], '| 3 | 4 |');
+  // 新行 = 2 个空格（写法与 editTableRowCell 的空格约定一致，remark trim 后为空）
+  assert.deepStrictEqual(splitTableRow(lines[4]).cells, ['', '']);
+});
+
+test('addTableRow：保留无首尾竖线风格', () => {
+  const bare = ['a | b', '--- | ---', '1 | 2'].join('\n');
+  const lines = addTableRow(bare).split('\n');
+  assert.strictEqual(lines[0], 'a | b');
+  assert.strictEqual(lines[3], ' | ', '无竖线空行 = 两空格以 " | " 连接');
+});
+
+test('addTableRow：畸形输入（非表格/单行）→ null，不破坏原文', () => {
+  assert.strictEqual(addTableRow('不是表格'), null);
+  assert.strictEqual(addTableRow('| 只有表头 |'), null);
+});
+
+test('addTableColumn：每行 +1 空列（分隔行补 ---），其余格原样', () => {
+  const out = addTableColumn(T3);
+  const lines = out.split('\n');
+  assert.strictEqual(lines.length, 4, '行数不变：' + out);
+  assert.deepStrictEqual(splitTableRow(lines[0]).cells, ['a', 'b', '']);
+  assert.deepStrictEqual(splitTableRow(lines[1]).cells, ['---', '---', '---']);
+  assert.deepStrictEqual(splitTableRow(lines[2]).cells, ['1', '2', '']);
+  assert.deepStrictEqual(splitTableRow(lines[3]).cells, ['3', '4', '']);
+});
+
+test('moveTableRow：行序重排（0=表头行、1=首数据行），分隔行恒居第 2 行', () => {
+  // 数据行 0（tr 1，值 1|2）移到末尾（行序列 = 表头 + 数据行，不含分隔行）
+  const out1 = moveTableRow(T3, 1, 2).split('\n');
+  assert.deepStrictEqual(out1, ['| a | b |', '| --- | --- |', '| 3 | 4 |', '| 1 | 2 |']);
+  // 表头行下移到数据区（新表头 = 原首数据行），分隔行仍第 2 行
+  const out2 = moveTableRow(T3, 0, 2).split('\n');
+  assert.strictEqual(out2[1], '| --- | --- |', '分隔行必须恒在源码第 2 行');
+  assert.deepStrictEqual(splitTableRow(out2[0]).cells, ['1', '2'], '表头 = 原首数据行');
+});
+
+test('moveTableRow：越界/同位 → 原样返回', () => {
+  assert.strictEqual(moveTableRow(T3, 9, 0), T3);
+  assert.strictEqual(moveTableRow(T3, 0, 9), T3);
+  assert.strictEqual(moveTableRow(T3, 1, 1), T3);
+  assert.strictEqual(moveTableRow('不是表格', 0, 1), null);
+});
+
+test('moveTableColumn：列序重排，对齐标记随列走', () => {
+  const t = ['| a | b |', '| :--- | ---: |', '| 1 | 2 |'].join('\n');
+  // 列 0 移到列 1 之后
+  const out = moveTableColumn(t, 0, 1).split('\n');
+  assert.deepStrictEqual(splitTableRow(out[0]).cells, ['b', 'a']);
+  assert.deepStrictEqual(splitTableRow(out[1]).cells, ['---:', ':---'], '对齐标记随列移动');
+  assert.deepStrictEqual(splitTableRow(out[2]).cells, ['2', '1']);
+});
+
+test('moveTableColumn：越界/同位 → 原样返回', () => {
+  assert.strictEqual(moveTableColumn(T3, 5, 0), T3);
+  assert.strictEqual(moveTableColumn(T3, 0, 0), T3);
+  assert.strictEqual(moveTableColumn('不是表格', 0, 1), null);
 });

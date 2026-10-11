@@ -10,7 +10,8 @@
         const previewWrapper = document.getElementById('preview-wrapper');
   
         editorWrapper.addEventListener('contextmenu', (e) => {
-          if (e.target.closest('.copy-btn')) return;
+          // 代码块复制按钮 / 所见即所得块编辑按钮：右键留给浏览器原生菜单
+          if (e.target.closest('.copy-btn, .block-edit-btn')) return;
           e.preventDefault();
           this.hideAllContextMenus();
           this.showContextMenu('context-menu-editor', e.clientX, e.clientY);
@@ -25,7 +26,7 @@
         });
   
         previewWrapper.addEventListener('contextmenu', (e) => {
-          if (e.target.closest('.copy-btn')) return;
+          if (e.target.closest('.copy-btn, .block-edit-btn')) return;
           e.preventDefault();
           this.hideAllContextMenus();
           this.showContextMenu('context-menu-preview', e.clientX, e.clientY);

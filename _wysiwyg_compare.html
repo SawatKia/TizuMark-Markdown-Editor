@@ -294,16 +294,19 @@
       clickDiag = { line: ln, clickY: Math.round(clickY), top: Math.round(top), scrollTop: Math.round(cm.getScrollInfo().top) };
     } catch (e) { clickAnchorGap = null; }
 
-    // 8) 表格单元格点击定位：最后一个数据格（| 1 | 2 | 位于源码行 25，公式块占 21-22 后表头 23、分隔 24）
-    let tableCellLine = null;
+    // 8) 表格单元格就地源码编辑（Phase 2 / R5，2026-10-13）：点最后一个数据格 → 该格
+    //    contenteditable 显示源码 '2'，整表保持遮罩，光标**不再**移到源码行（旧点击定位行为
+    //    被就地编辑取代；端到端提交/Tab/Esc 见 S18）
+    let tableCellEdit = null;
     try {
       cm.setCursor({ line: 0, ch: 0 });
       ed.renderWysiwygMasks();
       const tds = Array.from(host.querySelectorAll('.wysiwyg-block-mask td'));
       const td = tds[tds.length - 1];
       td.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientY: td.getBoundingClientRect().top + 2 }));
-      tableCellLine = cm.getCursor().line;
-    } catch (e) { tableCellLine = null; }
+      tableCellEdit = { editable: td.getAttribute('contenteditable') === 'true', text: td.textContent, cursorLine: cm.getCursor().line };
+      td.blur(); // 无变化提交（恢复渲染），场景后续步骤不受编辑态影响
+    } catch (e) { tableCellEdit = null; }
 
     // 9) 复选框
     let checkboxToggled = false;
@@ -397,7 +400,7 @@
       activeIdx,
       ws, structureEqual, listInlineGap, emptyLi, blankCollapsed,
       hintClass, hintText,
-      clickAnchorGap, clickDiag, tableCellLine, checkboxToggled,
+      clickAnchorGap, clickDiag, tableCellEdit, checkboxToggled,
       mathRendered, codeHighlighted, checkboxEnabled,
       gutterHidden, fontSizeParity, lineHeightParity, fontFamilyParity,
       bgTransparent, paddingParity, emojiRendered, abbrRendered,
@@ -976,6 +979,945 @@
 
     window.__RESULT_MMD = { entry: m1, reading: { svgs: readingSvgs, containers: readingContainers }, afterMove: m2 };
     return window.__RESULT_MMD;
+  };
+
+  // ---------- S13：ref 定义行块塌缩（与阅读模式「不显示定义行」对齐，2026-10-12 #1） ----------
+  window.__runRefDef = function () {
+    const doc = [
+      '# 引用标题',
+      '',
+      '正文段落 [TizuMark][ref-example] 与 [docs][ref-docs] 两处引用。',
+      '',
+      '[ref-example]: https://example.com "官网"',
+      '[ref-docs]: https://docs.example.com',
+      '',
+      '结尾段落。',
+    ].join('\n');
+    const { cm, ed, host } = makeEditor(doc);
+    const out = { blocks: 0, hiddenDivs: 0, placeholderOk: false, hiddenHeight: null, defLineVisible: false, readingShowsDef: false, blocksSample: [] };
+    try {
+      ed.renderWysiwygMasks();
+      const blocks = ed._wysiwygBlocks || [];
+      out.blocks = blocks.length;
+      out.blocksSample = blocks.map(b => [b.start, b.end]).join('|');
+      let defMaskNode = null;
+      ed._wysiwygMarks.forEach((mark) => {
+        if (!mark || !mark.replacedWith) return;
+        const d = mark.replacedWith.querySelector('.wysiwyg-block-hidden');
+        if (d) { out.hiddenDivs++; if (!defMaskNode) defMaskNode = mark.replacedWith; out.hiddenHeight = d.offsetHeight; }
+      });
+      // 连续定义行：remark 按行拆块（每行一个块），每块独立塌缩 → 占位数 = 定义行块数（≥1）
+      // 用户可见契约 = 定义行不可见（全部零高度塌缩），不要求块数
+      out.placeholderOk = out.hiddenDivs >= 1;
+      // 定义行源码文本不得可见（引用处显示字面 [text][ref] 是 R12 已知边界，只断言定义行/URL 不泄漏）
+      const linesEl = host.querySelector('.CodeMirror-lines');
+      const visible = linesEl ? linesEl.textContent : host.textContent;
+      out.defLineVisible = visible.includes(']: https://example.com') || visible.includes('https://docs.example.com');
+      // 阅读模式参照物：整篇渲染不显示定义行
+      const readingHtml = window.UnifiedRenderer.renderMarkdown(doc, ed.settings);
+      out.readingShowsDef = readingHtml.includes(']: https://example.com');
+      void cm;
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    window.__RESULT_REFDEF = out;
+    return out;
+  };
+
+  // ---------- S14：块「编辑」按钮（hover 显现 / 全块挂载 / 代码块让位 / 点击解罩落块首，2026-10-12 #4） ----------
+  window.__runEditBtn = async function () {
+    const { cm, ed } = makeEditor(DOC);
+    ed.renderWysiwygMasks();
+    await sleep(150); // 后处理 + 异步 pass flush
+    const out = { totalMasks: 0, btnMasks: 0, allHaveBtn: false, defaultOpacity: null, codeOffsetOk: null, plainOffset: null, click: null };
+    try {
+      const masks = [];
+      ed._wysiwygBlocks.forEach((b, idx) => {
+        const mark = ed._wysiwygMarks.get(idx);
+        if (!mark || !mark.replacedWith) return;
+        out.totalMasks++;
+        const btn = mark.replacedWith.querySelector('button.block-edit-btn');
+        if (btn) {
+          out.btnMasks++;
+          masks.push({ idx, mark, btn, node: mark.replacedWith });
+        }
+      });
+      out.allHaveBtn = out.totalMasks > 0 && out.btnMasks === out.totalMasks;
+      const first = masks[0];
+      if (first) out.defaultOpacity = getComputedStyle(first.btn).opacity;
+      for (const m of masks) {
+        const right = getComputedStyle(m.btn).right;
+        if (m.node.querySelector('pre')) out.codeOffsetOk = (right === '76px');
+        else if (out.plainOffset === null) out.plainOffset = (right === '10px');
+      }
+      // 点击编辑：选列表块（当前应有遮罩、非活动块）
+      const target = (ed._wysiwygBlocks || []).find((b) => /^- 普通列表项 A$/.test(cm.getLine(b.start) || ''));
+      if (target) {
+        const idx = (ed._wysiwygBlocks || []).indexOf(target);
+        const mark = ed._wysiwygMarks.get(idx);
+        const btn = mark && mark.replacedWith ? mark.replacedWith.querySelector('button.block-edit-btn') : null;
+        if (btn) {
+          btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+          await sleep(150);
+          out.click = {
+            unmasked: !ed._wysiwygMarks.has(idx),
+            activeIdx: ed._wysiwygActiveIdx,
+            cursorLine: cm.getCursor().line,
+            expectedLine: target.start,
+          };
+        }
+      }
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    window.__RESULT_BTN = out;
+    return out;
+  };
+
+  // ---------- S15：活动块背景高亮（cm-wysiwyg-active-block 行类，2026-10-12 #5） ----------
+  // 2026-10-13 三轮修正后的契约：底色 = 代码块同色 --code-bg（参考图灰盒）；逐行无圆角，
+  // 仅块首行上缘/末行下缘圆角（first/last 行类）→ 多行块读作「一整块编辑区」。
+  window.__runActiveHighlight = async function () {
+    const { cm, ed } = makeEditor(DOC);
+    ed.renderWysiwygMasks();
+    await sleep(100);
+    const out = {};
+    const host = cm.getWrapperElement ? cm.getWrapperElement() : document;
+    const bgDivs = () => Array.from(host.querySelectorAll('div.CodeMirror-linebackground.cm-wysiwyg-active-block'));
+    try {
+      // addLineClass(h, 'background', cls) 挂在 linebackground 层（bgClass），非 line.className
+      const lineHas = (n) => {
+        const h = cm.getLineHandle(n);
+        return !!(h && h.bgClass && h.bgClass.indexOf('cm-wysiwyg-active-block') >= 0);
+      };
+      // 参考图基准：代码块灰盒底色（--code-bg）
+      const pre = host.querySelector('.wysiwyg-block-mask pre');
+      out.codeBg = pre ? getComputedStyle(pre).backgroundColor : null;
+      // 光标进段落块（行 2，单行块）→ 解罩 + 高亮：灰底 + 同一行挂首/末角类（四角全圆）
+      cm.setSelection({ line: 2, ch: 1 }, { line: 2, ch: 1 }, { scroll: false });
+      await sleep(120);
+      let para = null;
+      const bgs1 = bgDivs();
+      if (bgs1.length === 1) {
+        para = {
+          bg: getComputedStyle(bgs1[0]).backgroundColor,
+          first: bgs1[0].classList.contains('cm-wysiwyg-active-first'),
+          last: bgs1[0].classList.contains('cm-wysiwyg-active-last'),
+        };
+      }
+      out.inPara = { activeIdx: ed._wysiwygActiveIdx, line2: lineHas(2), para, unmasked: !ed._wysiwygMarks.has(ed._wysiwygActiveIdx) };
+      // 光标移到列表块（行 12-16：CommonMark 松散列表——空行后列表项延续，整块 5 行）
+      // → 旧行撤光 + 全块高亮（首行仅上角、末行仅下角、中间行无角类 = 整块一体观感）
+      cm.setSelection({ line: 12, ch: 1 }, { line: 12, ch: 1 }, { scroll: false });
+      await sleep(120);
+      const bgs2 = bgDivs();
+      out.inList = {
+        activeIdx: ed._wysiwygActiveIdx, line2: lineHas(2), line12: lineHas(12), line13: lineHas(13),
+        rows: bgs2.length,
+        firstOnlyTop: bgs2[0] ? (bgs2[0].classList.contains('cm-wysiwyg-active-first') && !bgs2[0].classList.contains('cm-wysiwyg-active-last')) : false,
+        lastOnlyBottom: bgs2.length > 1 ? (bgs2[bgs2.length - 1].classList.contains('cm-wysiwyg-active-last') && !bgs2[bgs2.length - 1].classList.contains('cm-wysiwyg-active-first')) : false,
+        midCorners: bgs2.slice(1, -1).some(d => d.classList.contains('cm-wysiwyg-active-first') || d.classList.contains('cm-wysiwyg-active-last')),
+      };
+      // 光标移到块间空行（行 1）→ 全部撤光（含角类）、块重新遮罩
+      cm.setSelection({ line: 1, ch: 0 }, { line: 1, ch: 0 }, { scroll: false });
+      await sleep(120);
+      out.onBlank = { activeIdx: ed._wysiwygActiveIdx, line12: lineHas(12), line13: lineHas(13), noBgDiv: bgDivs().length === 0 };
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    window.__RESULT_HL = out;
+    return out;
+  };
+
+  // ---------- S16：预渲染管线（loading 配对 / 在飞守卫 / 切标签内容替换后重算，2026-10-12 #2/#3） ----------
+  // ⚠️ 函数名不得与既有 S7 的 __runPreRenderFlow 冲突（后者写 __RESULT7）
+  window.__runPreRenderTabFlow = async function () {
+    const load = { begin: 0, end: 0 };
+    const { cm, ed } = makeEditor(DOC, {
+      _beginPaneLoad() { load.begin++; },
+      _endPaneLoad() { load.end++; },
+      // harness 无 theme.js：applyViewMode 用最小替身。真实实现 = 清遮罩 + **50ms 计时器**挂遮罩
+      //（wysiwyg.js L1335/L1342 注释：预渲染结果在 applyViewMode 内 clearWysiwygMasks 之后、
+      //  50ms 计时器 renderWysiwygMasks 消费之前落位）。stub 必须同样延迟，否则同步调用会读到
+      //  上一轮残留的 _wysiwygPreRenderedBlocks（与本轮新 preValue 值相等时误复用旧块表）。
+      applyViewMode() {
+        this._applyViewModeCalls = (this._applyViewModeCalls || 0) + 1;
+        const self = this;
+        setTimeout(() => { if (self.viewMode === 'wysiwyg') self.renderWysiwygMasks(); }, 50);
+      },
+    });
+    const out = {};
+    try {
+      // 进入所见即所得（模拟从源码/阅读模式点按钮）
+      ed.viewMode = 'edit';
+      out.started = ed.beginWysiwygPreRender();
+      out.inFlight = ed._wysiwygPreRendering;
+      out.beginAtStart = load.begin;
+      // 在飞期间 renderWysiwygMasks 必须跳过（不得消费旧块表/空块表）
+      const before = (ed._wysiwygBlocks || []).length;
+      ed.renderWysiwygMasks();
+      out.guardHeld = before === (ed._wysiwygBlocks || []).length;
+      await sleep(400); // 50ms 预渲染 + 遮罩
+      out.done = {
+        viewMode: ed.viewMode,
+        preRendering: ed._wysiwygPreRendering,
+        blocks: (ed._wysiwygBlocks || []).length,
+        loadBegin: load.begin,
+        loadEnd: load.end,
+        applyCalls: ed._applyViewModeCalls,
+      };
+      // 模拟切标签（真实 switchTab 顺序：cm.setValue(新内容) → syncViewModeToTab → 预渲染）
+      const doc2 = ['# 新文档', '', '段落一。', '', '## 小节', '', '段落二。'].join('\n');
+      cm.setValue(doc2);
+      out.tabStarted = ed.beginWysiwygPreRender();
+      await sleep(450); // 50ms 预渲染 + 50ms 消费计时器 + 250ms 输入防抖（全部落定，无残留计时器）
+      out.tab = {
+        viewMode: ed.viewMode,
+        blocks: (ed._wysiwygBlocks || []).length,
+        valueOk: cm.getValue() === doc2,
+        firstLine: cm.getLine(0),
+        loadBegin: load.begin,
+        loadEnd: load.end,
+      };
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    window.__RESULT_PRERENDER = out;
+    return out;
+  };
+
+  // ---------- S17：所见即所得跳转解罩（行定位 / 锚点 #id，2026-10-12 二报告） ----------
+  // 多行遮罩块内部的行定位：CM5 把 setSelection 钳制到标记边缘（旧缺陷：大纲/目录跳转落点漂移）；
+  // 修复路径 = 先解罩目标块再落点（面包屑/锚点/全局搜索三入口同一契约）。
+  window.__runJumpUnmask = async function () {
+    const { cm, ed } = makeEditor(DOC);
+    ed.renderWysiwygMasks();
+    await sleep(100);
+    const out = {};
+    try {
+      // 有序列表块（行 6..10，多行）被遮罩；目标行 8 = 块内部行
+      const targetLine = 8;
+      const idx = ed.wysiwygBlockIndexAt(targetLine);
+      out.listBlock = { idx, masked: ed._wysiwygMarks.has(idx), range: idx >= 0 ? [ed._wysiwygBlocks[idx].start, ed._wysiwygBlocks[idx].end] : null };
+      // 未解罩直接定位：光标被 clamp 到遮罩边缘（复现旧缺陷——多行块内部行不可达）
+      cm.setSelection({ line: targetLine, ch: 0 }, { line: targetLine, ch: 0 }, { scroll: false });
+      await sleep(120); // cursorActivity 会把被 clamp 到的块解罩，光标仍停在边缘
+      out.directClamp = { cursorLine: cm.getCursor().line, target: targetLine, clamped: cm.getCursor().line !== targetLine };
+      // 移开（重新遮罩），走修复路径：解罩目标块 → 精确定位
+      cm.setSelection({ line: 20, ch: 0 }, { line: 20, ch: 0 }, { scroll: false });
+      await sleep(250);
+      const idx2 = ed.wysiwygBlockIndexAt(targetLine);
+      const reMasked = idx2 >= 0 && ed._wysiwygMarks.has(idx2);
+      if (idx2 >= 0 && reMasked) ed.setWysiwygActiveBlock(idx2);
+      cm.setSelection({ line: targetLine, ch: 0 }, { line: targetLine, ch: 0 }, { scroll: false });
+      await sleep(120);
+      out.afterFix = { reMasked, cursorLine: cm.getCursor().line, target: targetLine, landed: cm.getCursor().line === targetLine };
+      // 锚点跳转（_wysiwygScrollToAnchor）：目标标题在遮罩块内 → 先解罩再落点
+      const headingLine = 4; // 「## 核心规则」
+      cm.setSelection({ line: 20, ch: 0 }, { line: 20, ch: 0 }, { scroll: false });
+      await sleep(250);
+      const idx3 = ed.wysiwygBlockIndexAt(headingLine);
+      const maskedBefore = idx3 >= 0 ? ed._wysiwygMarks.has(idx3) : false;
+      ed._wysiwygScrollToAnchor(headingToId('核心规则'));
+      await sleep(250);
+      out.anchor = {
+        maskedBefore,
+        maskedAfter: idx3 >= 0 ? ed._wysiwygMarks.has(idx3) : true,
+        cursorLine: cm.getCursor().line,
+        target: headingLine,
+        landed: cm.getCursor().line === headingLine,
+      };
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    window.__RESULT_JUMP = out;
+    return out;
+  };
+
+  // ---------- S18：表格单元格就地源码编辑（Phase 2 / R5，2026-10-13） ----------
+  // 点渲染表格的格子 → 该格 contenteditable 显示原始源码（整表保持遮罩）；
+  // 失焦/Enter 提交 = 纯函数重建整行回写（裸 | 自动转义）+ 立即重渲本块；Tab 行内切格；Esc 取消。
+  // DOC 表格（文档行号，非文件行号）：行 23 表头 / 行 24 分隔 / 行 25 数据「| 1 | 2 |」，
+  // 块 [23,26)，表后空行 26。
+  window.__runTableCellEdit = async function () {
+    const { cm, ed } = makeEditor(DOC);
+    ed.renderWysiwygMasks();
+    await sleep(100);
+    const out = {};
+    const DATA_LINE = 25;
+    const curCells = () => {
+      const t = document.querySelector('div.wysiwyg-block-mask table');
+      return t ? Array.from(t.querySelectorAll('tbody tr td')) : [];
+    };
+    try {
+      out.rowBefore = cm.getLine(DATA_LINE);
+      const cells0 = curCells();
+      if (cells0.length < 2) throw new Error('表格遮罩未挂载或格数不足');
+      const cell2 = cells0[1]; // 第一行第二格（源 '2'）
+      // 1) 点格 → 就地源码编辑（整表仍遮罩、表格块不得成为活动块）
+      cell2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+      await sleep(80);
+      const blockIdx = ed.wysiwygBlockIndexAt(DATA_LINE);
+      out.entered = {
+        editable: cell2.getAttribute('contenteditable') === 'true',
+        cls: cell2.classList.contains('wysiwyg-cell-editing'),
+        text: cell2.textContent,
+        tableStillMasked: !!(ed._wysiwygMarks && ed._wysiwygMarks.has(blockIdx)),
+        tableNotActive: ed._wysiwygActiveIdx !== blockIdx,
+      };
+      // 2) 改成含裸 | 的文本 → 失焦提交（转义 + 回写 + 重渲）
+      cell2.textContent = 'hello | world';
+      cell2.blur();
+      await sleep(150);
+      out.rowAfter = cm.getLine(DATA_LINE);
+      const cells1 = curCells();
+      out.rerendered = {
+        oldDetached: !cell2.isConnected,
+        newCellText: cells1[1] ? cells1[1].textContent : null,
+        notEditable: cells1[1] ? (cells1[1].getAttribute('contenteditable') == null) : false,
+        cursorLine: cm.getCursor().line,
+        activeIdx: ed._wysiwygActiveIdx,
+      };
+      // 3) Tab 行内切格：进第一格 → Tab → 第二格（提交无变化不得改源码）
+      const cellA = curCells()[0];
+      cellA.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+      await sleep(80);
+      out.tabStart = { editable: cellA.getAttribute('contenteditable') === 'true', text: cellA.textContent };
+      cellA.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+      await sleep(120);
+      const cells2 = curCells();
+      out.tab = {
+        nextEditable: cells2[1] ? cells2[1].getAttribute('contenteditable') === 'true' : false,
+        nextText: cells2[1] ? cells2[1].textContent : null, // 应显示第二格原始源码（含 \|）
+        firstRestored: cells2[0] ? cells2[0].textContent : null,
+        rowUnchanged: cm.getLine(DATA_LINE) === out.rowAfter,
+      };
+      // 4) Esc 取消：改动不落盘，格恢复渲染内容
+      const cellB = curCells()[1];
+      cellB.textContent = 'SHOULD_NOT_WRITE';
+      cellB.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      await sleep(100);
+      const cells3 = curCells();
+      out.esc = {
+        rowUnchanged: cm.getLine(DATA_LINE) === out.rowAfter,
+        restoredText: cells3[1] ? cells3[1].textContent : null,
+        notEditable: cells3[1] ? (cells3[1].getAttribute('contenteditable') == null) : false,
+      };
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    window.__RESULT_CELLEDIT = out;
+    return out;
+  };
+
+  // ---------- S19：大文档 loading 持留至遮罩挂完（2026-10-13 反馈 #1：
+  // 「点击所见即所得，loading 完之后什么都不显示，等几秒之后才显示出来」） ----------
+  // 旧缺陷：预渲染完成即 _endPaneLoad，而 applyViewMode 的 50ms 计时器之后 renderWysiwygMasks
+  // 还要同步挂全部遮罩（数秒）→ loading 消失后露「源码/空白数秒」。
+  // 新契约：loading 层必须盖到遮罩挂完（渲染挂载与释放同一 tick，采样上 release ≥ mount）。
+  window.__runPreRenderHold = async function () {
+    // ~1000 行 / 数百块的大文档（标题+段落+代码块交替，贴近真实文件规模）
+    const parts = ['# 大文档', ''];
+    for (let i = 0; i < 160; i++) {
+      parts.push('## 小节 ' + i, '',
+        '这是第 ' + i + ' 节的正文段落，长度足够让段落块独立成块并被遮罩渲染。',
+        '', '```js', 'function f' + i + '(x) { return x * 2; }', '```', '');
+    }
+    const bigDoc = parts.join('\n');
+    const load = { begin: 0, end: 0 };
+    const { cm, ed } = makeEditor(bigDoc, {
+      _beginPaneLoad() { load.begin++; },
+      _endPaneLoad() { load.end++; },
+      // 与真实 theme.js applyViewMode 同契约：50ms 计时器后才 renderWysiwygMasks
+      applyViewMode() {
+        setTimeout(() => { if (ed.viewMode === 'wysiwyg') ed.renderWysiwygMasks(); }, 50);
+      },
+    });
+    const out = {};
+    try {
+      const started = ed.beginWysiwygPreRender();
+      let mountedAt = -1, releasedAt = -1, maskCountAtRelease = -1;
+      const t0 = Date.now();
+      while (Date.now() - t0 < 15000) {
+        await new Promise(r => setTimeout(r, 10));
+        const masks = document.querySelectorAll('div.wysiwyg-block-mask').length;
+        if (mountedAt < 0 && masks > 0) mountedAt = Date.now() - t0;
+        if (releasedAt < 0 && load.begin > 0 && load.end >= load.begin) {
+          releasedAt = Date.now() - t0;
+          maskCountAtRelease = masks;
+        }
+        if (mountedAt >= 0 && releasedAt >= 0) break;
+      }
+      out.mt = {
+        lines: cm.lineCount(), started, mountedAt, releasedAt, maskCountAtRelease,
+        begin: load.begin, end: load.end,
+        masks: document.querySelectorAll('div.wysiwyg-block-mask').length,
+        blocks: (ed._wysiwygBlocks || []).length,
+      };
+      // loading 不得早于遮罩挂载释放（同 tick 完成时采样值相等 = 通过）
+      out.holdOk = out.mt.started === true && out.mt.mountedAt >= 0 && out.mt.releasedAt >= 0 &&
+        out.mt.releasedAt >= out.mt.mountedAt && out.mt.maskCountAtRelease > 0 &&
+        out.mt.begin === 1 && out.mt.end === 1;
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    window.__RESULT_HOLD = out;
+    return out;
+  };
+
+  // ---------- S20：表格行/列操作（2026-10-13 用户要求 #2） ----------
+  // hover 表 → 右缘「＋」增列 / 下缘「＋」增行（点击回写 + 自动格编辑新格）；
+  // 行左缘把手 / 表头格拖拽换位（实时重排 DOM，释放按纯函数回写整块）。
+  // 独立文档：3 列 × 3 数据行（DOC 的表只有 1 数据行，拖拽无意义）。
+  window.__runTableTools = async function () {
+    const TDOC = [
+      '# 表格操作', '',
+      '| 甲 | 乙 | 丙 |',
+      '| --- | --- | --- |',
+      '| r1a | r1b | r1c |',
+      '| r2a | r2b | r2c |',
+      '| r3a | r3b | r3c |', '',
+    ].join('\n');
+    const { cm, ed } = makeEditor(TDOC);
+    ed.renderWysiwygMasks();
+    await sleep(100);
+    const out = {};
+    const tableEl = () => document.querySelector('div.wysiwyg-block-mask table');
+    const wrapEl = () => document.querySelector('div.wysiwyg-block-mask .wysiwyg-table-wrap');
+    const tableLines = () => {
+      // 表格块源码行（按当前块表现算，行数变化后索引会位移）
+      const tbl = tableEl();
+      if (!tbl) return [];
+      const mask = tbl.closest('div.wysiwyg-block-mask');
+      const bi = parseInt(mask.getAttribute('data-block-index'), 10);
+      const b = ed._wysiwygBlocks[bi];
+      if (!b) return [];
+      const ls = [];
+      for (let i = b.start; i < b.end; i++) ls.push(cm.getLine(i));
+      return ls;
+    };
+    const cellsOf = (tr) => Array.from(tr.children);
+    // 用 splitTableRow 归一化单元格（trim、\| 还原），断言不依赖空格写法
+    const lineCells = (ln) => window.TMWysiwyg.splitTableRow(ln).cells;
+    const tryEscCell = async () => {
+      // 自动格编辑中 → Esc 取消（无变化不落盘），保证后续操作用于干净表格
+      const c = document.querySelector('div.wysiwyg-block-mask table .wysiwyg-cell-editing');
+      if (c) {
+        c.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+        await sleep(80);
+      }
+    };
+    const pDown = (el, x, y) => el.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y, pointerId: 1, isPrimary: true,
+    }));
+    const pMove = (x, y) => window.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y, pointerId: 1, isPrimary: true,
+    }));
+    const pUp = (x, y) => window.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y, pointerId: 1, isPrimary: true,
+    }));
+    try {
+      // 0) 工具注入：wrap 容器 + 两枚按钮（默认隐藏）
+      const w0 = wrapEl();
+      if (!w0) throw new Error('表格未包进 wysiwyg-table-wrap');
+      const btnRow = w0.querySelector('.wysiwyg-table-add-row');
+      const btnCol = w0.querySelector('.wysiwyg-table-add-col');
+      if (!btnRow || !btnCol) throw new Error('缺增行/增列按钮');
+      // 默认隐藏 = 透明但恒可命中（2026-10-13 反馈 #5：条带自身即悬停触发区——
+      // 鼠标移到表格右边/下边一点才显示，故透明态也必须 pointer-events:auto 才能被
+      // mouseenter 触发；恒 display:flex 以便 JS 类驱动可见性）
+      const hiddenOf = (b) => { const s = getComputedStyle(b); return s.opacity === '0' && s.pointerEvents === 'auto'; };
+      out.injected = {
+        wrap: true,
+        btnHidden: hiddenOf(btnRow) && hiddenOf(btnCol),
+      };
+      out.lines0 = tableLines().length; // 5（表头+分隔+3 数据行）
+
+      // 1) 增行：点下缘「＋」→ 源码 +1 空行 + 自动格编辑新末行末格
+      btnRow.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+      await sleep(200);
+      out.addRow = {
+        lines: tableLines().length,
+        lastRow: tableLines()[tableLines().length - 1],
+        lastRowEmpty: tableLines()[tableLines().length - 1] ? tableLines()[tableLines().length - 1].replace(/[| \-]/g, '') === '' : false,
+      };
+      const editCell1 = document.querySelector('div.wysiwyg-block-mask table .wysiwyg-cell-editing');
+      out.autoEdit1 = editCell1 ? {
+        editable: editCell1.getAttribute('contenteditable') === 'true',
+        isLastCell: (() => { const tr = editCell1.closest('tr'); return tr && tr.children[tr.children.length - 1] === editCell1; })(),
+        row: editCell1.closest('tr') ? Array.from(editCell1.closest('tbody') ? editCell1.closest('tbody').querySelectorAll('tr') : []).length : -1,
+      } : null;
+      await tryEscCell();
+
+      // 2) 增列：点右缘「＋」→ 每行 +1 空列（分隔行补 ---）+ 自动格编辑新末格
+      // （增行提交后遮罩已重建：按钮是旧节点，必须重新查）
+      wrapEl().querySelector('.wysiwyg-table-add-col')
+        .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+      await sleep(200);
+      const l2 = tableLines();
+      out.addCol = {
+        cellsPerRow: l2.map((ln) => (ln.match(/\|/g) || []).length),
+        sepOk: l2[1] ? (l2[1].split('|').filter((s) => s.trim() !== '').length) : -1,
+      };
+      const editCell2 = document.querySelector('div.wysiwyg-block-mask table .wysiwyg-cell-editing');
+      out.autoEdit2 = editCell2 ? {
+        isLastCell: (() => { const tr = editCell2.closest('tr'); return tr && tr.children[tr.children.length - 1] === editCell2; })(),
+      } : null;
+      await tryEscCell();
+
+      // 3) 行拖拽：首数据行（r1）左缘把手 → 拖到第二数据行（r2）中心 → r1 落到 r2 之后
+      const tbody0 = tableEl().querySelector('tbody');
+      const tr1 = tbody0.querySelectorAll('tr')[0];
+      const tr2 = tbody0.querySelectorAll('tr')[1];
+      const c1 = cellsOf(tr1)[0].getBoundingClientRect();
+      const c2 = cellsOf(tr2)[0].getBoundingClientRect();
+      pDown(cellsOf(tr1)[0], c1.left + 4, c1.top + c1.height / 2);
+      await sleep(30);
+      pMove(c1.left + 6, c1.top + c1.height / 2 + 6); // 超 4px 阈值 → 进入拖拽（仍在 r1 行内，位置不变）
+      await sleep(30);
+      pMove(c2.left + 4, c2.top + c2.height / 2); // 移到 r2 中心 → r1 落到 r2 之后
+      await sleep(30);
+      pUp(c2.left + 4, c2.top + c2.height / 2);
+      await sleep(200);
+      const l3 = tableLines();
+      out.rowDrag = {
+        // 每数据行首格（归一化）：行拖拽后应为 [r2a, r1a, r3a, '']
+        order: l3.slice(2).map((ln) => lineCells(ln)[0]),
+        grid: l3.slice(2).map(lineCells),
+      };
+
+      // 4) 列拖拽：表头首格（甲）→ 拖过第二列（乙）中点 → 甲/乙 两列换位
+      const thA = tableEl().querySelector('thead th');
+      const thB = tableEl().querySelectorAll('thead th')[1];
+      const hA = thA.getBoundingClientRect();
+      const hB = thB.getBoundingClientRect();
+      pDown(thA, hA.left + hA.width / 2, hA.top + hA.height / 2);
+      await sleep(30);
+      pMove(hB.left + hB.width / 2, hA.top + hA.height / 2); // 到乙中点 → 甲列插到乙之前
+      await sleep(30);
+      pUp(hB.left + hB.width / 2, hA.top + hA.height / 2);
+      await sleep(200);
+      const l4 = tableLines();
+      // 注意：行拖拽后数据行序 = [r2, r1, r3, 空行]
+      out.colDrag = {
+        header: lineCells(l4[0]),
+        dataRows: [l4[2], l4[3], l4[4]].map(lineCells),
+        dragGone: !document.querySelector('.wysiwyg-table-dragging-row, .wysiwyg-table-dragging-col'),
+      };
+
+      // 5) 结构提交后块表仍一致：表格块遮罩在、遮罩行数 = 块表 end-start（增行 +1 已反映）
+      const mNow = tableEl().closest('div.wysiwyg-block-mask');
+      const biNow = parseInt(mNow.getAttribute('data-block-index'), 10);
+      const bNow = ed._wysiwygBlocks[biNow];
+      out.finalState = {
+        masked: !!(ed._wysiwygMarks && ed._wysiwygMarks.has(biNow)),
+        blockSpan: bNow ? (bNow.end - bNow.start) : null, // 6（5 行 + 增行 1）
+        srcFirstCells: bNow ? lineCells(cm.getLine(bNow.start)) : null,
+        lineCount: cm.lineCount(),
+      };
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    window.__RESULT_TABLETOOLS = out;
+    return out;
+  };
+
+  // ---------- S21：格编辑真实 I/O 诊断（2026-10-13 反馈 #3：点格选中文字 / 一输入就失焦） ----------
+  // 合成 dispatchEvent 不走浏览器真实输入管线，复现不了「一输入就失焦」。本场景只负责
+  // 建表 + 报告目标格坐标 + 暴露状态读取；真实 page.mouse.click / page.keyboard.type 由
+  // 驱动（trusted 事件）执行，逐步读取 activeElement / 选区 / 格文本，定位焦点被谁夺走。
+  window.__runCellEditRealIO = async function () {
+    const { cm, ed } = makeEditor(DOC);
+    ed.renderWysiwygMasks();
+    await sleep(120);
+    const out = {};
+    const DATA_LINE = 25;
+    try {
+      const t = document.querySelector('div.wysiwyg-block-mask table');
+      if (!t) throw new Error('表格遮罩未挂载');
+      const cells = Array.from(t.querySelectorAll('tbody tr td'));
+      if (cells.length < 2) throw new Error('格数不足');
+      const cell = cells[1]; // 源 '2'
+      cell.scrollIntoView({ block: 'center' });
+      await sleep(60);
+      const r = cell.getBoundingClientRect();
+      out.rect = { x: r.x, y: r.y, w: r.width, h: r.height };
+      out.cellTextBefore = cell.textContent;
+      out.rowBefore = cm.getLine(DATA_LINE);
+      window.__cellEditTarget = cell;
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    return out;
+  };
+  // 状态快照：焦点在谁 / 选区内容 / 编辑格文本（驱动在真实 click/输入各阶段调用）
+  window.__cellState = function () {
+    const ae = document.activeElement;
+    const editing = document.querySelector('div.wysiwyg-block-mask table .wysiwyg-cell-editing');
+    const anyCell = editing || (window.__cellEditTarget && window.__cellEditTarget.isConnected
+      ? window.__cellEditTarget
+      : document.querySelector('div.wysiwyg-block-mask table td'));
+    const sel = window.getSelection();
+    let selStr = null, selInCell = false;
+    try {
+      selStr = sel ? sel.toString() : null;
+      selInCell = !!(anyCell && sel && sel.anchorNode && anyCell.contains(sel.anchorNode));
+    } catch (_) { }
+    return {
+      activeTag: ae ? ae.tagName : null,
+      activeIsCell: !!(ae && anyCell && (ae === anyCell || anyCell.contains(ae))),
+      cellEditable: anyCell ? anyCell.getAttribute('contenteditable') : null,
+      cellText: anyCell ? anyCell.textContent : null,
+      selStr: selStr,
+      selInCell: selInCell,
+    };
+  };
+
+  // ---------- S25：格编辑期间异步 pass 完成不得打掉焦点（2026-10-14 反馈「输入文字时
+  // 会失去焦点、打到一半跳到别处」）----------
+  // 根因：图片/Mermaid/TOC 异步 pass 完成回调 → _wysiwygRefreshAfterMaskChange → cm.refresh()
+  // → CM5 regChange 全区间 → resetView → patchDisplay 重建全部行 DOM，遮罩 widget（含正在
+  // 编辑的 contenteditable 格）被重新 appendChild 移挂 → Chromium 对被移动的聚焦元素必触发
+  // blur → 格 blur 处理器登记「下一 tick 提交」→ 打字中途被回写、cm.focus() 光标跳到表后。
+  // 契约：_wysiwygCellEditing 期间 cm.refresh() 必须挂起（标志置位、不重建 DOM）；格编辑
+  // 结束（提交/取消）后补跑一次 refresh，几何补偿不丢。
+  window.__runCellEditAsyncRefresh = async function () {
+    const tdoc = ['# 表', '', '| 甲 | 乙 |', '| --- | --- |', '| a | b |', '', '段落。'].join('\n');
+    const { cm, ed } = makeEditor(tdoc);
+    ed.renderWysiwygMasks();
+    await sleep(120);
+    const out = {};
+    const DATA_LINE = 4;
+    try {
+      const t = document.querySelector('div.wysiwyg-block-mask table');
+      if (!t) throw new Error('表格遮罩未挂载');
+      const cells = Array.from(t.querySelectorAll('tbody tr td'));
+      const cell = cells[1]; // 源 'b'
+      cell.scrollIntoView({ block: 'center' });
+      await sleep(60);
+      out.cellConnectedBefore = cell.isConnected;
+      // 真实点击进格编辑（与 S22 真实 IO 同路径）
+      const r = cell.getBoundingClientRect();
+      cell.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: r.x + 4, clientY: r.y + 4 }));
+      await sleep(60);
+      out.entered = cell.getAttribute('contenteditable') === 'true';
+      out.editingBefore = !!document.querySelector('div.wysiwyg-block-mask table .wysiwyg-cell-editing');
+      // 模拟异步 pass（图片读盘/Mermaid/TOC）恰在打字途中完成 → 触发遮罩后刷新
+      ed._wysiwygRefreshAfterMaskChange();
+      await sleep(120); // blur 延迟提交是 0-tick，120ms 足够暴露旧 bug
+      const st = ed._wysiwygCellEditing;
+      out.refreshPendingDuringEdit = ed._wysiwygPendingRefreshAfterCellEdit === true;
+      out.stillEditing = !!st && st.cell === cell;
+      out.cellStillConnected = cell.isConnected;
+      out.cellEditable = cell.getAttribute('contenteditable');
+      out.rowUnchanged = cm.getLine(DATA_LINE) === '| a | b |';
+      // 继续打字仍应落入本格（焦点未被夺走）：模拟用户改了格内容
+      cell.textContent = 'b2';
+      out.cellTextNow = cell.textContent;
+      // 正常提交路径（Enter）→ 遮罩重挂 + 补跑挂起的 refresh（几何补偿不丢）
+      cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: false, bubbles: true, cancelable: true }));
+      await sleep(150);
+      out.rowAfterCommit = cm.getLine(DATA_LINE);
+      out.pendingFlushedAfterCommit = ed._wysiwygPendingRefreshAfterCellEdit === false;
+      out.tableStillThere = !!document.querySelector('div.wysiwyg-block-mask table');
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    window.__RESULT_CELLEDIT_AREFRESH = out;
+    return out;
+  };
+
+  // ---------- S22：格编辑 IME 组合期不中断（2026-10-13 反馈 #3「一输入文字光标就失去焦点」） ----------
+  // 中文输入法：组合期内的 Enter = 确认拼音/选字，不是提交格子。旧代码 keydown 处理器对
+  // Enter 一律 preventDefault+blur（未查 isComposing/st.composing）→ 焦点丢失、只能输一个字。
+  // 契约：compositionstart→compositionend 期间 Enter 必须被忽略（不提交、不 blur、源码不变）；
+  // 组合结束后 Enter 恢复「提交格子」语义。
+  window.__runCellEditIME = async function () {
+    const { cm, ed } = makeEditor(DOC);
+    ed.renderWysiwygMasks();
+    await sleep(100);
+    const out = {};
+    const DATA_LINE = 25;
+    try {
+      const t = document.querySelector('div.wysiwyg-block-mask table');
+      if (!t) throw new Error('表格遮罩未挂载');
+      const cells = Array.from(t.querySelectorAll('tbody tr td'));
+      if (cells.length < 2) throw new Error('格数不足');
+      const cell = cells[1]; // 源 '2'
+      out.rowBefore = cm.getLine(DATA_LINE);
+      cell.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+      await sleep(60);
+      out.entered = cell.getAttribute('contenteditable') === 'true';
+      // 组合开始（等价于正在敲拼音）
+      cell.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      await sleep(20);
+      // 组合期内按 Enter（确认拼音）→ 必须被忽略：不提交、不 blur、源码不变
+      cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      await sleep(60);
+      const stillEditing = document.querySelector('div.wysiwyg-block-mask table .wysiwyg-cell-editing');
+      out.duringComposing = {
+        stillInEdit: !!(stillEditing && cell === stillEditing),
+        cellStillConnected: cell.isConnected,
+        rowUnchanged: cm.getLine(DATA_LINE) === out.rowBefore,
+      };
+      // 组合结束：写入确认的汉字
+      cell.textContent = '你';
+      cell.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+      await sleep(20);
+      // WebView2 时序怪癖：compositionend 先于「选字确认 Enter」keydown 到达
+      // （isComposing=false）——该残影 Enter 必须被吞（不提交、不插换行、焦点不丢）
+      cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: false, bubbles: true, cancelable: true }));
+      await sleep(80);
+      out.afterComposingEnd = {
+        ghostEnterSwallowed: cm.getLine(DATA_LINE) === out.rowBefore
+          && !!(document.querySelector('div.wysiwyg-block-mask table .wysiwyg-cell-editing') === cell)
+          && cell.isConnected
+          && cell.textContent.indexOf('\n') < 0,
+        row: cm.getLine(DATA_LINE),
+      };
+      // 超过 250ms 残影窗口后，用户真正的提交 Enter 恢复提交语义
+      await sleep(300);
+      cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: false, bubbles: true, cancelable: true }));
+      await sleep(150);
+      const rowAfter = cm.getLine(DATA_LINE);
+      out.commitAfterGhost = {
+        committed: rowAfter !== out.rowBefore,
+        rowAfter: rowAfter,
+        rowHasChar: rowAfter.indexOf('你') >= 0,
+        cellDetached: !cell.isConnected,
+      };
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    window.__RESULT_CELLEDIT_IME = out;
+    return out;
+  };
+
+  // ---------- S23：增行/增列「＋」真实鼠标可达（2026-10-13 反馈 #3「点不到，一移就消失」） ----------
+  // 按钮在 wrap 盒子外（+6px 间隙）。旧代码鼠标穿过间隙即丢 :hover → 按钮消失。悬停桥
+  // （.wysiwyg-table-wrap::before/::after）把间隙并入命中区。本场景建表 + 报告几何；驱动用
+  // 真实 page.mouse.move 沿「表格边缘→按钮」逐步滑动，每步读按钮 display 与 wrap:hover，
+  // 最后真实点击断言行/列确实增加。
+  window.__runTableToolsHover = async function () {
+    const tdoc = ['# 表', '', '| 甲 | 乙 |', '| --- | --- |', '| a | b |', '', '段尾。'].join('\n');
+    const { cm, ed } = makeEditor(tdoc);
+    ed.renderWysiwygMasks();
+    await sleep(120);
+    const out = {};
+    try {
+      const t = document.querySelector('div.wysiwyg-block-mask table');
+      const wrap = t && t.closest('.wysiwyg-table-wrap');
+      if (!t || !wrap) throw new Error('表格/ wrap 未挂载');
+      t.scrollIntoView({ block: 'center' });
+      await sleep(60);
+      const r = t.getBoundingClientRect();
+      out.tableRect = { x: r.x, y: r.y, w: r.width, h: r.height, bottom: r.bottom, right: r.right, cx: r.x + r.width / 2, cy: r.y + r.height / 2 };
+      // ⚠️ 可见网格 ≠ table 元素盒（盒被 width:100% 撑满、网格按内容收缩左对齐）：
+      // 用首/末格 cell rect 量真实可见网格（2026-10-13 用户截图「按钮离表格很远」的根因）。
+      const cells = Array.from(t.querySelectorAll('tr'));
+      const firstCell = cells[0] && cells[0].children[0];
+      const lastRow = cells[cells.length - 1];
+      const lastCell = lastRow && lastRow.children[lastRow.children.length - 1];
+      const fr = firstCell.getBoundingClientRect();
+      const lr = lastCell.getBoundingClientRect();
+      out.gridRect = { x: fr.x, y: fr.y, left: fr.left, top: fr.top, right: lr.right, bottom: lr.bottom, w: lr.right - fr.left, h: lr.bottom - fr.top, cx: fr.left + (lr.right - fr.left) / 2 };
+      out.wrapRect = (() => { const w = t.closest('.wysiwyg-table-wrap'); const b = w.getBoundingClientRect(); return { x: b.x, w: b.width, h: b.height, right: b.right, bottom: b.bottom }; })();
+      out.preRect = (() => { const p = t.closest('pre.CodeMirror-line'); if (!p) return null; const b = p.getBoundingClientRect(); return { x: b.x, w: b.width, right: b.right }; })();
+      // 2026-10-13 反馈 #1/#2：条带自身 rect + 下一行 CM 行顶缘（验证横条落留白内、不压下一行）
+      out.rowStripRect = (() => { const b = t.closest('.wysiwyg-table-wrap').querySelector('.wysiwyg-table-add-row'); if (!b) return null; const r = b.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: r.height, w: r.width, left: r.left, right: r.right }; })();
+      out.colStripRect = (() => { const b = t.closest('.wysiwyg-table-wrap').querySelector('.wysiwyg-table-add-col'); if (!b) return null; const r = b.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: r.height, w: r.width, left: r.left, right: r.right }; })();
+      out.nextLineTop = (() => { const p = t.closest('pre.CodeMirror-line'); const n = p && p.nextElementSibling; if (!n) return null; return n.getBoundingClientRect().top; })();
+      // 条带中心（2026-10-13 反馈 #3：条带紧贴表格边框、无间隙）：
+      // 横条顶缘 = 表底缘（16px 厚 → 中心 = 表底+8）；竖条左缘 = 表右缘（16px 宽 → 中心 = 右缘+8）
+      out.addRowBtn = { x: out.gridRect.cx, y: out.gridRect.bottom + 8 };
+      out.addColBtn = { x: out.gridRect.right + 8, y: out.gridRect.top + out.gridRect.h / 2 };
+      out.trBefore = t.querySelectorAll('tr').length;
+      out.tdColsBefore = t.querySelectorAll('tr').length ? t.querySelectorAll('tr')[0].children.length : 0;
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    return out;
+  };
+  // 状态读取（驱动在每步滑动后调用）。stripHover = per-strip 显隐类
+  //（2026-10-13 反馈 #5：只有鼠标在条带自身区域才挂）；lineZ = 悬停桥抬升的行 z-index。
+  window.__btnState = function (cls) {
+    const b = document.querySelector('div.wysiwyg-block-mask .' + cls);
+    if (!b) return { missing: true, opacity: null, pointerEvents: null, wrapHover: null, toolsHover: null, stripHover: null, lineZ: null };
+    const wrap = document.querySelector('div.wysiwyg-table-wrap');
+    const line = wrap ? wrap.closest('.CodeMirror-line') : null;
+    const s = getComputedStyle(b);
+    const stripCls = cls === 'wysiwyg-table-add-col' ? 'wysiwyg-table-add-col-hover' : 'wysiwyg-table-add-row-hover';
+    return {
+      missing: false,
+      opacity: s.opacity,
+      pointerEvents: s.pointerEvents,
+      wrapHover: wrap ? wrap.matches(':hover') : null,
+      toolsHover: wrap ? wrap.classList.contains('wysiwyg-table-tools-hover') : null,
+      stripHover: wrap ? wrap.classList.contains(stripCls) : null,
+      lineZ: line ? getComputedStyle(line).zIndex : null,
+    };
+  };
+  window.__tableShape = function () {
+    const t = document.querySelector('div.wysiwyg-block-mask table');
+    if (!t) return { rows: 0, cols: 0 };
+    return { rows: t.querySelectorAll('tr').length, cols: t.querySelectorAll('tr')[0] ? t.querySelectorAll('tr')[0].children.length : 0 };
+  };
+  // 悬停桥诊断：给定视口坐标，报告该点命中的元素 + wrap→根 每一层的 rect 与 overflow
+  // （定位下缘桥为何收不到 hover：哪一层裁掉了垂直溢出 / 谁压在伪元素上层）。
+  window.__hoverDebug = function (x, y) {
+    const at = document.elementFromPoint(x, y);
+    const wrap = document.querySelector('div.wysiwyg-block-mask .wysiwyg-table-wrap');
+    const name = (el) => {
+      if (!el) return null;
+      const c = (el.className && el.className.baseVal !== undefined) ? el.className.baseVal : el.className;
+      return el.tagName + (c ? '.' + String(c).trim().split(/\s+/).slice(0, 2).join('.') : '');
+    };
+    // 逐层祖先：rect + overflow + position + zIndex
+    const chain = [];
+    if (wrap) {
+      let el = wrap;
+      while (el && el !== document.documentElement && chain.length < 12) {
+        const b = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        chain.push({
+          el: name(el),
+          y: +b.y.toFixed(1), bottom: +b.bottom.toFixed(1), h: +b.height.toFixed(1),
+          x: +b.x.toFixed(1), right: +b.right.toFixed(1),
+          overflow: s.overflow, overflowY: s.overflowY, position: s.position, zIndex: s.zIndex,
+        });
+        el = el.parentElement;
+      }
+    }
+    let after = null;
+    if (wrap) { const s = getComputedStyle(wrap, '::after'); after = { content: s.content, position: s.position, top: s.top, left: s.left, width: s.width, height: s.height, transform: s.transform, pointerEvents: s.pointerEvents, zIndex: s.zIndex }; }
+    // 命中元素的详情 + 它所在 CM 行的 z-index（判断谁压在按钮上层）
+    let hit = null;
+    if (at) {
+      const b = at.getBoundingClientRect();
+      const lineOfHit = at.closest('pre.CodeMirror-line, .CodeMirror-line');
+      const ls = lineOfHit ? getComputedStyle(lineOfHit) : null;
+      hit = {
+        el: name(at),
+        text: (at.textContent || '').slice(0, 20),
+        rect: { x: +b.x.toFixed(1), y: +b.y.toFixed(1), w: +b.width.toFixed(1), h: +b.height.toFixed(1) },
+        hitLineZ: ls ? ls.zIndex : null,
+        hitLinePos: ls ? ls.position : null,
+      };
+    }
+    return {
+      point: { x, y },
+      elementFromPoint: name(at),
+      hit: hit,
+      wrapAfter: after,
+      chain: chain,
+    };
+  };
+
+  // ---------- S24：表格外拖拽把手（2026-10-13 用户参考图：行把手=表格外左缘点阵；
+  // 列把手=表上方蓝色胶囊；hover 行/列 → 出现该行的把手/该列的高亮+胶囊）。
+  // 建表 + 报告把手几何与各行列 rect；驱动用真实 page.mouse 完成：
+  // ① hover 行 → 行把手 ::before 可见（content≠none）+ 行高亮；
+  // ② 真实拖行：按行把手拖到下两行 → 源码行序变化；
+  // ③ hover 列 → 整列 wysiwyg-col-hover + 胶囊 ::before 可见且几何在表上方；
+  // ④ 真实拖列：按胶囊拖到右两列 → 源码列序变化。
+  window.__runTableHandles = async function () {
+    const tdoc = ['# 把手表', '', '| A1 | B1 | C1 |', '| --- | --- | --- |', '| a2 | b2 | c2 |', '| a3 | b3 | c3 |', '| a4 | b4 | c4 |', '', '段尾。'].join('\n');
+    const { cm, ed } = makeEditor(tdoc);
+    ed.renderWysiwygMasks();
+    await sleep(120);
+    const out = {};
+    try {
+      const t = document.querySelector('div.wysiwyg-block-mask table');
+      const wrap = t && t.closest('.wysiwyg-table-wrap');
+      if (!t || !wrap) throw new Error('表格/ wrap 未挂载');
+      t.scrollIntoView({ block: 'center' });
+      await sleep(60);
+      const trs = Array.from(t.querySelectorAll('tr'));
+      if (trs.length < 4) throw new Error('行数不足（需表头+3 数据行）');
+      const rows = trs.slice(1).map((tr) => {
+        const b = tr.getBoundingClientRect();
+        return { y: b.y, h: b.height, cy: b.y + b.height / 2, bottom: b.bottom };
+      });
+      const ths = Array.from(trs[0].children).map((th) => {
+        const b = th.getBoundingClientRect();
+        return { x: b.x, w: b.width, cx: b.x + b.width / 2, top: b.y, bottom: b.bottom };
+      });
+      const fr = trs[1].children[0].getBoundingClientRect();
+      out.rows = rows;
+      out.ths = ths;
+      out.firstCellLeft = fr.left;
+      out.gridLeft = fr.left;
+      out.gridTop = fr.top;
+      // 行握点悬停/点击点：左 gutter 带（行轨 left:-24px 宽 24px）× 首数据行中线
+      //（点 = 16px 握点中心：右缘距表左缘 6px → x = fr.left - 14）
+      out.rowHandle = { x: fr.left - 14, y: rows[0].cy };
+      // 表头行 gutter 点：同一左 gutter 带 × 表头行中线（反馈 #2：表头行也出握点、可拖）
+      out.headGutter = { x: fr.left - 14, y: ths[1] ? (ths[1].top + ths[1].bottom) / 2 : 0 };
+      // 列 2 握点悬停/点击点：顶 gutter 带（列轨 top:0 高 24px）× 列 2 中心
+      //（点 = 16px 握点中心：底缘距表顶缘 6px → y = ths[1].top - 14）
+      out.colPill = { x: ths[1] ? ths[1].cx : 0, y: ths[1] ? ths[1].top - 14 : 0 };
+      // 列 2 单元格中心（hover 用）
+      const c2 = trs[2].children[1];
+      const c2r = c2 ? c2.getBoundingClientRect() : null;
+      out.col2Cell = c2r ? { x: c2r.x + c2r.width / 2, y: c2r.y + c2r.height / 2 } : null;
+      // 拖行目标：第 3 行数据行（tbody 第 3 行）中线偏下 8px → 越过中点触发换位
+      out.rowDragTo = { y: rows[2] ? rows[2].cy + 8 : 0 };
+      // 拖列目标：第 3 列表头中心 + 半列宽 → 越过中点触发换位
+      out.colDragTo = { x: ths[2] ? ths[2].cx + ths[2].w / 2 : 0 };
+      out.srcBefore = window.__tableSourceLines();
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    return out;
+  };
+  // 把手状态：行把手/列胶囊（wrap 上真实元素，JS 定位）的 display/几何 + 行高亮 +
+  // 整列 hover 类分布 / 高亮样式
+  window.__handleState = function () {
+    const t = document.querySelector('div.wysiwyg-block-mask table');
+    const wrap = t ? t.closest('.wysiwyg-table-wrap') : null;
+    if (!t || !wrap) return { missing: true };
+    const out = { missing: false };
+    const rectOf = (el) => {
+      const b = el.getBoundingClientRect();
+      return { l: b.left, r: b.right, t: b.top, b: b.bottom, cx: b.left + b.width / 2, cy: b.top + b.height / 2, w: b.width, h: b.height };
+    };
+    // 轨道（常驻命中区）+ 握点（可见小把手，opacity 0/1）
+    const rowTrack = wrap.querySelector('.wysiwyg-table-row-handle');
+    out.rowTrack = rowTrack ? {
+      dragging: rowTrack.classList.contains('wysiwyg-dragging'),
+      rect: rectOf(rowTrack),
+    } : { missing: true };
+    const rowGrip = wrap.querySelector('.wysiwyg-table-row-grip');
+    out.rowGrip = rowGrip ? {
+      opacity: getComputedStyle(rowGrip).opacity,
+      background: getComputedStyle(rowGrip).backgroundColor,
+      color: getComputedStyle(rowGrip).color,
+      rect: rectOf(rowGrip),
+    } : { missing: true };
+    const colTrack = wrap.querySelector('.wysiwyg-table-col-pill');
+    out.colTrack = colTrack ? {
+      dragging: colTrack.classList.contains('wysiwyg-dragging'),
+      rect: rectOf(colTrack),
+    } : { missing: true };
+    const colGrip = wrap.querySelector('.wysiwyg-table-col-grip');
+    out.colGrip = colGrip ? {
+      opacity: getComputedStyle(colGrip).opacity,
+      background: getComputedStyle(colGrip).backgroundColor,
+      color: getComputedStyle(colGrip).color,
+      rect: rectOf(colGrip),
+    } : { missing: true };
+    const bodyTr = t.querySelector('tbody tr');
+    if (bodyTr) out.rowBg = getComputedStyle(bodyTr).backgroundColor;
+    // 拖动态：被拖行/列高亮（验证「悬停不高亮、拖动才高亮」）
+    const dragTr = t.querySelector('tr.wysiwyg-table-dragging-row');
+    if (dragTr) out.dragRowBg = getComputedStyle(dragTr).backgroundColor;
+    const dragCell = t.querySelector('td.wysiwyg-table-dragging-col');
+    if (dragCell) {
+      const cs = getComputedStyle(dragCell);
+      out.dragColStyle = { bg: cs.backgroundColor, shadow: cs.boxShadow };
+    }
+    const ths = Array.from(t.querySelectorAll('thead th'));
+    // 每列带 wysiwyg-col-hover 的单元格数（整列 = 行数 4；类仍由 JS 挂，仅无样式）
+    const trs = Array.from(t.querySelectorAll('tr'));
+    out.colHoverCounts = ths.length ? ths.map((th, i) =>
+      trs.filter((tr) => tr.children[i] && tr.children[i].classList.contains('wysiwyg-col-hover')).length) : [];
+    // 用 tbody 格判断（th 有默认底色，会误判「悬停高亮」）
+    const hoverRow = Array.from(t.querySelectorAll('tbody tr')).find((tr) => tr.children[1] && tr.children[1].classList.contains('wysiwyg-col-hover'));
+    if (hoverRow) out.hoverColCellBg = getComputedStyle(hoverRow.children[1]).backgroundColor;
+    // 落点指示线（2026-10-13 反馈 #1/#2：拖动态蓝线标落点；行拖横线 / 列拖竖线）
+    const dropLine = wrap.querySelector('.wysiwyg-table-drop-line');
+    if (dropLine) {
+      out.dropLine = {
+        opacity: getComputedStyle(dropLine).opacity,
+        isRow: dropLine.classList.contains('wysiwyg-drop-line-row'),
+        isCol: dropLine.classList.contains('wysiwyg-drop-line-col'),
+        rect: rectOf(dropLine),
+      };
+    }
+    // 表体几何（断言蓝线位置 = 表底缘/右缘等）+ 拖动中 DOM 序（反馈 #1/#2：拖拽中
+    // 不实时重排，DOM 序应恒为原序，释放后才变）
+    out.tableRect = rectOf(t);
+    out.domOrder = trs.map((tr) => (tr.children[0] ? tr.children[0].textContent.trim() : ''));
+    return out;
+  };
+  window.__tableSourceLines = function () {
+    const el = document.querySelector('.CodeMirror');
+    const cm = el && el.CodeMirror;
+    return cm ? cm.getValue().split('\n').filter((l) => /^\|/.test(l.trim())) : null;
   };
 })();
 </script>
