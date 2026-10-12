@@ -3004,14 +3004,22 @@ body.is-resizing .side-btn {
 }
 /* 无序圆点：画圆而非 '•' 字符（2026-10-15 用户截图：'•' 字符比渲染态 disc marker
    小且偏上，「前面的点样式不一样」）。渲染态 disc 是浏览器按字号绘制的实心圆
-   （16px 字号下直径 ≈6px、垂直居中），用户真机截图像素实测位于 ul 左缘 +7–12px
-   （=行基准留白 32 + 7–12 = 39–45px，距正文缘 11–17px——并非右贴正文缘）。
-   ul 行缩进 13px 后 span 在 45px，left:-7px 使画圆落在 38–44px——与渲染 disc（harness canvas 像素实测 x=38–43）逐像素重合（-6px 时偏右 1px， 2026-10-15 用户仍觉「黑点往右移了一点」）；真机两态圆点顶边 y 相同，无垂直差。 */.wysiwyg-list-bullet::before {
+   （16px 字号下直径 ≈6px）。⚠️ disc 垂直位**不是**行盒几何中心（0.85em）：
+   Edge 154（=app WebView2 同版本引擎）加权重心实测 disc 中心 = 行顶 +0.906em
+   （0.9052em，16-28px 字号同值，基线锚定字形绘制位；用户真机截图反推一致）。
+   ⚠️ 探针微调实测（2026-10-15 绿圆分离法）：编辑画圆与 disc 的重心取整路径不同——
+   absolute 盒按 round 落位、disc 按 AA 不取整 → top 值在 0.906em 时部分行差 1px
+   （「有一部分黑点会动一下」，用户第三组截图：6 行里 4 行差 1px，随滚动相位漂移）。
+   扫描 0.906/0.922/0.938/0.952/0.969/0.984em：**0.922–0.952em 三档重心与 disc 全同**
+   （Δ=0.000px）→ 取中值 0.938em 落在取整平台的正中央，两侧各留 0.016em≈0.26px
+   余量，相位任何滚动/字号组合都稳。画圆顶 = 0.938em - 3px（直径 6px 半径）。
+   ul 行缩进 13px 后 span 在 45px，left:-7px 使画圆落在 38–44px——与渲染 disc
+   （canvas 像素实测 x=38–43）逐像素重合。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-bullet::before {
   content: '';
   position: absolute;
   left: -7px;
-  top: 50%;
-  transform: translateY(-50%);
+  top: calc(0.938em - 3px);
   width: 6px;
   height: 6px;
   border-radius: 50%;

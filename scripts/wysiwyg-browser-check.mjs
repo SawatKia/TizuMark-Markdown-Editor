@@ -41,14 +41,23 @@ function findChromium() {
   }
   return undefined;
 }
-// 启动：优先 playwright 自带浏览器；版本与本机 ms-playwright 缓存不匹配时退回缓存可执行文件
+// 启动：⚠️ 必须用系统 Edge（channel:'msedge'）——app 真机是 WebView2（Edge 同版本引擎）。
+// 2026-10-15 黑点 1px 教训：disc marker 的绘制规则（基线锚定 0.906em）与 Playwright
+// Chromium（13x，几何中心 0.85em）不同，用自带 Chromium 校准的样式在真机差 1px
+//（用户截图复测才发现）。Edge 无前置校准意义时（CI 无 Edge）才回退自带 Chromium。
 let browser;
 try {
-  browser = await pw.chromium.launch({ headless: true });
+  browser = await pw.chromium.launch({ headless: true, channel: 'msedge' });
+  console.log('[driver] 浏览器: 系统 Edge（与 app WebView2 同引擎）');
 } catch (e) {
-  const exe = findChromium();
-  if (!exe) throw e;
-  browser = await pw.chromium.launch({ headless: true, executablePath: exe });
+  try {
+    browser = await pw.chromium.launch({ headless: true });
+    console.log('[driver] 浏览器: playwright 自带 Chromium（Edge 不可用，真机校准项可能失真）');
+  } catch (e2) {
+    const exe = findChromium();
+    if (!exe) throw e2;
+    browser = await pw.chromium.launch({ headless: true, executablePath: exe });
+  }
 }
 let fail = 0;
 try {
@@ -2267,6 +2276,105 @@ try {
         s43Push('[段落] 边缘行补齐生效（末行 padBottom 17px）',
           p.edges.length > 0 && p.edges.every((v) => parseFloat(v) === 17), JSON.stringify(p.edges));
       }
+    }
+  }
+
+  // ---------- S45：disc 与画圆逐像素同位（2026-10-15 用户第二组截图：编辑态黑点比
+  // 渲染态高 1px）。根因：disc marker 绘制位=行顶+0.906em（基线锚定字形位，Edge154
+  // 逐像素实测=用户真机），非行盒几何中心（0.85em）；Playwright Chromium 绘在 0.85em
+  // → 用自带浏览器校准在真机必偏。修复=画圆 top: calc(0.906em - 3px)。
+  // 验证：浏览器截图 → canvas 提取两态圆点中心，逐像素 Δ<0.5px。 ----------
+  console.log('\n=== S45：disc↔画圆逐像素同位（截图级，Edge/WebView2 校准） ===');
+  {
+    const s45Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    const scanDots = async (clip) => {
+      const shot = await page.screenshot({ clip });
+      const b64 = shot.toString('base64');
+      return page.evaluate(async (src) => {
+        const im = new Image();
+        im.src = 'data:image/png;base64,' + src;
+        await im.decode();
+        const W = im.width, H = im.height;
+        const cv = document.createElement('canvas');
+        cv.width = W; cv.height = H;
+        const cx = cv.getContext('2d');
+        cx.drawImage(im, 0, 0);
+        const d = cx.getImageData(0, 0, W, H).data;
+        const lum = (x, y) => { const i = (y * W + x) * 4; return 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; };
+        const seen = new Set();
+        const dots = [];
+        for (let y = 0; y < H; y++) for (let x = 30; x < 120; x++) {
+          if (seen.has(y * W + x) || lum(x, y) > 150) continue;
+          const q = [[x, y]]; seen.add(y * W + x);
+          let minx = x, maxx = x, miny = y, maxy = y, cnt = 0;
+          while (q.length) {
+            const p = q.pop(); cnt++;
+            if (p[0] < minx) minx = p[0]; if (p[0] > maxx) maxx = p[0];
+            if (p[1] < miny) miny = p[1]; if (p[1] > maxy) maxy = p[1];
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              const nx = p[0] + dx, ny = p[1] + dy;
+              if (nx < 30 || ny < 0 || nx >= 120 || ny >= H) continue;
+              const k = ny * W + nx;
+              if (seen.has(k) || lum(nx, ny) > 150) continue;
+              seen.add(k); q.push([nx, ny]);
+            }
+          }
+          const w = maxx - minx + 1, h = maxy - miny + 1;
+          if (w >= 4 && w <= 9 && h >= 4 && h <= 9 && cnt / (w * h) > 0.55) {
+            dots.push(+((miny + maxy) / 2).toFixed(1));
+          }
+        }
+        return dots.sort((a, b) => a - b);
+      }, b64);
+    };
+    try {
+      await page.evaluate(() => window.__runListType2026('ul'));
+      await new Promise(r => setTimeout(r, 500));
+      const rendGeo = await page.evaluate(() => {
+        const mask = document.querySelector('.wysiwyg-block-mask.preview-content');
+        if (!mask) return null;
+        return {
+          tops: [...mask.querySelectorAll('li')].map((li) => li.getBoundingClientRect().top),
+          x: mask.getBoundingClientRect().x,
+        };
+      });
+      if (!rendGeo || !rendGeo.tops.length) { s45Push('S45 场景初始化（遮罩态）', false); }
+      else {
+        const rendClipY = Math.max(0, rendGeo.tops[0] - 10);
+        const rendDots = await scanDots({ x: 0, y: rendClipY, width: 350, height: 100 });
+        const mp = await page.evaluate(() => window.__s41maskPoint());
+        await page.mouse.click(mp.x, mp.y);
+        await new Promise(r => setTimeout(r, 500));
+        const actGeo = await page.evaluate(() => {
+          const wrap = document.querySelector('.CodeMirror');
+          const isM = (l) => !!(l.parentElement && l.parentElement.classList && l.parentElement.classList.contains('CodeMirror-measure'));
+          const pres = [...wrap.querySelectorAll('pre.CodeMirror-line')]
+            .filter((l) => !isM(l) && (l.className || '').toString().indexOf('wysiwyg-list-line') !== -1);
+          // 基准 = **行盒顶**（pre 顶 + padding-top；渲染侧 li top 也是行盒顶：li 无 padding）。
+          // 用 pre top 会把首行 padT=1px（S43 块高补齐）算进偏移，恰好抵消真实差 → 断言失真
+          return { tops: pres.map((p) => { const r = p.getBoundingClientRect(); return r.top + parseFloat(getComputedStyle(p).paddingTop || '0'); }) };
+        });
+        const actClipY = actGeo && actGeo.tops.length ? Math.max(0, actGeo.tops[0] - 10) : 0;
+        const actDots = actGeo && actGeo.tops.length ? await scanDots({ x: 0, y: actClipY, width: 350, height: 100 }) : [];
+        // 逐行比较：圆点中心相对**本行行顶**（渲染=li top，编辑=pre top），clip 偏移加回
+        const n = Math.min(rendDots.length, actDots.length, rendGeo.tops.length, actGeo.tops.length);
+        let maxD = null;
+        for (let i = 0; i < n; i++) {
+          const dR = rendDots[i] + rendClipY - rendGeo.tops[i];
+          const dA = actDots[i] + actClipY - actGeo.tops[i];
+          const d = Math.abs(dR - dA);
+          if (maxD === null || d > maxD) maxD = d;
+        }
+        s45Push('两态圆点相对本行行顶逐像素同位（Δ<0.5px，' + n + ' 行）',
+          n >= 2 && maxD !== null && maxD < 0.5,
+          '渲染=' + JSON.stringify(rendDots) + ' 编辑=' + JSON.stringify(actDots) + ' maxΔ=' + (maxD === null ? '?' : maxD.toFixed(2)));
+      }
+    } catch (e) {
+      s45Push('S45 场景执行', false, String(e && e.message || e).slice(0, 120));
     }
   }
 
