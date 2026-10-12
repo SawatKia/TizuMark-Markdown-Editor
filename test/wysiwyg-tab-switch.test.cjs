@@ -1,5 +1,5 @@
-// 所见即所得 × 标签页切换的行为回归（2026-10-12 真机反馈 #3 + 二报告崩溃场景）：
-//   - 所见即所得下切走再切回，必须走 beginWysiwygPreRender 预渲染管线：
+// 实时预览 × 标签页切换的行为回归（2026-10-12 真机反馈 #3 + 二报告崩溃场景）：
+//   - 实时预览下切走再切回，必须走 beginWysiwygPreRender 预渲染管线：
 //     块表按新文档重算、内容不丢、视图模式保持 wysiwyg、会话模式记录正确；
 //   - 切回后输入触发全量增量刷新（_refreshWysiwygFullIncremental）不崩；
 //   - 应用初始可能有多个 tab（untitled + 使用说明等），索引一律按 tab 名定位，禁用硬编码序号。
@@ -25,7 +25,7 @@ async function openFileTab(ed, name, md, filePath) {
   return tab;
 }
 
-test('所见即所得下 切走→切回：预渲染管线重算块表、内容不丢、模式保持', async () => {
+test('实时预览下 切走→切回：预渲染管线重算块表、内容不丢、模式保持', async () => {
   await withEditor({}, async (w, ed) => {
     const errors = [];
     const origErr = w.console.error;
@@ -37,7 +37,7 @@ test('所见即所得下 切走→切回：预渲染管线重算块表、内容�
 
       ed.setViewMode('wysiwyg');
       await delay(500); // 50ms 预渲染 + 50ms 遮罩
-      assert.strictEqual(ed.viewMode, 'wysiwyg', '进入所见即所得后模式应为 wysiwyg');
+      assert.strictEqual(ed.viewMode, 'wysiwyg', '进入实时预览后模式应为 wysiwyg');
       assert.strictEqual((ed._wysiwygBlocks || []).length, BLOCKS_A, 'A 的块表应为 ' + BLOCKS_A + ' 块');
       assert.strictEqual(ed._sessionMdViewMode, 'wysiwyg', 'md 文件进入 wysiwyg 应记录会话模式（后续标签切换沿用）');
 
@@ -80,7 +80,7 @@ test('所见即所得下 切走→切回：预渲染管线重算块表、内容�
   });
 });
 
-test('所见即所得下切回非 wysiwyg 会话（源码模式文档）：不触发预渲染、视图按目标模式', async () => {
+test('实时预览下切回非 wysiwyg 会话（源码模式文档）：不触发预渲染、视图按目标模式', async () => {
   // 会话模式未记录（首个 md 文档直接以源码模式打开）时，切标签目标 = settings.defaultView，
   // 不得误入 wysiwyg 预渲染管线。
   await withEditor({}, async (w, ed) => {

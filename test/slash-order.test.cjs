@@ -285,7 +285,7 @@ test('slash-order 拖拽：pointerup 按 ghost 中心 Y 正确落位到 draft �
   assert.ok(!list.querySelector('.dragging-source'), 'pointerup 后 dragging-source 应清除');
   assert.ok(!list.querySelector('.slash-order-drop-line'), 'pointerup 后插入线应清除');
 
-  // 验证源项已移动到蓝线指示的位置（所见即所得）：
+  // 验证源项已移动到蓝线指示的位置（实时预览）：
   // 起始 idx=1（draft 中第 2 项，新默认序为 insert-hr），源行 DOM1 rect.top=140
   // offsetY = 140-140 = 0 → ghost 中心 Y = (360-0)+40/2 = 380
   // visible 行首个中心>380 为 DOM7(无序列表, 中心400) → visible 下标 6
@@ -293,7 +293,7 @@ test('slash-order 拖拽：pointerup 按 ghost 中心 Y 正确落位到 draft �
   const sourceId = ed._buildSlashBaseCatalogIds()[1]; // 原 idx=1 的项
   const newIdx = ed._slashOrderDraft.indexOf(sourceId);
   assert.strictEqual(newIdx, 6, `源项应从 idx=1 落到蓝线指示的 idx=6（got ${newIdx}）`);
-  // 所见即所得：落点后邻 = 松手前蓝线的下一项
+  // 实时预览：落点后邻 = 松手前蓝线的下一项
   const after = ed._slashBaseCatalogFull().find((c) => c.action === ed._slashOrderDraft[newIdx + 1]);
   assert.strictEqual(after ? after.label : '(末尾)', lineNextLabel,
     '落点后邻应等于蓝线所示插入缝隙的下一项');

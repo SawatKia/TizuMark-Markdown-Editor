@@ -40,12 +40,13 @@ TizuMark's interface has four main areas:
 
 ### View Modes
 
-The two tabs in the center toolbar toggle between two view modes:
+The three tabs in the center toolbar toggle between three view modes:
 
-- **Preview Mode** — Full-screen document preview, ideal for reading and presenting
-- **Edit Mode** — Write on the left, see rendered output on the right
+- **Read** — Full-screen document preview, ideal for reading and presenting
+- **Source** — Write on the left, see rendered output on the right
+- **Live Preview** — Like Typora: text keeps its formatted look while the block under the cursor shows Markdown source
 
-In Edit Mode:
+In Source Mode:
 
 | Action | Method |
 |--------|--------|
@@ -89,7 +90,7 @@ Two independent search systems:
 | Regex | JavaScript-compatible regular expressions |
 | Wrap Around | Continue from the top after reaching the end of the document |
 
-**Preview Find** (<kbd>Ctrl</kbd> + <kbd>F</kbd> in preview mode): Search directly within rendered content with highlights.
+**Preview Find** (<kbd>Ctrl</kbd> + <kbd>F</kbd> in Read mode): Search directly within rendered content with highlights.
 
 **Cross-file Search** (<kbd>Ctrl</kbd> + <kbd>H</kbd>): Search across all open tabs or a specified directory, with regex and case-sensitive options. Results are grouped by file, showing line/column numbers and a context snippet; click any hit to jump there, highlighted in both the editor and preview. Ideal for quickly locating content in large project docs.
 
@@ -120,7 +121,7 @@ When a document exceeds ~5000 lines or ~4 million characters, the preview automa
 | Shortcut | Action | Shortcut | Action |
 |----------|--------|----------|--------|
 | <kbd>Ctrl</kbd> + <kbd>N</kbd> | New File | <kbd>Ctrl</kbd> + <kbd>W</kbd> | Close Tab |
-| <kbd>Ctrl</kbd> + <kbd>O</kbd> | Open File | <kbd>Ctrl</kbd> + <kbd>\\</kbd> | Toggle View (Edit / Preview) |
+| <kbd>Ctrl</kbd> + <kbd>O</kbd> | Open File | <kbd>Ctrl</kbd> + <kbd>\\</kbd> | Toggle View (Read / Source / Live Preview) |
 | <kbd>Ctrl</kbd> + <kbd>S</kbd> | Save File | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd> | Toggle Theme (Light / Dark) |
 | <kbd>Ctrl</kbd> + <kbd>P</kbd> | File Search (by name / path) | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> | Export PDF |
 
@@ -459,7 +460,7 @@ Three categories, each opened differently:
 
 | Category | How it opens | Formats |
 |----------|--------------|---------|
-| **Markdown** | Rendered preview, switchable between Edit / Preview | `.md` `.markdown` `.mdown` `.mkd` `.mkdn` `.mdwn` `.markdn` |
+| **Markdown** | Rendered preview, switchable between Read / Source / Live Preview | `.md` `.markdown` `.mdown` `.mkd` `.mkdn` `.mdwn` `.markdn` |
 | **Images** | Read-only preview, not editable | `.png` `.jpg` `.jpeg` `.gif` `.webp` `.bmp` `.svg` `.tif` `.tiff` `.ico` `.avif` `.heic` and more (20 total) |
 | **Plain text / code** | Plain editor (no preview pane), no Markdown rendering | `.txt` `.log` `.json` `.yaml` `.toml` `.csv` `.html` `.css` `.js` `.ts` `.jsx` `.py` `.rs` `.go` `.java` `.c` `.cpp` `.sh` `.sql` `.xml` `.tex` `.ipynb` and 145 in total |
 

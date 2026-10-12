@@ -282,7 +282,7 @@ test('remark 切块：多行展示公式内含独占一行的 `=`（setext 下�
 
 test('ref 定义行单独成块：渲染为空时输出 wysiwyg-block-hidden 占位（与阅读模式「不显示定义行」对齐）', () => {
   // 2026-10-12 真机反馈：阅读模式整篇渲染时 remark 把纯 `[label]: url` 定义块解析为空
-  // （无 html），逐块渲染该块 html='' → 旧实现按「渲染失败」保留源码态 → 所见即所得
+  // （无 html），逐块渲染该块 html='' → 旧实现按「渲染失败」保留源码态 → 实时预览
   // 露出定义行而阅读模式隐藏。占位 div 让遮罩把该块盖成高度 0（CSS 塌缩）。
   const md = ['正文一段 [TizuMark][ref-example]。', '', '[ref-example]: https://example.com "title"', ''].join('\n');
   const blocks = renderMarkdownBlocks(md, {});

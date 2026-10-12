@@ -40,12 +40,13 @@ La interfaz de TizuMark consta de cuatro áreas principales:
 
 ### Modos de vista
 
-Las dos pestañas en el centro de la barra de herramientas alternan entre dos modos de visualización:
+Las tres pestañas en el centro de la barra de herramientas alternan entre tres modos de visualización:
 
-- **Modo vista previa**: Visualización a pantalla completa del documento renderizado, ideal para lectura y presentaciones.
-- **Modo edición**: Escritura a la izquierda y vista previa renderizada a la derecha.
+- **Lectura**: Visualización a pantalla completa del documento renderizado, ideal para lectura y presentaciones.
+- **Código**: Escritura a la izquierda y vista previa renderizada a la derecha.
+- **Vista en vivo**: Como Typora: el texto mantiene su aspecto renderizado mientras el bloque bajo el cursor muestra el código Markdown.
 
-En modo edición:
+En modo código:
 
 | Acción | Método |
 |--------|--------|
@@ -89,7 +90,7 @@ Dos sistemas de búsqueda independientes:
 | Expresión regular | Admite expresiones regulares compatibles con JavaScript |
 | Búsqueda circular | Continúa desde el inicio tras alcanzar el final del documento |
 
-**Buscar en vista previa** (<kbd>Ctrl</kbd> + <kbd>F</kbd> en modo vista previa): Búsqueda directa dentro del contenido renderizado con resaltado en amarillo.
+**Buscar en vista previa** (<kbd>Ctrl</kbd> + <kbd>F</kbd> en modo lectura): Búsqueda directa dentro del contenido renderizado con resaltado en amarillo.
 
 **Búsqueda en múltiples archivos** (<kbd>Ctrl</kbd> + <kbd>H</kbd>): Busca en todas las pestañas abiertas o en un directorio especificado, con opciones de regex y mayúsculas/minúsculas. Los resultados se agrupan por archivo con número de línea/columna y fragmento contextual; haz clic en cualquier resultado para saltar directamente a él en el editor y en la vista previa.
 
@@ -120,7 +121,7 @@ Cuando un documento supera ~5000 líneas o ~4 millones de caracteres, la vista p
 | Atajo | Acción | Atajo | Acción |
 |-------|--------|-------|--------|
 | <kbd>Ctrl</kbd> + <kbd>N</kbd> | Nuevo archivo | <kbd>Ctrl</kbd> + <kbd>W</kbd> | Cerrar pestaña |
-| <kbd>Ctrl</kbd> + <kbd>O</kbd> | Abrir archivo | <kbd>Ctrl</kbd> + <kbd>\\</kbd> | Alternar vista (Edición / Vista previa) |
+| <kbd>Ctrl</kbd> + <kbd>O</kbd> | Abrir archivo | <kbd>Ctrl</kbd> + <kbd>\\</kbd> | Alternar vista (Lectura / Código / Vista en vivo) |
 | <kbd>Ctrl</kbd> + <kbd>S</kbd> | Guardar archivo | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd> | Cambiar tema (Claro / Oscuro) |
 | <kbd>Ctrl</kbd> + <kbd>P</kbd> | Búsqueda rápida de archivos | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> | Exportar PDF |
 

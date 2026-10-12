@@ -244,7 +244,7 @@ const harnessFn = function () {
     const editorTops = [];
     const previewTops = [];
     for (let i = 0; i < 5; i++) {
-      // 显式在 源码↔阅读 间切换：Ctrl+\ 现为三模式循环（源码→所见即所得→阅读），
+      // 显式在 源码↔阅读 间切换：Ctrl+\ 现为三模式循环（源码→实时预览→阅读），
       // 这里的跨宽度锚点校验只针对 源码/阅读，两者必须写明以免随三模式改造漂移。
       edH.setViewMode(edH.viewMode === 'edit' ? 'preview' : 'edit');
       await wait(70);                 // 等 50ms setTimeout + rAF(_resumeScroll) 完成

@@ -1,10 +1,10 @@
-// 阶段1 回归测试：三模式（阅读 / 源码 / 所见即所得）骨架。
+// 阶段1 回归测试：三模式（阅读 / 源码 / 实时预览）骨架。
 //
 // 覆盖本次改动的行为契约：
-//   1. 顶部三钮存在且文案为新名（阅读 / 源码 / 所见即所得），data-mode 正确；
+//   1. 顶部三钮存在且文案为新名（阅读 / 源码 / 实时预览），data-mode 正确；
 //   2. setViewMode 支持第三模式：切到 wysiwyg 写 viewMode、加 wysiwyg-mode 类、按钮 active；
-//   3. Ctrl+\（toggleViewMode）三模式循环 阅读→源码→所见即所得→阅读；
-//   4. 类型守卫：非 Markdown（图片/明文）切所见即所得被拦截并提示，不改状态；
+//   3. Ctrl+\（toggleViewMode）三模式循环 阅读→源码→实时预览→阅读；
+//   4. 类型守卫：非 Markdown（图片/明文）切实时预览被拦截并提示，不改状态；
 //   5. 悬停简介 tooltip 挂载 + i18n key 齐全（三语言）。
 //
 // 静态断言走 readBundle()（app.js 已拆分到 modules/，不可直接 readFileSync('src/app.js')）。
@@ -22,7 +22,7 @@ const bundle = readBundle();
 
 // ---------- 1. 顶部三钮结构与文案 ----------
 
-test('顶部视图模式为三钮，且文案已重命名为 阅读/源码/所见即所得', () => {
+test('顶部视图模式为三钮，且文案已重命名为 阅读/源码/实时预览', () => {
   assert.match(html, /id="btn-view-preview"/, '缺少 btn-view-preview');
   assert.match(html, /id="btn-view-edit"/, '缺少 btn-view-edit');
   assert.match(html, /id="btn-view-wysiwyg"/, '缺少 btn-view-wysiwyg（第三模式按钮）');
@@ -35,7 +35,7 @@ test('顶部视图模式为三钮，且文案已重命名为 阅读/源码/所�
   assert.doesNotMatch(block, />\s*编辑\s*<\/span>/, '模式按钮仍写「编辑」，应改为「源码」');
   assert.match(block, />\s*阅读\s*<\/span>/);
   assert.match(block, />\s*源码\s*<\/span>/);
-  assert.match(block, />\s*所见即所得\s*<\/span>/);
+  assert.match(block, />\s*实时预览\s*<\/span>/);
 
   assert.match(html, /data-mode="preview"/);
   assert.match(html, /data-mode="edit"/);
@@ -71,17 +71,17 @@ test('applyViewMode 依据 viewMode 切换三钮 active 并挂 wysiwyg-mode 类'
   );
 });
 
-test('所见即所得仅对 Markdown 开放：非 md 被 setViewMode 守卫拦截', () => {
+test('实时预览仅对 Markdown 开放：非 md 被 setViewMode 守卫拦截', () => {
   assert.match(
     bundle,
     /if \(_kind !== 'markdown' && mode === 'wysiwyg'\) \{[^}]*showToast[^}]*return;/s,
-    '缺少「非 Markdown 不得切所见即所得」的守卫'
+    '缺少「非 Markdown 不得切实时预览」的守卫'
   );
 });
 
 // ---------- 3. Ctrl+\ 三模式循环 ----------
 
-test('toggleViewMode 为三模式循环（阅读→源码→所见即所得→阅读）', () => {
+test('toggleViewMode 为三模式循环（阅读→源码→实时预览→阅读）', () => {
   // 旧的二态实现必须已消失
   assert.doesNotMatch(
     bundle,
@@ -90,7 +90,7 @@ test('toggleViewMode 为三模式循环（阅读→源码→所见即所得→�
   );
   const m = bundle.match(/toggleViewMode\(\)\s*\{([\s\S]*?)\n\s{6}\},/);
   assert.ok(m, '未找到 toggleViewMode 实现');
-  assert.match(m[1], /const order = \['preview',\s*'edit',\s*'wysiwyg'\]/, '循环顺序不是 阅读→源码→所见即所得');
+  assert.match(m[1], /const order = \['preview',\s*'edit',\s*'wysiwyg'\]/, '循环顺序不是 阅读→源码→实时预览');
   assert.match(m[1], /order\[\(cur \+ 1\) % order\.length\]/, '未按顺序取下一模式（无法循环）');
 });
 
@@ -139,12 +139,12 @@ test('三模式名与简介的 i18n key 在 zh/en/es 三语言齐备', () => {
   assert.match(i18n, /viewModeWysiwygTip: '[^']{20,}'/, '所见即所得简介过短');
 });
 
-test('设置「默认视图」下拉新增所见即所得选项', () => {
+test('设置「默认视图」下拉新增实时预览选项', () => {
   const settings = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'settings.js'), 'utf8');
   const start = settings.indexOf('_selects.defaultView = new Select');
   assert.ok(start > 0, '未找到默认视图 Select');
   const block = settings.slice(start, start + 600);
-  assert.match(block, /value: 'wysiwyg'/, '默认视图下拉缺少「所见即所得」选项');
+  assert.match(block, /value: 'wysiwyg'/, '默认视图下拉缺少「实时预览」选项');
   // 选项文案改用新模式名
   assert.match(block, /t\('viewModeRead'\)/, '默认视图选项文案未用 viewModeRead');
   assert.match(block, /t\('viewModeSource'\)/, '默认视图选项文案未用 viewModeSource');
@@ -153,7 +153,7 @@ test('设置「默认视图」下拉新增所见即所得选项', () => {
 
 // ---------- 6. 未保存保护 ----------
 
-test('beforeunload 拦截未保存内容（防所见即所得下静默丢失）', () => {
+test('beforeunload 拦截未保存内容（防实时预览下静默丢失）', () => {
   const m = bundle.match(/window\.addEventListener\('beforeunload',[\s\S]*?\}\);\s*\n\s{2}\}/);
   assert.ok(m, '未找到 beforeunload 处理');
   assert.match(m[0], /t\.isModified/, 'beforeunload 未检查未保存标签');
@@ -288,16 +288,16 @@ test('遮罩生命周期正确：离开模式清理，不泄漏 mark', () => {
   assert.match(themeSrc.slice(avIdx, avIdx + 4000), /this\.clearWysiwygMasks\(\)/, 'applyViewMode 未清理遮罩');
 });
 
-test('所见即所得独占编辑区：预览栏隐藏（与阅读/源码区分）', () => {
+test('实时预览独占编辑区：预览栏隐藏（与阅读/源码区分）', () => {
   const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
   assert.match(css, /\.editor-container\.wysiwyg-mode \.preview-pane \{ display: none; \}/,
-    '所见即所得下预览栏应隐藏（否则与阅读模式无异）');
+    '实时预览下预览栏应隐藏（否则与阅读模式无异）');
   assert.match(css, /\.editor-container\.wysiwyg-mode \.editor-pane \{ flex: 1 1 100%/,
-    '所见即所得下编辑区应占满宽度');
+    '实时预览下编辑区应占满宽度');
 });
 // ---------- 8. 模式名回归护栏（曾被 i18n 覆盖回「预览/编辑」） ----------
 
-test('模式名由 i18n 统一提供：阅读/源码/所见即所得（三钮全覆盖）', () => {
+test('模式名由 i18n 统一提供：阅读/源码/实时预览（三钮全覆盖）', () => {
   const i18njs = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'i18n.js'), 'utf8');
   // 三个按钮都要被 i18n 赋值；曾因只覆盖两个而让 HTML 里的新名被改回旧名
   for (const [btn, key] of [
@@ -585,6 +585,12 @@ test('列表/代码块活动行渲染化 CSS：源符号透明化 + ::before 渲
     '无序圆点未用画圆（须与渲染 disc marker 同形：6px 实心圆）');
   assert.match(css, /wysiwyg-list-bullet::before[\s\S]{0,250}left: -7px;/,
     '圆点 left 应为 -7px（canvas 像素实测：渲染 disc x=38–43，画圆 38–44 逐像素重合；-6px 偏右 1px，用户仍觉「黑点往右移」）');
+  // 画圆垂直位=disc 字形绘制位（非几何中心）：Edge154（=WebView2 同引擎）加权重心实测
+  // disc 中心=行顶+0.906em；absolute 盒 round 落位 vs disc AA 不取整 → 0.906em 部分行差
+  // 1px（用户第三组截图「有一部分黑点会动」）；绿圆分离法扫描：0.922–0.952em 全同 Δ=0，
+  // 取中值 0.938em（取整平台正中，相位滚动/字号组合都稳）
+  assert.match(css, /wysiwyg-list-bullet::before[\s\S]{0,300}top: calc\(0\.938em - 3px\);/,
+    '画圆 top 须为 calc(0.938em - 3px)（disc 重心 0.906em + round/AA 取整差补偿的中值；50%/0.906em 都会在真机部分行偏 1px）');
   assert.match(css, /wysiwyg-list-bullet::before[\s\S]{0,300}background: var\(--text-primary\);/, '圆点未用正文色');
   // 任务行圆点不画符号（渲染预览任务项 list-style:none，只有复选框）
   assert.match(css, /wysiwyg-task-bullet::before[\s\S]{0,80}content: none;/, '任务行圆点未隐藏（与渲染预览不一致）');
@@ -846,9 +852,9 @@ test('渲染中指示：CSS spinner + 三语言 i18n key', () => {
   assert.match(css, /wysiwyg-rendering::before[\s\S]{0,300}animation: wysiwyg-mode-spin/, 'spinner 未接旋转动画');
   assert.match(css, /@keyframes wysiwyg-mode-spin/, '缺少旋转关键帧');
   const i18n = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'i18n-data.js'), 'utf8');
-  const zh = i18n.indexOf("viewModeWysiwyg: '所见即所得'");
-  const en = i18n.indexOf("viewModeWysiwyg: 'WYSIWYG'");
-  const es = i18n.indexOf("viewModeWysiwyg: 'WYSIWYG'", en + 10);
+  const zh = i18n.indexOf("viewModeWysiwyg: '实时预览'");
+  const en = i18n.indexOf("viewModeWysiwyg: 'Live Preview'");
+  const es = i18n.indexOf("viewModeWysiwyg: 'Vista en vivo'", en + 10);
   for (const [name, idx] of [['zh', zh], ['en', en], ['es', es]]) {
     assert.ok(idx > 0, '未找到 ' + name + ' 的 viewModeWysiwyg');
     assert.match(i18n.slice(idx, idx + 200), /viewModeWysiwygRendering: '[^']+'/, name + ' 缺 viewModeWysiwygRendering 文案');

@@ -21,7 +21,7 @@ test('styles.css: .code-scroll 默认 overflow-y: hidden（防短代码显示滚
 
 test('render 后处理 .code-scroll 按 scrollHeight/clientHeight 判溢出（RenderPost 共享 stage，两模式同一函数）', () => {
   // 该逻辑收敛在 src/modules/render-post.js 的 applyCodeScrollOverflow（阅读模式 render()
-  // 与所见即所得遮罩异步 pass 共用），静态断言走生产顺序拼接的源码全集
+  // 与实时预览遮罩异步 pass 共用），静态断言走生产顺序拼接的源码全集
   assert.match(appSrc, /querySelectorAll\(['"]\.code-scroll['"]\)/, '应遍历 .code-scroll');
   assert.match(
     appSrc,

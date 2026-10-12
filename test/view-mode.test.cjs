@@ -23,35 +23,35 @@ test('viewmode: 初始化 viewMode 继承 settings.defaultView', async () => {
   } finally { cleanup(w); }
 });
 
-test('viewmode: toggleViewMode 在 阅读/源码/所见即所得 三模式间循环', async () => {
+test('viewmode: toggleViewMode 在 阅读/源码/实时预览 三模式间循环', async () => {
   const { w, ed } = await makeEditor();
   try {
     const container = w.document.querySelector('.editor-container');
-    // 从源码起步：阅读 → 源码 → 所见即所得 → 阅读
+    // 从源码起步：阅读 → 源码 → 实时预览 → 阅读
     if (ed.viewMode === 'preview') ed.setViewMode('edit');
     assert.strictEqual(ed.viewMode, 'edit');
     assert.ok(!container.classList.contains('preview-mode'));
     // 给一点内容，确保走到全量预渲染路径（空文档 lineCount=1 也走，但内容可覆盖块挂遮罩）
     ed.cm.setValue('# 标题\n\n正文行。\n');
 
-    // 所见即所得走后台全量预渲染（2026-10-09 设计）：toggleViewMode 返回时
+    // 实时预览走后台全量预渲染（2026-10-09 设计）：toggleViewMode 返回时
     // 预渲染在飞（视图仍停留在源码、按钮显示「渲染中」），完成回调后才真正切模式
     ed.toggleViewMode();
-    assert.strictEqual(ed._wysiwygPreRendering, true, '进入所见即所得应走后台预渲染（不再同步切换）');
+    assert.strictEqual(ed._wysiwygPreRendering, true, '进入实时预览应走后台预渲染（不再同步切换）');
     assert.strictEqual(ed.viewMode, 'edit', '预渲染在飞时视图应停留在源码');
     await delay(1500); // 等预渲染 50ms 计时器 + applyViewMode 的 50ms 遮罩计时器落地
     assert.strictEqual(ed._wysiwygPreRendering, false, '预渲染完成后状态应复位');
-    assert.strictEqual(ed.viewMode, 'wysiwyg', '预渲染完成后应切到所见即所得');
+    assert.strictEqual(ed.viewMode, 'wysiwyg', '预渲染完成后应切到实时预览');
     assert.ok(container.classList.contains('wysiwyg-mode'), '切到 wysiwyg 应有 wysiwyg-mode 类');
 
     ed.toggleViewMode();
-    assert.strictEqual(ed.viewMode, 'preview', '所见即所得之后应循环回阅读');
+    assert.strictEqual(ed.viewMode, 'preview', '实时预览之后应循环回阅读');
     assert.ok(container.classList.contains('preview-mode'), '切到 preview 应有 preview-mode 类');
 
     ed.toggleViewMode();
     assert.strictEqual(ed.viewMode, 'edit', '阅读之后应循环到源码');
     assert.ok(!container.classList.contains('preview-mode'));
-    assert.ok(!container.classList.contains('wysiwyg-mode'), '离开所见即所得应清掉 wysiwyg-mode');
+    assert.ok(!container.classList.contains('wysiwyg-mode'), '离开实时预览应清掉 wysiwyg-mode');
   } finally { cleanup(w); }
 });
 
