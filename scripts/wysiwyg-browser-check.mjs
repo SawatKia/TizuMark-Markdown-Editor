@@ -1902,6 +1902,171 @@ try {
     }
   }
 
+  // ---------- S39：列表回车幽灵键双通道（2026-10-15 用户复现：列表回车后光标落新行的下一行） ----------
+  // 机制：真实 Enter（extraKeys → 列表续行）之后，WebView2 IME 幽灵可能走两条通道到达：
+  //   a) input 通道——beforeinput insertLineBreak（CM5 只在 input 事件读 DOM → 裸换行进模型，
+  //      列表下多一条空行、光标落新行下一行 = 用户截图）→ 输入域 beforeinput 守卫取消；
+  //   b) keydown 通道——重复投递的 Enter keydown（组合超 250ms 后窗①失效）→ 窗②（150ms +
+  //      组合 10s 内）吞除。
+  // 对照组证明不误吞：400ms 间隔的真人双 Enter（空项退出列表）、无 IME 上下文的快速双 Enter。
+  console.log('\n=== S39：列表回车幽灵键双通道（input/keydown + 双 Enter 对照） ===');
+  {
+    // 注：测试文档列表与正文之间本有一条空行（复刻用户截图：列表下方还有内容），
+    // 预期数组必须包含它——它随续行插入整体下移，不是幽灵产物
+    const expectContinue = ['# 2025-120-131-12', '', '- 32333223', '- ', '', '下一行正文内容。'];
+    const expectExit = ['# 2025-120-131-12', '', '- 32333223', '', '', '', '下一行正文内容。'];
+    const same = (a, b) => Array.isArray(a) && a.length === b.length && a.every((v, i) => v === b[i]);
+    const runS39 = async (variant) => {
+      const init = await page.evaluate(() => window.__runGhostEnter2026());
+      if (init.err) { console.log('  ⚠ 场景失败: ' + init.err); fail++; return null; }
+      const mp = await page.evaluate(() => window.__s39maskPoint());
+      if (!mp) { console.log('  ⚠ 列表遮罩定位失败'); fail++; return null; }
+      await page.mouse.click(mp.x, mp.y);
+      await new Promise(r => setTimeout(r, 250));
+      const afterClick = await page.evaluate(() => window.__s39state());
+      s39Push(`[${variant}] 点遮罩进块：光标在列表行行末`, afterClick.cursor.line === 2 && afterClick.cursor.ch === 10,
+        JSON.stringify(afterClick.cursor));
+      if (variant === 'input' || variant === 'keydown' || variant === 'slow') {
+        // 模拟 IME 选字提交（真实 DOM compositionend → _lastCompositionEnd）
+        await page.evaluate(() => window.__s39compositionEnd());
+        await new Promise(r => setTimeout(r, 600)); // 组合窗 250ms 外（用户选字后又输入了一段）
+      }
+      await page.keyboard.press('Enter'); // 真实 Enter → 列表续行
+      await new Promise(r => setTimeout(r, variant === 'slow' ? 400 : (variant === 'clean' ? 80 : 30)));
+      let prevented = null;
+      if (variant === 'input') {
+        const g = await page.evaluate(() => window.__s39dispatchGhostInput('insertLineBreak'));
+        prevented = g.prevented;
+      } else {
+        await page.keyboard.press('Enter'); // 幽灵 keydown（a/b 外变体=真人第二下）
+      }
+      await new Promise(r => setTimeout(r, 300));
+      const st = await page.evaluate(() => window.__s39state());
+      st.prevented = prevented;
+      return st;
+    };
+    const s39Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    // a) input 通道幽灵（用户复现形态）
+    const stA = await runS39('input');
+    if (stA) {
+      console.log('  input 通道后: ' + JSON.stringify(stA));
+      s39Push('[input] 幽灵 beforeinput 被守卫取消（defaultPrevented）', stA.prevented === true);
+      s39Push('[input] 文档 = 续行 "- " 恰好一条、无多余空行', same(stA.lines, expectContinue), JSON.stringify(stA.lines));
+      s39Push('[input] 光标停在续行（"- " ch2），不是下一行', stA.cursor.line === 3 && stA.cursor.ch === 2, JSON.stringify(stA.cursor));
+    }
+    // b) keydown 通道幽灵（窗②）
+    const stB = await runS39('keydown');
+    if (stB) {
+      console.log('  keydown 通道后: ' + JSON.stringify(stB));
+      s39Push('[keydown] 重复投递 Enter（+30ms，组合 10s 内）被窗②吞除', same(stB.lines, expectContinue), JSON.stringify(stB.lines));
+      s39Push('[keydown] 光标停在续行', stB.cursor.line === 3 && stB.cursor.ch === 2, JSON.stringify(stB.cursor));
+    }
+    // c) 对照：400ms 间隔真人双 Enter（第一下续行、第二下空项退出列表 = 标准行为）
+    const stC = await runS39('slow');
+    if (stC) {
+      console.log('  慢双 Enter 后: ' + JSON.stringify(stC));
+      s39Push('[slow] 400ms 间隔真人第二 Enter 不被误吞（空项退出：前缀删 + 新行）', same(stC.lines, expectExit), JSON.stringify(stC.lines));
+      s39Push('[slow] 光标在退出后的空行（ch0）', stC.cursor.line === 4 && stC.cursor.ch === 0, JSON.stringify(stC.cursor));
+    }
+    // d) 对照：无 IME 上下文的快速双 Enter（窗②需组合 10s 内 → 不吞）
+    const stD = await runS39('clean');
+    if (stD) {
+      console.log('  无 IME 快双 Enter 后: ' + JSON.stringify(stD));
+      s39Push('[clean] 无 IME 上下文快速双 Enter（+80ms）不被误吞', same(stD.lines, expectExit), JSON.stringify(stD.lines));
+    }
+  }
+
+  // ---------- S40：块内回车续行保持活动块（2026-10-15 用户反馈：提示块按一次回车就退出编辑渲染） ----------
+  // 期望：第一次回车 = 续行留在编辑态（光标在新行、块不重遮、可继续输入）；
+  // 第二次回车（空行）= 退出块、块恢复渲染（光标到块外）。
+  // 段落对照：回车后新空行属新段落（不在旧块内）→ 旧段恢复渲染是正确行为。
+  console.log('\n=== S40：块内回车续行保持活动块（alert/list/quote/para） ===');
+  {
+    const s40Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    const sameL = (a, b) => Array.isArray(a) && a.length === b.length && a.every((v, i) => v === b[i]);
+    const runS40 = async (kind) => {
+      const init = await page.evaluate((k) => window.__runQuoteEnter2026(k), kind);
+      if (init.err) { console.log(`  ⚠ [${kind}] 场景失败: ` + init.err); fail++; return null; }
+      const st0 = await page.evaluate(() => window.__s40state());
+      await page.keyboard.press('Enter');
+      await new Promise(r => setTimeout(r, 100));
+      const st1 = await page.evaluate(() => window.__s40state());
+      await new Promise(r => setTimeout(r, 500));
+      const st2 = await page.evaluate(() => window.__s40state());
+      let typed = null;
+      let cont2 = null;
+      if (kind === 'alert') {
+        // 决定性验证：续行上能继续输入（用户「没法正常换行」的直接反证）
+        await page.keyboard.type('继续内容');
+        await new Promise(r => setTimeout(r, 100));
+        typed = await page.evaluate(() => window.__s40state());
+        // 非空续行再回车 → 又一条续行（仍保持活动）；之后空行回车才退出
+        await page.keyboard.press('Enter');
+        await new Promise(r => setTimeout(r, 100));
+        cont2 = await page.evaluate(() => window.__s40state());
+      }
+      await page.keyboard.press('Enter'); // 空行回车 → 退出块
+      await new Promise(r => setTimeout(r, 600));
+      const st3 = await page.evaluate(() => window.__s40state());
+      return { st0, st1, st2, typed, cont2, st3 };
+    };
+
+    // a) 用户场景：> [!CAUTION] 提示块
+    const A = await runS40('alert');
+    if (A) {
+      console.log('  alert Enter#1 后: ' + JSON.stringify(A.st1));
+      s40Push('[alert] 就绪：活动块 0、光标行末', A.st0.activeIdx === 0 && A.st0.marks.length === 0, JSON.stringify(A.st0));
+      s40Push('[alert] Enter#1：续行 "> " 生成、光标停新行', sameL(A.st1.lines, ['> [!CAUTION]', '> 注意内容', '> ']) && A.st1.cursor.line === 2 && A.st1.cursor.ch === 2);
+      s40Push('[alert] Enter#1：块保持活动（源码态，不重遮）', A.st1.activeIdx === 0 && A.st1.marks.length === 0, 'activeIdx=' + A.st1.activeIdx + ' marks=' + JSON.stringify(A.st1.marks));
+      s40Push('[alert] +600ms（防抖刷新后）：仍保持活动', A.st2.activeIdx === 0 && A.st2.marks.length === 0 && sameL(A.st2.lines, A.st1.lines));
+      if (A.typed) {
+        s40Push('[alert] 续行上继续输入生效（能正常换行编辑）', A.typed.lines[2] === '> 继续内容' && A.typed.activeIdx === 0, JSON.stringify(A.typed.lines));
+      }
+      if (A.cont2) {
+        s40Push('[alert] 非空续行再回车：又续一条 "> "、仍保持活动', A.cont2.lines[3] === '> ' && A.cont2.cursor.line === 3 && A.cont2.cursor.ch === 2
+          && A.cont2.activeIdx === 0 && A.cont2.marks.length === 0, JSON.stringify({ lines: A.cont2.lines, activeIdx: A.cont2.activeIdx }));
+      }
+      // 注：mask 标记的 to = 末行行号（含），块 [0,3)（3 行）→ to=2
+      s40Push('[alert] 空行回车：退出块、块恢复渲染、光标到块外', A.st3.activeIdx === -1 && A.st3.cursor.line === 4 && A.st3.cursor.ch === 0
+        && sameL(A.st3.lines, ['> [!CAUTION]', '> 注意内容', '> 继续内容', '', '']) && A.st3.marks.some(m => m.from === 0 && m.to === 2), JSON.stringify({ lines: A.st3.lines, cursor: A.st3.cursor, marks: A.st3.marks }));
+    }
+    // b) 列表
+    const B = await runS40('list');
+    if (B) {
+      console.log('  list Enter#1 后: ' + JSON.stringify(B.st1));
+      s40Push('[list] Enter#1：续行 "- "、光标新行、块保持活动', sameL(B.st1.lines, ['- 32333223', '- ']) && B.st1.cursor.line === 1 && B.st1.cursor.ch === 2
+        && B.st1.activeIdx === 0 && B.st1.marks.length === 0);
+      s40Push('[list] +600ms：仍保持活动', B.st2.activeIdx === 0 && B.st2.marks.length === 0);
+      s40Push('[list] 空行回车：退出列表、块恢复渲染', B.st3.activeIdx === -1 && B.st3.cursor.line === 2 && B.st3.cursor.ch === 0
+        && sameL(B.st3.lines, ['- 32333223', '', '']) && B.st3.marks.some(m => m.from === 0 && m.to === 0),
+        JSON.stringify({ lines: B.st3.lines, cursor: B.st3.cursor, activeIdx: B.st3.activeIdx, marks: B.st3.marks }));
+    }
+    // c) 普通引用
+    const C = await runS40('quote');
+    if (C) {
+      s40Push('[quote] Enter#1：续行 "> "、块保持活动', sameL(C.st1.lines, ['> 引用文字', '> ']) && C.st1.cursor.line === 1 && C.st1.cursor.ch === 2
+        && C.st1.activeIdx === 0 && C.st1.marks.length === 0, JSON.stringify(C.st1.lines));
+      s40Push('[quote] 空行回车：退出引用、块恢复渲染', C.st3.activeIdx === -1 && C.st3.cursor.line === 2 && C.st3.cursor.ch === 0
+        && sameL(C.st3.lines, ['> 引用文字', '', '']) && C.st3.marks.some(m => m.from === 0 && m.to === 0),
+        JSON.stringify({ lines: C.st3.lines, cursor: C.st3.cursor, activeIdx: C.st3.activeIdx, marks: C.st3.marks }));
+    }
+    // d) 段落对照：回车后新空行属新段落 → 旧段恢复渲染（正确）
+    const D = await runS40('para');
+    if (D) {
+      s40Push('[para] Enter#1：新空行生成、旧段恢复渲染（新空行独立成段，正确行为）',
+        sameL(D.st1.lines, ['普通段落文字。', '']) && D.st1.cursor.line === 1 && D.st1.activeIdx === -1
+        && D.st1.marks.some(m => m.from === 0 && m.to === 0), JSON.stringify({ lines: D.st1.lines, cursor: D.st1.cursor, activeIdx: D.st1.activeIdx, marks: D.st1.marks }));
+    }
+  }
+
   if (errors.length) {
     console.log('\n页面错误:');
     for (const e of errors) console.log('  ' + e);

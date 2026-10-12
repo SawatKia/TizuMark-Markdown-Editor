@@ -236,10 +236,25 @@
       if (ed.viewMode === 'wysiwyg') ed.refreshWysiwygBlocks();
     });
     try {
-      cm.getInputField().addEventListener('compositionend', () => { ed._lastCompositionEnd = Date.now(); });
+      const inputField = cm.getInputField();
+      inputField.addEventListener('compositionend', () => { ed._lastCompositionEnd = Date.now(); });
+      // 与 editor-core 同一幽灵换行守卫（input 通道，2026-10-15 用户复现）：真实 Enter
+      // 被 extraKeys 消费后，紧随 _lastEnterKeydownAt 到达的 beforeinput 行内换行必是
+      // 幽灵 → 取消（CM5 只在 input 事件读 DOM，beforeinput 取消则 CM 读不到）
+      inputField.addEventListener('beforeinput', (e) => {
+        if (e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph') return;
+        if (ed._lastEnterKeydownAt && Date.now() - ed._lastEnterKeydownAt < 300) e.preventDefault();
+      });
     } catch (_) { /* 忽略 */ }
     return { cm, ed, host };
   }
+
+  // 通用建编辑器入口（供驱动侧按任意文档建实例 + 初始遮罩，S40 等场景复用）
+  window.__makeWysiwygEditor = function (doc) {
+    const { cm, ed } = makeEditor(doc);
+    ed.renderWysiwygMasks();
+    return { cm, ed };
+  };
 
   const tagsOf = (h) => (h.match(/<(h\d|p|ol|ul|li|blockquote|table|thead|tbody|tr|pre|code|input)[^>]*>/g) || [])
     .map(t => t.replace(/\s[\s\S]*$/, '>')).join(',');
@@ -2398,6 +2413,82 @@
       window.__s38state = function () {
         const c = cm.getCursor();
         return { cursor: { line: c.line, ch: c.ch }, lineCount: cm.lineCount(), lines: cm.getValue().split('\n') };
+      };
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    return out;
+  };
+
+  // ---------- S39：列表回车幽灵键双通道（2026-10-15 用户复现：列表回车后光标落新行的下一行） ----------
+  // 文档复刻用户截图（列表项 + 下方正文）。真实管线：keydown Enter → extraKeys →
+  // _handleTableEnter（窗①250ms 组合窗 / 窗②150ms 重复投递窗）；幽灵 input 通道 →
+  // beforeinput insertLineBreak → 守卫取消 → CM5 只在 input 事件读 DOM（读不到幽灵）。
+  // 驱动（trusted page.keyboard）+ 下列 page 侧助手逐步复现 4 条时序。
+  window.__runGhostEnter2026 = async function () {
+    const TDOC39 = ['# 2025-120-131-12', '', '- 32333223', '', '下一行正文内容。'].join('\n');
+    const { cm, ed } = makeEditor(TDOC39);
+    ed.renderWysiwygMasks();
+    await sleep(300);
+    const out = {};
+    try {
+      window.__s39maskPoint = function () {
+        const ln = 2;
+        try { cm.scrollIntoView({ line: ln, ch: 0 }, 0); } catch (_) { /* 忽略 */ }
+        const c = cm.charCoords({ line: ln, ch: 0 }, 'page');
+        const el = document.elementFromPoint(c.left - window.scrollX + 2, c.top - window.scrollY + 2);
+        const mask = el && el.closest ? el.closest('.wysiwyg-block-mask') : null;
+        if (!mask) return null;
+        const r = mask.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      };
+      window.__s39compositionEnd = function () {
+        const ev = new Event('compositionend', { bubbles: true, cancelable: false });
+        ev.data = '选';
+        cm.getInputField().dispatchEvent(ev);
+        return !!ed._lastCompositionEnd;
+      };
+      window.__s39dispatchGhostInput = function (inputType) {
+        const ev = new InputEvent('beforeinput', { inputType: inputType, cancelable: true, bubbles: true });
+        cm.getInputField().dispatchEvent(ev);
+        return { prevented: ev.defaultPrevented, type: inputType };
+      };
+      window.__s39state = function () {
+        const c = cm.getCursor();
+        return { cursor: { line: c.line, ch: c.ch }, lines: cm.getValue().split('\n') };
+      };
+      window.__s39GetField = function () { return cm.getInputField(); };
+    } catch (e) { out.err = (e && e.message) || String(e); }
+    return out;
+  };
+
+  // ---------- S40：块内回车续行保持活动块（2026-10-15 用户反馈：提示块里按一次回车就退出
+  //  编辑渲染了，没法正常换行；期望：第一次回车新增行留在编辑态，第二次回车（空行）才退出
+  //  渲染。机制：Enter 续行的新行不在滞后 250ms 的旧块表里，cursorActivity 现算 -1 会把
+  //  当前块重遮，防抖刷新的 marks 守卫再把它固化。修复 = 紧邻活动块末端的行同步轻切块再查。） ----------
+  // kind：alert（用户场景 > [!CAUTION]）/ list / quote / para（段落对照：回车后新空行属新
+  // 段落，块恢复渲染是正确行为）
+  window.__runQuoteEnter2026 = async function (kind) {
+    const DOCS40 = {
+      alert: '> [!CAUTION]\n> 注意内容',
+      list: '- 32333223',
+      quote: '> 引用文字',
+      para: '普通段落文字。',
+    };
+    const { cm, ed } = window.__makeWysiwygEditor(DOCS40[kind]);
+    await sleep(300);
+    const out = { kind: kind };
+    try {
+      // 光标置最后一行行末（= 用户点遮罩进块后的位置；单块文档建编辑器时首块即活动态）
+      const ln = cm.lineCount() - 1;
+      cm.focus();
+      cm.setCursor({ line: ln, ch: cm.getLine(ln).length });
+      window.__s40state = function () {
+        const c = cm.getCursor();
+        const marks = [];
+        (ed._wysiwygMarks || new Map()).forEach(function (m, k) {
+          const r = m.find && m.find();
+          if (r) marks.push({ idx: k, from: r.from.line, to: r.to.line });
+        });
+        return { cursor: { line: c.line, ch: c.ch }, lines: cm.getValue().split('\n'), activeIdx: ed._wysiwygActiveIdx, marks: marks };
       };
     } catch (e) { out.err = (e && e.message) || String(e); }
     return out;

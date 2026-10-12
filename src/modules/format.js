@@ -211,6 +211,13 @@
       // ③ 分隔行不规范（如 |--|）→规范为 | --- |；④ 各行列数不统一→缺失行补空白格；
       // ⑤ 单元格不规范（如 |内容 |）→规范为 | 内容 |。
       _handleTableEnter(cm) {
+        // 先记录本笔 keydown Enter（即使下面被吞掉也记录）：输入域级幽灵换行守卫
+        //（editor-core beforeinput）用这个时间戳识别「同一次按键的重复投递」——合法
+        // keydown Enter 已被 extraKeys preventDefault，浏览器不会再为它投递 beforeinput，
+        // 故紧随其后的 insertLineBreak 一律是幽灵。
+        const now = Date.now();
+        const sincePrevEnter = this._lastEnterKeydownAt ? now - this._lastEnterKeydownAt : Infinity;
+        this._lastEnterKeydownAt = now;
         // WebView2/Chromium 中文 IME 时序怪癖：compositionend 可能先于「选字确认的
         // Enter」keydown 到达（此刻 isComposing=false）——该 Enter 是 IME 确认键的残影，
         // 不是用户想换行。若当真处理：列表行会多出一条续行，用户真正的 Enter 又再续一行
@@ -219,7 +226,14 @@
         // L1215-1224）：组合刚结束 250ms 内的 Enter 一律吞掉；用户真正的换行 Enter 在
         // 更晚按下，正常生效。extraKeys 处理器返回 undefined = 键被消费（codemirror.js
         // doHandleBinding：bound(cm) != Pass → preventDefault），不产生换行。
-        if (this._lastCompositionEnd && Date.now() - this._lastCompositionEnd < 250) return;
+        if (this._lastCompositionEnd && now - this._lastCompositionEnd < 250) return;
+        // 窗②（2026-10-15 用户复现）：用户选字提交后又继续输入（距 compositionend 已超
+        // 250ms、窗①失效）再按 Enter——WebView2 的幽灵可能是「本笔 Enter 按键的重复
+        // 投递」，紧随真实 Enter keydown 数十 ms 之后到达。若放行：真实 Enter 已续出列表
+        // 行，幽灵又续/插一行 → 光标落在「新行的下一行」（截图：空 bullet 行 + 其下空行，
+        // 光标在空行）。人为连按两次 Enter 间隔 ≥80ms，且此处还要求「组合 10s 内刚结束」
+        // 双条件，避免误吞无 IME 上下文的快速输入。
+        if (sincePrevEnter < 150 && this._lastCompositionEnd && now - this._lastCompositionEnd < 10000) return;
         const TABLE_ROW_RE = /^\|.*\|\s*$/;
         const TABLE_SEPARATOR_RE = /^\|\s*[-:][-:\s]*\|/;
         const pos = cm.getCursor();

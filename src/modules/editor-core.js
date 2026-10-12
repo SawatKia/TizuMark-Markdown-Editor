@@ -358,14 +358,31 @@
         });
         // ⚠️ CM 5.65.18 不触发用户级 compositionstart/end 编辑器事件（上面两个 cm.on
         //    处理器实际不执行，官方源码与 vendor 版一致，2026-10-14 核过 npm 5.65.18）。
-        //    幽灵 Enter 吞除窗时间戳必须挂在输入域的浏览器原生 DOM 事件上：WebView2/
-        //    Chromium 中文 IME 选字确认的 Enter 会在 compositionend 后残留一个
-        //    isComposing=false 的 keydown（format.js _handleTableEnter 用它吞除幽灵键，
-        //    与表格格编辑同一规则——2026-10-14 用户反馈「列表回车后光标落新行的下一行」
-        //    根因：幽灵键多续一条列表行，真实 Enter 又续一条 → 光标在新行下面一行）
+        //    幽灵键时间戳必须挂在输入域的浏览器原生 DOM 事件上：WebView2/Chromium
+        //    中文 IME 的 Enter 存在两条幽灵通道（均造成「列表回车后光标落新行的下一行」）：
+        //    a) keydown 通道——compositionend 后残留 isComposing=false 的 keydown
+        //       （format.js _handleTableEnter 窗①/窗②吞除）；
+        //    b) input 通道（2026-10-15 用户复现）——真实 Enter 已被 extraKeys 消费后，
+        //       输入域仍收到原生 insertLineBreak/insertParagraph（beforeinput）→ CM5
+        //       ContentEditableInput 只在 'input' 事件读 DOM 差分（codemirror.js L8876，
+        //       完全不监听 beforeinput）→ 一条裸换行（不走列表续行逻辑）进模型 →
+        //       列表下多一条空行、光标落在「新行的下一行」（空 bullet 行仍在）。
+        //       合法 keydown Enter 被 extraKeys preventDefault 后浏览器不再为其投递
+        //       beforeinput → 紧随 _lastEnterKeydownAt（format.js 记录）到达的
+        //       insertLineBreak 必是幽灵 → 取消（beforeinput 被取消则对应 input 事件
+        //       不再触发，CM 读不到幽灵换行）。
         try {
-          this.cm.getInputField().addEventListener('compositionend', () => {
+          const inputField = this.cm.getInputField();
+          inputField.addEventListener('compositionend', () => {
             this._lastCompositionEnd = Date.now();
+          });
+          inputField.addEventListener('beforeinput', (e) => {
+            if (e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph') return;
+            if (this._lastEnterKeydownAt && Date.now() - this._lastEnterKeydownAt < 300) {
+              e.preventDefault();
+              console.debug('[tizumark] 吞除幽灵换行（input 通道，Enter keydown 后 '
+                + (Date.now() - this._lastEnterKeydownAt) + 'ms）');
+            }
           });
         } catch (_) { /* 编辑器已销毁等，忽略 */ }
   

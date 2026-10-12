@@ -2444,7 +2444,21 @@
       } else {
         this._wysiwygBlankCurLine = null;
       }
-      this.setWysiwygActiveBlock(this.wysiwygBlockIndexAt(line));
+      let activeIdx = this.wysiwygBlockIndexAt(line);
+      if (activeIdx < 0) {
+        // 块表滞后输入 250ms（防抖刷新未跑）：Enter 续行后的新行 = 活动块 end 的紧邻下一行，
+        // 旧表里没有它 → 朴素现算 -1 会把**当前正在编辑的块**立即重遮成渲染态，且防抖刷新的
+        // _wysiwygActiveIdxFromCursor 守卫（marks.has → -1）会把重遮固化——活动块再也回不来
+        //（2026-10-15 用户反馈：「提示块里按一次回车就退出编辑渲染了，没法正常换行」；
+        // 列表/段落/普通引用同一机制，harness 四类型实测复现）。
+        // 紧邻活动块末端的行：同步轻切块（parseOnly，与遮罩点击同一机制）按最新表再查——
+        // 新行重切后仍在块内（列表/引用续行）→ 保持活动块继续编辑；真在块外（段落/标题
+        // 回车后的新空行、用户离开块）→ 照旧 -1、块恢复渲染。只查紧邻行，远处行（真离开）
+        // 不做同步重算，省大文档按键开销。
+        const pb = this._wysiwygActiveIdx >= 0 ? this._wysiwygBlocks[this._wysiwygActiveIdx] : null;
+        if (pb && line === pb.end) activeIdx = this._wysiwygBlockIndexAtFresh(line);
+      }
+      this.setWysiwygActiveBlock(activeIdx);
     },
 
     // ---------------- 抖动补偿（同步） ----------------

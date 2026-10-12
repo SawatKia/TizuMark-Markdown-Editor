@@ -1465,13 +1465,13 @@ test('幽灵 Enter 吞除：WebView2 中文 IME 选字确认残影键不再多�
   // 组合刚结束 250ms 内返回（undefined = 键被消费，codemirror.js doHandleBinding 语义）
   const hIdx = fsrc.indexOf('_handleTableEnter(cm) {');
   assert.ok(hIdx > 0, '缺 _handleTableEnter（Enter 键映射处理体）');
-  const hblk = fsrc.slice(hIdx, hIdx + 1200);
-  assert.match(hblk, /this\._lastCompositionEnd && Date\.now\(\) - this\._lastCompositionEnd < 250\) return;/,
+  const hblk = fsrc.slice(hIdx, hIdx + 1400);
+  assert.match(hblk, /this\._lastCompositionEnd && now - this\._lastCompositionEnd < 250\) return;/,
     '缺幽灵 Enter 吞除窗守卫（组合刚结束的残影 Enter 会多续一条列表行 → 真实 Enter 再续一条 → 光标在新行下面一行）');
   // ② 时间戳必须来自输入域的原生 DOM compositionend：CM 5.65.18 不触发用户级
   // compositionstart/end 编辑器事件（cm.on 处理器不执行，官方源码已核），
   // 挂 cm.on 上的时间戳永远是 undefined → 守卫失效
-  assert.match(coreSrc, /getInputField\(\)\.addEventListener\('compositionend', \(\) => \{[\s\S]{0,80}this\._lastCompositionEnd = Date\.now\(\);/,
+  assert.match(coreSrc, /getInputField\(\);[\s\S]{0,200}addEventListener\('compositionend', \(\) => \{[\s\S]{0,80}this\._lastCompositionEnd = Date\.now\(\);/,
     '幽灵 Enter 时间戳未挂输入域原生 DOM compositionend（cm.on compositionend 在 CM 5.65.18 不触发）');
 });
 
@@ -1496,6 +1496,39 @@ test('token 中和 + 同身 span 渲染色重申（CM5 合并同区间 marker �
     '链接主题色未用 (0,5,1) 重申');
   assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-inline-marker"\][\s\S]{0,400}wysiwyg-list-bullet[\][\s\S]{0,300}wysiwyg-task-box[\][\s\S]{0,120}color: transparent;/,
     '标记透明/列表符号透明/任务框透明未用 (0,5,1) 重申（源字符会压住 ::before 渲染符号）');
+});
+
+test('列表回车幽灵键双窗：keydown 重复投递窗（窗②）+ input 通道幽灵换行守卫', () => {
+  const fsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'format.js'), 'utf8');
+  const csrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'editor-core.js'), 'utf8');
+  // format.js：先记录本笔 keydown Enter（即使被吞也记录）——input 通道守卫靠它识别重复投递
+  assert.match(fsrc, /this\._lastEnterKeydownAt = now;/,
+    '缺 _lastEnterKeydownAt 记录（input 通道守卫依赖它识别「同一按键的重复投递」）');
+  // 窗②：距上一笔 Enter <150ms 且组合 10s 内刚结束 → 吞（真人连按 ≥80ms + 无 IME 上下文不误吞）
+  assert.match(fsrc, /sincePrevEnter < 150 && this\._lastCompositionEnd && now - this\._lastCompositionEnd < 10000\) return;/,
+    '缺幽灵窗②（用户选字后又输入一段再回车：重复投递 Enter 紧随真实 Enter 数十 ms 到达，窗①已失效 → 多一行、光标落新行下一行）');
+  // editor-core：beforeinput 幽灵换行守卫（CM5 ContentEditableInput 只监听 input 不监听
+  // beforeinput → 幽灵 insertLineBreak 会作为裸换行进模型；合法 keydown Enter 被
+  // extraKeys preventDefault 后浏览器不再投递 beforeinput → 窗口内到达者必为幽灵）
+  assert.match(csrc, /addEventListener\('beforeinput', \(e\) => \{[\s\S]{0,120}insertLineBreak[\s\S]{0,80}insertParagraph/,
+    '缺 input 通道守卫（幽灵 beforeinput insertLineBreak 会被 CM5 当裸换行读进模型）');
+  assert.match(csrc, /_lastEnterKeydownAt && Date\.now\(\) - this\._lastEnterKeydownAt < 300/,
+    '幽灵换行窗口未对齐 _lastEnterKeydownAt（300ms）');
+  assert.match(csrc, /e\.preventDefault\(\);/, '缺幽灵 beforeinput 的取消（不取消则对应 input 事件仍触发、CM 仍读得到）');
+});
+
+test('块内回车续行保持活动块：光标行紧邻活动块末端时同步轻切块再查（2026-10-15 用户反馈「提示块按一次回车就退出编辑渲染」）', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const sIdx = src.indexOf('syncWysiwygActiveBlock() {');
+  assert.ok(sIdx > 0, '缺 syncWysiwygActiveBlock（cursorActivity 活动块同步）');
+  const sblk = src.slice(sIdx, sIdx + 2600);
+  // 旧表未命中（-1）时不再直接按 -1 处理
+  assert.match(sblk, /let activeIdx = this\.wysiwygBlockIndexAt\(line\);/,
+    '活动块现算未走可纠正路径（旧块表滞后 250ms，Enter 续行新行不在旧表里）');
+  // 紧邻活动块末端 → 同步轻切块（parseOnly）按最新表再查：续行仍在块内 → 保持活动；
+  // 真在块外 → 照旧 -1（防抖刷新的 marks 守卫会把重遮固化，错过这个时机活动块回不来）
+  assert.match(sblk, /line === pb\.end\) activeIdx = this\._wysiwygBlockIndexAtFresh\(line\);/,
+    '缺紧邻活动块末端行的同步重查（Enter 续行新行 = 活动块 end 的下一行，旧表漏它 → 当前块被重遮渲染、没法继续换行）');
 });
 
 test('下划线渲染化：<u> 原生 HTML 标签在编辑态同渲染观感（2026-10-14 全格式矩阵用户要求）', () => {
