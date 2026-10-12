@@ -158,7 +158,13 @@
         const LIST_LINE_RE = /^(\s*)(?:>[> ]*|[*+-]\s\[[xX ]\]\s|[*+-]\s|\d+[.)]\s)/;
         this.cm = CodeMirror(document.getElementById('editor-wrapper'), {
           value: '',
-          mode: 'gfm',
+          // gitHubSpice 关闭（2026-10-15 用户截图：列表项 "5454554" 编辑态带下划线、
+          // 渲染态没有）：gfm 模式默认开启 GitHub 高亮，7–40 位十六进制串（SHA）/ #数字
+          // （issue）被 tokenize 成 link → cm-link → codemirror.css .cm-link 的
+          // text-decoration:underline 在编辑态漏出；而渲染器（remark）根本不把这些
+          // 识别成链接 → 编辑/渲染不一致。普通 URL 的 cm-link（urlRE 分支）不受影响，
+          // 渲染态本来就有下划线，保持原样。
+          mode: { name: 'gfm', gitHubSpice: false },
           theme: 'default',
           inputStyle: 'contenteditable',
           lineNumbers: true,

@@ -530,8 +530,8 @@ test('活动块源文态装饰：标题#前缀/列表符号/代码围栏 + 应�
   const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   assert.match(wsrc, /_wysiwygApplyActiveDecor\(idx\) \{/, '缺 _wysiwygApplyActiveDecor');
   const dIdx = wsrc.indexOf('_wysiwygApplyActiveDecor(idx) {');
-  const dBlk = wsrc.slice(dIdx, dIdx + 4500);
-  assert.match(dBlk, /wysiwyg-heading-hash wysiwyg-heading-hash-' \+ level/, '# 前缀段缺失（应小灰显示）');
+  const dBlk = wsrc.slice(dIdx, dIdx + 6500);
+  assert.match(dBlk, /add\(b\.start, 0, m\[0\]\.length, 'wysiwyg-heading-hash'\);/, '# 前缀段缺失（应小灰显示）');
   assert.match(dBlk, /wysiwyg-heading-text wysiwyg-heading-text-' \+ level/, '正文段缺失（应渲染尺寸显示）');
   assert.match(dBlk, /b\.end - b\.start === 1 && RE\.heading\.test\(first\)/, '标题分支未按单行块判定');
   assert.match(dBlk, /RE\.fence\.test\(first\.trim\(\)\)/, '缺代码块（围栏）分支');
@@ -541,6 +541,10 @@ test('活动块源文态装饰：标题#前缀/列表符号/代码围栏 + 应�
   assert.match(dBlk, /checked/, '复选框无勾选态（[x] 应渲染为已勾选）');
   assert.match(dBlk, /wysiwyg-ol-marker/, '缺有序序号标记类');
   assert.match(dBlk, /!RE\.hr\.test\(first\.trim\(\)\)/, 'HR 行（- - -）未排除（会被误装饰成列表）');
+  // 列表块级排版行类（2026-10-15）：挂挂 + 追踪清理（切块/拆场先清后挂）
+  assert.match(dBlk, /wysiwyg-list-line/, '活动列表行未挂块级排版行类');
+  assert.match(dBlk, /wysiwyg-list-indent/, 'ul/ol 活动行未挂缩进行类');
+  assert.ok((wsrc.match(/_wysiwygListLines/g) || []).length >= 5, '列表行类未追踪（切块/拆场需先清后挂）');
   // 应用点：setWysiwygActiveBlock / change 钩子 / 进 wysiwyg 尾 / 防抖尾 / 全量增量尾
   const applies = (wsrc.match(/_wysiwygApplyActiveDecor\((?:this|self)\._wysiwygActiveIdx\)|_wysiwygApplyActiveDecor\(idx\);/g) || []).length;
   assert.ok(applies >= 5, '装饰应用点不足（切块/change钩子/进wysiwyg尾/防抖尾/全量增量尾），实际 ' + applies);
@@ -551,6 +555,9 @@ test('活动块源文态装饰：标题#前缀/列表符号/代码围栏 + 应�
   // CSS：标题——灰 # + 预览字族/加粗变量 + h1–h6 六级尺寸
   const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
   assert.match(css, /wysiwyg-heading-hash \{[\s\S]{0,200}color: var\(--text-secondary\);/, '# 前缀未用主题次级色（灰）');
+  assert.match(css, /wysiwyg-heading-hash \{[\s\S]{0,400}font-size: 0\.8em;/,
+    '# 前缀未统一字号（2026-10-15 用户要求：各级 # 一样大）');
+  assert.doesNotMatch(css, /wysiwyg-heading-hash-\d \{/, '残留按级 # 字号规则（应已合并为统一 0.8em）');
   assert.match(css, /wysiwyg-heading-text \{[\s\S]{0,200}font-family: var\(--font-preview\);/, '正文未用预览字族（与渲染标题不一致）');
   for (let n = 1; n <= 6; n++) {
     assert.ok(css.indexOf('wysiwyg-heading-text-' + n + ' {') >= 0, '缺 h' + n + ' 渲染尺寸 CSS');
@@ -561,13 +568,24 @@ test('列表/代码块活动行渲染化 CSS：源符号透明化 + ::before 渲
   const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
   // 圆点/复选框：源字符所在 span 透明化（保留真实宽度 → 光标测量精准；
   // 不可用 width:0 + overflow:hidden——会连 ::before 符号一起裁掉）
-  assert.match(css, /wysiwyg-list-bullet,\n[^}]*wysiwyg-task-box \{[\s\S]{0,200}color: transparent;/,
-    '圆点/复选框 span 未透明化（源字符会同时可见）');
-  assert.doesNotMatch(css.slice(css.indexOf('wysiwyg-list-bullet,'),
-    css.indexOf('wysiwyg-list-bullet,') + 400), /overflow:\s*hidden/,
+  assert.match(css, /\.wysiwyg-list-bullet \{[\s\S]{0,400}color: transparent;/,
+    '圆点 span 未透明化（源字符会同时可见）');
+  assert.match(css, /\.wysiwyg-task-box \{[\s\S]{0,200}color: transparent;/,
+    '复选框 span 未透明化（源字符会同时可见）');
+  // 画圆垂直居中锚定行盒（真机 WebView2 内联 span 字体盒按基线放置，与渲染 disc
+  // 差 1px——2026-10-15 用户截图「点入编辑黑点往上移一点点」）：盒高=行高 1.7em +
+  // vertical-align:top → ::before top:50% 严格=行盒中心
+  assert.match(css, /\.wysiwyg-list-bullet \{[\s\S]{0,700}display: inline-block;[\s\S]{0,120}height: 1\.7em;[\s\S]{0,120}vertical-align: top;/,
+    '圆点盒未锁定行盒（inline-block + 1.7em + vertical-align:top 缺一，真机黑点会偏 1px）');
+  assert.doesNotMatch(css.slice(css.indexOf('.wysiwyg-list-bullet {'),
+    css.indexOf('.wysiwyg-list-bullet {') + 400), /overflow:\s*hidden/,
     '源符号 span 用了 overflow:hidden（会裁掉 ::before 渲染符号）');
-  // 圆点符号
-  assert.match(css, /wysiwyg-list-bullet::before[\s\S]{0,150}content: '•';/, '缺 • 圆点渲染符号');
+  // 圆点符号：画圆而非 '•' 字符（2026-10-15 用户截图：'•' 字符比渲染 disc marker 小且偏上）
+  assert.match(css, /wysiwyg-list-bullet::before[\s\S]{0,250}width: 6px;[\s\S]{0,120}border-radius: 50%;/,
+    '无序圆点未用画圆（须与渲染 disc marker 同形：6px 实心圆）');
+  assert.match(css, /wysiwyg-list-bullet::before[\s\S]{0,250}left: -7px;/,
+    '圆点 left 应为 -7px（canvas 像素实测：渲染 disc x=38–43，画圆 38–44 逐像素重合；-6px 偏右 1px，用户仍觉「黑点往右移」）');
+  assert.match(css, /wysiwyg-list-bullet::before[\s\S]{0,300}background: var\(--text-primary\);/, '圆点未用正文色');
   // 任务行圆点不画符号（渲染预览任务项 list-style:none，只有复选框）
   assert.match(css, /wysiwyg-task-bullet::before[\s\S]{0,80}content: none;/, '任务行圆点未隐藏（与渲染预览不一致）');
   const wsrc2 = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
@@ -580,6 +598,38 @@ test('列表/代码块活动行渲染化 CSS：源符号透明化 + ::before 渲
   // 正文/序号：预览字族（与渲染列表一致）
   assert.match(css, /wysiwyg-list-text \{[\s\S]{0,100}var\(--font-preview\)/, '列表正文未用预览字族');
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,100}var\(--font-preview\)/, '有序序号未用预览字族');
+  // 列表活动行块级排版（2026-10-15 用户反馈：编辑态比渲染态「小、密、缩进不同」）：
+  // 项间距 4px（渲染 li margin-bottom）+ ul/ol 行缩进在行基准 32px 上叠 12px（序号左缘对齐）
+  assert.match(css, /wysiwyg-list-line \{[\s\S]{0,80}padding-bottom: 4px;/, '列表活动行缺项间距（渲染 li 有 4px margin-bottom，编辑态「密」）');
+  assert.match(css, /wysiwyg-list-line\.wysiwyg-list-indent-ul \{[\s\S]{0,120}calc\(var\(--wysiwyg-line-inset, 32px\) \+ 13px\)/,
+    'ul 缩进未在行基准上 calc 叠加 13px（「- 」≈11px，24−11=13 正文才落回渲染 56px）');
+  assert.match(css, /wysiwyg-list-line\.wysiwyg-list-indent-ol \{[\s\S]{0,120}calc\(var\(--wysiwyg-line-inset, 32px\) \+ 8px\)/,
+    'ol 缩进未在行基准上 calc 叠加 8px（「1. 」≈16px，24−16=8 正文才落回渲染 56px）');
+  assert.match(css, /padding-left: var\(--wysiwyg-line-inset, 32px\);/, 'wysiwyg 行基准留白未变量化（列表缩进无法叠加）');
+  // S42（2026-10-15 用户截图：列表项 "5454554" 编辑态带下划线、渲染态没有）：
+  // gfm 模式 gitHubSpice 把 7–40 位十六进制串认成 SHA → cm-link token →
+  // codemirror.css .cm-link { text-decoration: underline } 在编辑态漏出；渲染器不识别
+  // → 不一致。必须关 gitHubSpice（普通 URL 的 cm-link 走 urlRE 分支，渲染态本有下划线，保留）。
+  const ecore = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'editor-core.js'), 'utf8');
+  assert.match(ecore, /gitHubSpice:\s*false/, 'gfm 模式未关 gitHubSpice（SHA/issue 串被认成链接，编辑态漏下划线）');
+  // token 的 text-decoration 也要中和（.cm-link 下划线 / .cm-strikethrough 删除线漏出）；
+  // 渲染态链接口径 = .preview-content a { text-decoration:none } → 编辑态 cm-link 无下划线
+  assert.match(css, /wysiwyg-plain-text span\[class[*]="cm-"\] \{[\s\S]{0,800}text-decoration: none;/,
+    'cm- token span 未中和 text-decoration（gitHubSpice 关后 URL 的 cm-link 下划线仍会漏出，与渲染态 <a> 口径不符）');
+  assert.doesNotMatch(css, /wysiwyg-inline-link \{\s*color: var\(--accent-color\);\s*text-decoration: underline;/,
+    '独立 wysiwyg-inline-link 规则不应带 underline（渲染态链接无下划线）');
+  // S43（2026-10-15 用户截图：「点击编辑后内容会向上动一下」）：遮罩高度含渲染元素
+  // 自身 margin-bottom（ul/ol/p = 14px；> *:last-child 清零被 block-edit-btn 占了
+  // last-child 位而失效）+ 遮罩 padding 1+2 + border-bottom 1 → 活动块须用块边缘行
+  // （wysiwyg-block-edge-top/bottom，非 cm-wysiwyg-active-first/last——那对非容器块
+  // 只挂光标行 lo=hi）给 14px 边距族补 顶距 1px / 底距 17px 才逐像素等高。
+  assert.match(wsrc2, /wysiwyg-block-edge-top/, '缺块边缘行类（wysiwyg-block-edge-top）——活动块无法补齐遮罩 margin/padding 差');
+  assert.match(wsrc2, /wysiwyg-block-edge-bottom/, '缺块边缘行类（wysiwyg-block-edge-bottom）');
+  assert.match(wsrc2, /wysiwyg-para-line/, '缺段落行类（wysiwyg-para-line）——段落块（p 的 14px 边距族）无法参与块高补齐');
+  assert.match(css, /wysiwyg-list-line\.wysiwyg-block-edge-top,\s*\n[^}]*wysiwyg-para-line\.wysiwyg-block-edge-top \{[\s\S]{0,60}padding-top: 1px;/,
+    '块边缘首行未补 1px 顶距（对齐遮罩 padding-top）');
+  assert.match(css, /wysiwyg-list-line\.wysiwyg-block-edge-bottom,\s*\n[^}]*wysiwyg-para-line\.wysiwyg-block-edge-bottom \{[\s\S]{0,60}padding-bottom: 17px;/,
+    '块边缘末行未补 17px 底距（14px margin + 2px 遮罩 padding-bottom + 1px border-bottom）');
   // 代码围栏：灰显（语法标志）
   assert.match(css, /wysiwyg-code-fence \{[\s\S]{0,100}var\(--text-secondary\)/, '围栏未灰显');
 });
@@ -700,7 +750,7 @@ test('全量视图驻留：直接写 cm.options 扩视口（避开 setOption 的
   // 离开所见即所得恢复默认视口余量（窗口 3200：函数内含批量撤遮罩 + 活动块高亮撤行类 +
   // 正文排版行类撤除，函数体变长）
   const cIdx = wsrc.indexOf('clearWysiwygMasks() {');
-  const cblk = wsrc.slice(cIdx, cIdx + 3200);
+  const cblk = wsrc.slice(cIdx, cIdx + 4200);
   assert.match(cblk, /setOption\('viewportMargin', 10\)/, '离开全量模式未恢复默认视口余量');
   assert.match(cblk, /this\._wysiwygFull = false;/, '离开未复位全量标志');
 });
@@ -1487,14 +1537,20 @@ test('token 中和 + 同身 span 渲染色重申（CM5 合并同区间 marker �
   // 必须以 (0,5,1) 同前缀重申「有渲染色设计」的类（规则序在中和之后）。
   const oIdx = css.indexOf('class*="wysiwyg-quote-text"]');
   assert.ok(oIdx > 0, '缺同身 span 渲染色重申（引用正文的 --text-secondary 会被中和规则洗成主色）');
-  const oblk = css.slice(Math.max(0, oIdx - 900), oIdx + 1200);
+  const oblk = css.slice(Math.max(0, oIdx - 900), oIdx + 2400);
   assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-quote-text"\][\s\S]{0,300}wysiwyg-quote-prefix[\][\s\S]{0,120}color: var\(--text-secondary\);/,
     '引用正文/前缀次级色未用 (0,5,1) 重申');
   assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-heading-hash"\][\s\S]{0,120}color: var\(--text-secondary\);/,
     '标题 # 前缀次级色未用 (0,5,1) 重申');
   assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-inline-link"\][\s\S]{0,160}color: var\(--accent-color\);/,
     '链接主题色未用 (0,5,1) 重申');
-  assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-inline-marker"\][\s\S]{0,400}wysiwyg-list-bullet[\][\s\S]{0,300}wysiwyg-task-box[\][\s\S]{0,120}color: transparent;/,
+  assert.doesNotMatch(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-inline-link"\][\s\S]{0,200}text-decoration: underline/,
+    '链接重申规则不得含 underline（渲染态 .preview-content a 是 text-decoration:none，2026-10-15 对齐口径）');
+  assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-underline"\][\s\S]{0,100}text-decoration: underline;/,
+    '缺 <u> 同身 span 下划线重申（中和规则会洗掉，与渲染态 ins/u 不一致）');
+  assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-strike"\][\s\S]{0,100}text-decoration: line-through;/,
+    '缺 ~~ 同身 span 删除线重申（cm-strikethrough token 同身会被中和规则洗掉）');
+  assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-inline-marker"\][\s\S]{0,1200}wysiwyg-list-bullet[\][\s\S]{0,500}wysiwyg-task-box[\][\s\S]{0,120}color: transparent;/,
     '标记透明/列表符号透明/任务框透明未用 (0,5,1) 重申（源字符会压住 ::before 渲染符号）');
 });
 

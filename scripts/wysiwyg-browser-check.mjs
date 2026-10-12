@@ -2067,6 +2067,209 @@ try {
     }
   }
 
+  // ---------- S41：列表编辑态块级排版对齐渲染态（2026-10-15 用户反馈：编辑时「变小、变密、缩进不同」） ----------
+  // 实测口径：渲染态 ol/ul padding-left:24px + li margin-bottom:4px；编辑态行类补
+  // 12px 缩进（序号左缘对齐）+ 4px padding-bottom（项间距）；字号/行高行类本已同参。
+  console.log('\n=== S41：列表编辑态对齐渲染态（ol/ul/task） ===');
+  {
+    const s41Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    const px = (v) => parseFloat(v);
+    const runS41 = async (kind) => {
+      const init = await page.evaluate((k) => window.__runListType2026(k), kind);
+      if (init.err) { console.log(`  ⚠ [${kind}] 场景失败: ` + init.err); fail++; return null; }
+      const rendered = await page.evaluate(() => window.__s41rendered());
+      if (rendered.err) { console.log(`  ⚠ [${kind}] 渲染态未量到: ` + rendered.err); fail++; return null; }
+      const mp = await page.evaluate(() => window.__s41maskPoint());
+      if (!mp) { console.log(`  ⚠ [${kind}] 遮罩未定位`); fail++; return null; }
+      await page.mouse.click(mp.x, mp.y);
+      await new Promise(r => setTimeout(r, 300));
+      const active = await page.evaluate(() => window.__s41active());
+      return { rendered, active };
+    };
+    const OL = await runS41('ol');
+    if (OL) {
+      console.log('  ol 渲染态: ' + JSON.stringify(OL.rendered) + '  编辑态: ' + JSON.stringify(OL.active));
+      const r = OL.rendered, a = OL.active;
+      s41Push('[ol] 渲染态基准：ol 缩进 24px + li 项距 4px', px(r.padLeft) === 24 && px(r.liGap) === 4, JSON.stringify({ pad: r.padLeft, gap: r.liGap }));
+      s41Push('[ol] 编辑态字号 = 渲染态', a.rows[0] && a.rows[0].fontSize === r.fontSize, a.rows[0] ? a.rows[0].fontSize + ' vs ' + r.fontSize : '无行');
+      s41Push('[ol] 编辑态序号位置 ≈ 渲染态（行基准 32 + 叠加 8 = 40px，差 ≤4px）', a.rows[0] && px(a.rows[0].padLeft) === 40 && a.rows[0].markX != null && r.textX != null && Math.abs(a.rows[0].markX - (r.textX - 12)) <= 4,
+        a.rows[0] && r.textX != null ? 'padLeft=' + a.rows[0].padLeft + ' markX=' + a.rows[0].markX + ' 期望≈' + (r.textX - 12) : '');
+      s41Push('[ol] 编辑态正文 x ≈ 渲染态（差 ≤5px）', a.rows[0] && a.rows[0].textX != null && r.textX != null && Math.abs(a.rows[0].textX - r.textX) <= 5,
+        a.rows[0] && r.textX != null ? 'textX=' + a.rows[0].textX + ' vs ' + r.textX : '');
+      s41Push('[ol] 编辑态项距 = 渲染态（27.2+4≈31.2，不再密集）', a.pitch != null && r.pitch != null && Math.abs(a.pitch - r.pitch) <= 1.5, 'pitch=' + a.pitch + ' vs ' + r.pitch);
+      s41Push('[ol] 编辑态行 padding-bottom 4px（计入行盒高，滚动测量不失真）', a.rows[0] && px(a.rows[0].padBottom) === 4);
+      s41Push('[ol] 编辑态首行 padding-top 1px（S43 块高补齐：对齐遮罩 padding-top）', a.rows[0] && px(a.rows[0].padTop) === 1, 'padTop=' + (a.rows[0] && a.rows[0].padTop));
+    }
+    const UL = await runS41('ul');
+    if (UL) {
+      const r = UL.rendered, a = UL.active;
+      s41Push('[ul] 编辑态缩进 45px（32+13，「- 」≈11px 补差）+ 项距 = 渲染态', a.rows[0] && px(a.rows[0].padLeft) === 45 && a.pitch != null && r.pitch != null && Math.abs(a.pitch - r.pitch) <= 1.5,
+        JSON.stringify({ pad: a.rows[0] && a.rows[0].padLeft, pitch: a.pitch, rPitch: r.pitch, markX: a.rows[0] && a.rows[0].markX, rTextX: r.textX }));
+      s41Push('[ul] 编辑态正文 x ≈ 渲染态（差 ≤5px）', a.rows[0] && a.rows[0].textX != null && r.textX != null && Math.abs(a.rows[0].textX - r.textX) <= 5,
+        'textX=' + (a.rows[0] && a.rows[0].textX) + ' vs ' + r.textX);
+      const dot = await page.evaluate(() => {
+        const sp = document.querySelector('pre.CodeMirror-line .wysiwyg-list-bullet');
+        if (!sp) return null;
+        const cs = getComputedStyle(sp, '::before');
+        return { w: cs.width, h: cs.height, radius: cs.borderRadius, bg: cs.backgroundColor };
+      });
+      s41Push('[ul] 圆点为 6px 画圆（与渲染 disc marker 同形，非 • 字符）', dot && dot.w === '6px' && dot.h === '6px' && dot.radius !== '0px', JSON.stringify(dot));
+    }
+    const TK = await runS41('task');
+    if (TK) {
+      const r = TK.rendered, a = TK.active;
+      s41Push('[task] 渲染态 padding 0（复选框贴行首）→ 编辑态不加缩进（保持行基准 32px）', px(r.padLeft) === 0 && a.rows[0] && px(a.rows[0].padLeft) === 32,
+        '渲染 pad=' + r.padLeft + ', 编辑 pad=' + (a.rows[0] && a.rows[0].padLeft));
+      s41Push('[task] 编辑态项距 = 渲染态', a.pitch != null && r.pitch != null && Math.abs(a.pitch - r.pitch) <= 1.5, 'pitch=' + a.pitch + ' vs ' + r.pitch);
+    }
+  }
+
+  // ---------- S42：纯数字串编辑态不得漏出下划线（2026-10-15 用户截图） ----------
+  // 根因：gfm 模式 gitHubSpice 把 7–40 位十六进制串认成 SHA → cm-link token →
+  // codemirror.css .cm-link { text-decoration: underline } 在编辑态漏出；渲染器
+  // （remark）不识别 → 编辑/渲染不一致。修复 = mode 配置 gitHubSpice:false +
+  // 编辑态 cm- token 的 text-decoration 统一中和。
+  // 本应用渲染态口径：.preview-content a { text-decoration:none }（链接只有主题色、
+  // 无下划线）→ 编辑态 URL/显式链接 span 也不得带下划线；<u> 下划线 / ~~ 删除线保留。
+  console.log('\n=== S42：纯数字列表项编辑态无下划线（链接同渲染口径） ===');
+  {
+    const s42Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    const init = await page.evaluate(() => window.__runDigitUnderline2026());
+    if (init.err) {
+      console.log('  ⚠ S42 场景失败: ' + init.err);
+      fail++;
+    } else {
+      const rendered = await page.evaluate(() => window.__s42rendered());
+      if (rendered.err) { console.log('  ⚠ S42 渲染态未量到: ' + rendered.err); fail++; }
+      else {
+        s42Push('[渲染] 数字 li 与 URL <a> 均无下划线（本应用链接口径 text-decoration:none）',
+          rendered.li0 === 'none' && rendered.a === 'none', JSON.stringify(rendered));
+        const mp = await page.evaluate(() => window.__s42maskPoint());
+        if (!mp) { console.log('  ⚠ S42 遮罩未定位'); fail++; }
+        else {
+          await page.mouse.click(mp.x, mp.y);
+          await new Promise(r => setTimeout(r, 300));
+          const active = await page.evaluate(() => window.__s42active());
+          const digitRows = active.rows.filter((r) => !/https?:\/\//.test(r.spans.map((s) => s.txt).join('')) && r.spans.every((s) => !/点我/.test(s.txt)));
+          const urlRow = active.rows.find((r) => r.spans.some((s) => /https?:\/\//.test(s.txt)));
+          const linkRow = active.rows.find((r) => r.spans.some((s) => /点我/.test(s.txt)));
+          const digitsClean = digitRows.length === 3 && digitRows.every((r) =>
+            r.spans.every((s) => (s.deco || 'none') === 'none' && (s.cls || '').indexOf('cm-link') === -1));
+          s42Push('[编辑] 纯数字项 span 无下划线、无 cm-link token（gitHubSpice 已关）',
+            digitsClean, JSON.stringify(digitRows.map((r) => r.spans)));
+          s42Push('[编辑] URL 项 span 无下划线（与渲染 <a> 口径一致）',
+            !!urlRow && urlRow.spans.every((s) => (s.deco || 'none') === 'none'),
+            JSON.stringify(urlRow && urlRow.spans));
+          const linkSpan = linkRow ? linkRow.spans.find((s) => /点我/.test(s.txt)) : null;
+          s42Push('[编辑] 显式链接文本主题色、无下划线（wysiwyg-inline-link 不重申 underline）',
+            !!linkSpan && (linkSpan.deco || 'none') === 'none' && linkSpan.cls.indexOf('wysiwyg-inline-link') !== -1,
+            JSON.stringify(linkSpan));
+        }
+      }
+    }
+  }
+
+  // ---------- S43：点块进编辑块下方内容不得跳（2026-10-15 用户截图：「向上动一下」） ----------
+  // 根因：遮罩高度含渲染元素自身 margin-bottom（ul/ol/p = 14px；> *:last-child 清零
+  // 被 block-edit-btn 占了 last-child 位而失效）+ 遮罩 padding 1+2 + border-bottom 1；
+  // 编辑态行盒没有这些 → 活动块比遮罩矮 17px、首行高 1px → 点入后下方整体上跳。
+  // 修复 = 块边缘行（wysiwyg-block-edge-top/bottom）给 14px 边距族补 顶距 1px/底距
+  // 17px。断言：活动块底 vs 遮罩底、块下段落行顶（遮罩态 vs 活动态）两处差 <0.5px。
+  console.log('\n=== S43：点块进编辑块下方内容不跳（块高逐像素等高） ===');
+  {
+    const s43Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    const init = await page.evaluate(() => window.__runBlockJump2026());
+    if (init.err) {
+      console.log('  ⚠ S43 场景失败: ' + init.err);
+      fail++;
+    } else if (init.maskState.err) {
+      console.log('  ⚠ S43 遮罩态未量到: ' + init.maskState.err);
+      fail++;
+    } else if (!init.maskPoint) {
+      console.log('  ⚠ S43 遮罩未定位');
+      fail++;
+    } else {
+      await page.mouse.click(init.maskPoint.x, init.maskPoint.y);
+      await new Promise(r => setTimeout(r, 300));
+      const a = await page.evaluate(() => window.__s43active());
+      const m = init.maskState;
+      const dBottom = a.listBottom != null ? Math.abs(a.listBottom - m.maskBottom) : null;
+      const dPara = (a.paraTop != null && m.paraTop != null) ? Math.abs(a.paraTop - m.paraTop) : null;
+      s43Push('[列表] 活动块底 = 遮罩底（差 <0.5px，14px margin + 3px 遮罩余量已补齐）',
+        dBottom != null && dBottom < 0.5, '遮罩底=' + m.maskBottom + ' 活动底=' + a.listBottom + ' Δ=' + (dBottom == null ? '?' : dBottom.toFixed(3)));
+      s43Push('[列表] 块下段落行顶不跳（遮罩态 vs 活动态，差 <0.5px）',
+        dPara != null && dPara < 0.5, '遮罩态=' + m.paraTop + ' 活动态=' + a.paraTop + ' Δ=' + (dPara == null ? '?' : dPara.toFixed(3)));
+      const topEdge = a.edges.find((e) => e.edge === 'top');
+      const botEdge = a.edges.find((e) => e.edge === 'bottom');
+      s43Push('[列表] 边缘行类挂上且补齐生效（首行 padTop 1px / 末行 padBottom 17px）',
+        !!topEdge && !!botEdge && parseFloat(topEdge.padTop) === 1 && parseFloat(botEdge.padBottom) === 17,
+        JSON.stringify(a.edges));
+      // [S44] 圆点垂直居中锚定行盒（2026-10-15 用户截图「点入编辑黑点往上移一点点」）：
+      // 真机 WebView2 里内联 span 字体盒按基线放置，与渲染 disc（行盒中心）差 1px；
+      // 修复 = .wysiwyg-list-bullet 改 inline-block + 盒高 1.7em（=行盒高）+
+      // vertical-align:top（盒顶=行盒顶）→ ::before top:50% 严格=行盒中心。
+      // 断言：bullet 盒顶/盒高与行盒一致（引擎无关的确定性几何）。
+      {
+        const b = a.bullet;
+        if (!b || b.spanH == null) {
+          s43Push('[圆点] bullet 盒存在（wysiwyg-list-bullet span）', false);
+        } else {
+          const lineH = parseFloat(b.lineHeight);
+          const lineTop = b.preTop + parseFloat(b.padTop || '0px');
+          s43Push('[圆点] bullet 盒顶 = 行盒顶（Δ<0.5px，vertical-align:top）',
+            Math.abs(b.spanTop - lineTop) < 0.5,
+            `span=${b.spanTop.toFixed(3)} line=${lineTop.toFixed(3)}`);
+          s43Push('[圆点] bullet 盒高 = 行盒高（Δ<0.5px，1.7em）',
+            Math.abs(b.spanH - lineH) < 0.5,
+            `span=${b.spanH.toFixed(3)} line=${lineH} display=${b.display} vAlign=${b.vAlign}`);
+        }
+      }
+      // 段落块同口径（14px 边距族的另一成员）
+      const paraInit = await page.evaluate(() => {
+        const mask = Array.from(document.querySelectorAll('.wysiwyg-block-mask.preview-content')).find(function (x) {
+          return x.querySelector('p');
+        });
+        if (!mask) return null;
+        const r = mask.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + 10, maskBottom: r.bottom };
+      });
+      if (!paraInit) { console.log('  ⚠ S43 段落遮罩未定位（跳过段落块断言）'); }
+      else {
+        await page.mouse.click(paraInit.x, paraInit.y);
+        await new Promise(r => setTimeout(r, 300));
+        const p = await page.evaluate(() => {
+          const wrap = document.querySelector('.CodeMirror');
+          const lineEls = wrap.querySelectorAll('pre.CodeMirror-line');
+          let paraBottom = null;
+          for (const el of lineEls) {
+            const c = (el.className || '').toString();
+            if (c.indexOf('wysiwyg-para-line') !== -1) paraBottom = el.getBoundingClientRect().bottom;
+          }
+          const edges = Array.from(lineEls).filter((l) => (l.className || '').toString().indexOf('wysiwyg-block-edge-bottom') !== -1)
+            .map((l) => getComputedStyle(l).paddingBottom);
+          return { paraBottom, edges };
+        });
+        const dP = p.paraBottom != null ? Math.abs(p.paraBottom - paraInit.maskBottom) : null;
+        s43Push('[段落] 活动段底 = 遮罩底（差 <0.5px）',
+          dP != null && dP < 0.5, '遮罩底=' + paraInit.maskBottom + ' 活动底=' + p.paraBottom + ' Δ=' + (dP == null ? '?' : dP.toFixed(3)));
+        s43Push('[段落] 边缘行补齐生效（末行 padBottom 17px）',
+          p.edges.length > 0 && p.edges.every((v) => parseFloat(v) === 17), JSON.stringify(p.edges));
+      }
+    }
+  }
+
   if (errors.length) {
     console.log('\n页面错误:');
     for (const e of errors) console.log('  ' + e);
