@@ -364,11 +364,13 @@ try {
   console.log('\n=== S14：块「编辑」按钮（hover 显现 + 点击解罩落块首）===');
   console.log('  ' + JSON.stringify(bt));
   const checks14 = [
-    [`每个遮罩块均挂编辑按钮: ${bt.btnMasks}/${bt.totalMasks}`, bt.allHaveBtn === true],
+    [`每个非列表遮罩块均挂编辑按钮: ${bt.btnNonList}/${bt.nonListMasks}`, bt.allHaveBtn === true],
+    [`列表遮罩块不挂编辑按钮（2026-10-16 反馈 #1：点行即编辑）: ${bt.listMasks} 个列表块 / ${bt.btnList} 个带按钮`,
+      bt.listNoBtn === true],
     [`按钮默认隐藏（opacity 0，hover 显现）: ${bt.defaultOpacity}`, bt.defaultOpacity === '0'],
     [`代码块内让位复制按钮（right=76px）: ${bt.codeOffsetOk}`, bt.codeOffsetOk === true],
     [`普通块 right=10px: ${bt.plainOffset}`, bt.plainOffset === true],
-    [`点击编辑按钮：解罩 + 光标落块首行: ${JSON.stringify(bt.click)}`,
+    [`点击编辑按钮（非列表块）：解罩 + 光标落块首行: ${JSON.stringify(bt.click)}`,
       bt.click && bt.click.unmasked === true && bt.click.activeIdx >= 0 && bt.click.cursorLine === bt.click.expectedLine],
   ];
   for (const [label, ok] of checks14) {
@@ -387,7 +389,7 @@ try {
       hl.inPara.para && hl.inPara.para.bg !== 'rgba(0, 0, 0, 0)' &&
       hl.codeBg && hl.inPara.para.bg === hl.codeBg &&
       hl.inPara.para.first === true && hl.inPara.para.last === true],
-    [`编辑按钮进多行列表：旧行撤光 + 只有光标行（块首行 12）灰底（块内其余行无底、单行四角全圆）: ${JSON.stringify(hl.inList)}`,
+    [`点列表首行进多行列表（2026-10-16 起列表无编辑按钮，点行=用户路径）：旧行撤光 + 只有光标行（块首行 12）灰底（块内其余行无底、单行四角全圆）: ${JSON.stringify(hl.inList)}`,
       hl.inList && hl.inList.cursorLine === 12 && hl.inList.line2 === false && hl.inList.line12 === true &&
       hl.inList.line13 === false && hl.inList.rows === 1 && hl.inList.singleLineAllCorners === true],
     [`灰底随光标在块内移动（行 13 有底、行 12 撤底）: ${JSON.stringify(hl.inListFollow)}`,
@@ -1532,7 +1534,7 @@ try {
           bg2: window.__s35bg(2), bg3: window.__s35bg(3), bg5: window.__s35bg(5),
         }));
         console.log('  点列表后: ' + JSON.stringify(b));
-        // 光标落哪行由遮罩竖向比例决定（点击点=遮罩中心）：断言「只有光标行灰底」
+        // 点列表行走 data-source-line 精确落行（2026-10-16）：点击点=遮罩中心 → 落中间项（行3）
         const expectBg = { 2: b.bg2, 3: b.bg3, 5: b.bg5 };
         const others = [2, 3, 5].filter((n) => n !== b.cursorLine);
         checks35.push(['列表块：只有光标行灰底（块内其余行无底）',
@@ -2105,9 +2107,11 @@ try {
       const r = OL.rendered, a = OL.active;
       s41Push('[ol] 渲染态基准：ol 缩进 24px + li 项距 4px', px(r.padLeft) === 24 && px(r.liGap) === 4, JSON.stringify({ pad: r.padLeft, gap: r.liGap }));
       s41Push('[ol] 编辑态字号 = 渲染态', a.rows[0] && a.rows[0].fontSize === r.fontSize, a.rows[0] ? a.rows[0].fontSize + ' vs ' + r.fontSize : '无行');
-      s41Push('[ol] 编辑态序号位置 ≈ 渲染态（行基准 32 + 叠加 8 = 40px，差 ≤4px）', a.rows[0] && px(a.rows[0].padLeft) === 40 && a.rows[0].markX != null && r.textX != null && Math.abs(a.rows[0].markX - (r.textX - 12)) <= 4,
-        a.rows[0] && r.textX != null ? 'padLeft=' + a.rows[0].padLeft + ' markX=' + a.rows[0].markX + ' 期望≈' + (r.textX - 12) : '');
-      s41Push('[ol] 编辑态正文 x ≈ 渲染态（差 ≤5px）', a.rows[0] && a.rows[0].textX != null && r.textX != null && Math.abs(a.rows[0].textX - r.textX) <= 5,
+      s41Push('[ol] 编辑态序号 24px 右对齐槽（槽左=行基准 32、槽右缘=正文起点，复刻渲染 outside marker）',
+        a.rows[0] && px(a.rows[0].padLeft) === 32 && a.rows[0].markX === 32 && a.rows[0].markRight != null && a.rows[0].textX != null && Math.abs(a.rows[0].markRight - a.rows[0].textX) < 1,
+        a.rows[0] ? 'padLeft=' + a.rows[0].padLeft + ' 槽=[' + a.rows[0].markX + ',' + a.rows[0].markRight + '] 正文=' + a.rows[0].textX : '');
+      s41Push('[ol] 编辑态正文 x = 渲染态（2026-10-16 起 marker 槽口径，差 <1px）',
+        a.rows[0] && a.rows[0].textX != null && r.textX != null && Math.abs(a.rows[0].textX - r.textX) < 1,
         a.rows[0] && r.textX != null ? 'textX=' + a.rows[0].textX + ' vs ' + r.textX : '');
       s41Push('[ol] 编辑态项距 = 渲染态（27.2+4≈31.2，不再密集）', a.pitch != null && r.pitch != null && Math.abs(a.pitch - r.pitch) <= 1.5, 'pitch=' + a.pitch + ' vs ' + r.pitch);
       s41Push('[ol] 编辑态行 padding-bottom 4px（计入行盒高，滚动测量不失真）', a.rows[0] && px(a.rows[0].padBottom) === 4);
@@ -2375,6 +2379,159 @@ try {
       }
     } catch (e) {
       s45Push('S45 场景执行', false, String(e && e.message || e).slice(0, 120));
+    }
+  }
+
+  // ---------- S46：列表逐行点击光标落该行（2026-10-16 用户反馈 #2）+ 列表块无「编辑」按钮（#1） ----------
+  // 修复前：点列表行按整块纵向比例估算源码行——分母含遮罩底 padding、行数含松散列表空行，
+  // 点中间项恒偏上一行（harness 实测：5 项列表点第 3 项落第 2 项；3 项列表点第 2 项上半
+  // 落第 1 项 = 用户报的「光标开始会在列表的第一行，要再点一下才过去」）。
+  // 修复：点 <li> 内走 data-source-line 精确落行（remark 插件标注的块切片内行号）。
+  // 每行点击前重建编辑器（列表块须处于「有遮罩、非活动」态；点一下即解罩）。
+  {
+    console.log('\n=== S46：列表逐行点击光标落该行 + 列表块无编辑按钮 ===');
+    const s46Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    const LIST_LINES = [2, 3, 4, 5, 6]; // 5 项列表的源码行号（0-based，列表自 line 2 起）
+    for (let i = 0; i < 5; i++) {
+      await page.evaluate(() => window.__s44setup());
+      await new Promise(r => setTimeout(r, 150));
+      const pre = await page.evaluate(() => window.__s44read());
+      const pt = await page.evaluate((n) => window.__s44liPoint(n), i + 1);
+      if (!pt) {
+        s46Push('li#' + (i + 1) + ' 遮罩定位', false, '列表遮罩/项未物化');
+        continue;
+      }
+      s46Push(`点第 ${i + 1} 项前：列表块有遮罩且无「编辑」按钮（#1）`,
+        pre && pre.listMasked === true && pre.listBtn === false,
+        'listMasked=' + (pre && pre.listMasked) + ' listBtn=' + (pre && pre.listBtn));
+      await page.mouse.click(pt.x, pt.y);
+      await new Promise(r => setTimeout(r, 300));
+      const st = await page.evaluate(() => window.__s44read());
+      const expected = LIST_LINES[i];
+      s46Push(`点第 ${i + 1} 项（${pt.text}）：一次点击即解罩 + 光标精确落该行（line ${expected}）`,
+        !!st && st.listMasked === false && st.cursorLine === expected && st.lineText === '- 列表项' + '一二三四五'[i],
+        'cursor=' + (st && JSON.stringify(st.cursorLine)) + ' 期望=' + expected + ' 行文=' + (st && st.lineText));
+    }
+    // 松散列表（多段 li）：点第二段落 → 落该段自身行（<p> 标注比 <li> 更精确），而非项首行
+    await page.evaluate(() => window.__s44setupLoose());
+    await new Promise(r => setTimeout(r, 300));
+    const lp = await page.evaluate(() => window.__s44loosePoint());
+    if (!lp) {
+      s46Push('松散列表第二段落定位', false, '未物化');
+    } else {
+      await page.mouse.click(lp.x, lp.y);
+      await new Promise(r => setTimeout(r, 300));
+      const st = await page.evaluate(() => window.__s44read());
+      s46Push('松散列表点第二段落：光标落该段自身行（line ' + lp.expectLine + '，非项首行 ' + lp.itemLine + '）',
+        !!st && st.cursorLine === lp.expectLine, 'cursor=' + (st && st.cursorLine) + ' 期望=' + lp.expectLine);
+    }
+  }
+
+  // ---------- S48：混合列表黑点归位（2026-10-16 用户反馈 #3，按 CommonMark 规范） ----------
+  // 用户场景：无序列表下多次回车空行再输任务列表。CommonMark：空行只使列表变松散，
+  // 同型列表从不因空行断开 → 合并为一个 contains-task-list（空行不可见=规范行为，用户
+  // 确认按规范来、不拆块）。回归点：任务样式 ul padding:0 后，普通项原生 outside disc
+  // 相对 li 边框缘定位 → 黑点偏左 24px（用户截图「黑点与左侧距离异常」）。CSS 修复 =
+  // ::before 画圆（38–44px，与正常 ul disc 同位）。断言三处一致 + 几何。 ----------
+  console.log('\n=== S48：混合列表黑点归位（CommonMark：空行不拆列表） ===');
+  {
+    const s48Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    // 某 li 行的填充圆点扫描（截图 → canvas → 连通域：4–9px、填充率>55% 才算点）
+    const scanDotX = async (n) => {
+      const rr = await page.evaluate((s) => {
+        const li = document.querySelector('#reading > ul > li:nth-of-type(' + s + ')');
+        if (!li) return null;
+        li.scrollIntoView({ block: 'center' });
+        const r = li.getBoundingClientRect();
+        return { top: r.top, h: r.height };
+      }, n);
+      if (!rr) return null;
+      const shot = await page.screenshot({ clip: { x: 0, y: Math.max(0, rr.top - 4), width: 200, height: Math.ceil(rr.h) + 8 } });
+      const b64 = shot.toString('base64');
+      return page.evaluate(async (src) => {
+        const im = new Image();
+        im.src = 'data:image/png;base64,' + src;
+        await im.decode();
+        const W = im.width, H = im.height;
+        const cv = document.createElement('canvas');
+        cv.width = W; cv.height = H;
+        const cx = cv.getContext('2d');
+        cx.drawImage(im, 0, 0);
+        const d = cx.getImageData(0, 0, W, H).data;
+        const lum = (x, y) => { const i = (y * W + x) * 4; return 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; };
+        const seen = new Set();
+        const dots = [];
+        for (let y = 0; y < H; y++) for (let x = 0; x < 150; x++) {
+          if (seen.has(y * W + x) || lum(x, y) > 150) continue;
+          const q = [[x, y]]; seen.add(y * W + x);
+          let minx = x, maxx = x, miny = y, maxy = y, cnt = 0;
+          while (q.length) {
+            const p = q.pop(); cnt++;
+            if (p[0] < minx) minx = p[0]; if (p[0] > maxx) maxx = p[0];
+            if (p[1] < miny) miny = p[1]; if (p[1] > maxy) maxy = p[1];
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              const nx = p[0] + dx, ny = p[1] + dy;
+              if (nx < 0 || ny < 0 || nx >= 150 || ny >= H) continue;
+              const k = ny * W + nx;
+              if (seen.has(k) || lum(nx, ny) > 150) continue;
+              seen.add(k); q.push([nx, ny]);
+            }
+          }
+          const w = maxx - minx + 1, h = maxy - miny + 1;
+          if (w >= 4 && w <= 9 && h >= 4 && h <= 9 && cnt / (w * h) > 0.55) {
+            dots.push({ x: +((minx + maxx) / 2).toFixed(1), w, h });
+          }
+        }
+        return dots;
+      }, b64);
+    };
+    try {
+      // ① 参照：正常 ul 的 disc（黑点应处的位置）
+      const normal = await page.evaluate(() => window.__s48setup('normal'));
+      if (!normal) {
+        s48Push('S48 参照场景初始化（正常 ul）', false);
+      } else {
+        const refDots = [];
+        for (let i = 1; i <= 3; i++) {
+          refDots.push(await scanDotX(i));
+        }
+        const refX = refDots.filter(Boolean).map((d) => d[0] && d[0].x).filter((v) => v != null);
+        s48Push('参照：正常 ul 黑点 x≈40.5（像素扫描 38–43 区间）',
+          refX.length === 3 && refX.every((x) => x >= 38 && x <= 42.5), JSON.stringify(refX));
+        // ② 合并列表（用户场景：ul + 空行×2 + 任务列表）
+        const merged = await page.evaluate(() => window.__s48setup('merged'));
+        s48Push('块表 = 单个列表块 [0,6)（CommonMark：空行只松散、不拆列表、无独立 gap 块）',
+          JSON.stringify(merged.blocks) === JSON.stringify([[0, 6]]), JSON.stringify(merged.blocks));
+        s48Push('阅读态 = 单个 contains-task-list（普通项与任务项合并，空行被吸收为项距）',
+          merged.ulCls === 'contains-task-list', merged.ulCls);
+        // ③ 普通项黑点 x 与正常 ul disc 像素同位（旧实现偏左 24px 的回归点）
+        const mDots1 = await scanDotX(1);
+        const mDots2 = await scanDotX(2);
+        const mX = [mDots1, mDots2].filter(Boolean).map((d) => d[0] && d[0].x).filter((v) => v != null);
+        s48Push('普通项黑点 x 与正常 ul disc 同位（Δ≤1px；复选框列不受干扰）',
+          refX.length === 3 && mX.length === 2 && mX.every((x) => Math.abs(x - refX[0]) <= 1),
+          'normal=' + JSON.stringify(refX) + ' merged=' + JSON.stringify(mX));
+        // ④ 复选框 / 正文对齐 / 任务行无黑点
+        s48Push('任务项复选框 x=32（行基线，不被普通项 24px 槽拉走）',
+          merged.lis[2] && merged.lis[2].cbX != null && Math.abs(merged.lis[2].cbX - 32) < 1, 'cbX=' + (merged.lis[2] && merged.lis[2].cbX));
+        s48Push('普通项正文 x=56、任务项文本 x=56（两类正文对齐）',
+          merged.lis[0] && merged.lis[0].textX != null && Math.abs(merged.lis[0].textX - 56) < 1 &&
+          merged.lis[2] && merged.lis[2].textX != null && Math.abs(merged.lis[2].textX - 56) < 1,
+          JSON.stringify({ p0: merged.lis[0] && merged.lis[0].textX, t2: merged.lis[2] && merged.lis[2].textX }));
+        const taskDots = await scanDotX(3);
+        s48Push('任务行无黑点（复选框不是点，不被误绘/误扫）',
+          Array.isArray(taskDots) && taskDots.length === 0, JSON.stringify(taskDots));
+      }
+    } catch (e) {
+      s48Push('S48 场景执行', false, String(e && e.message || e).slice(0, 120));
     }
   }
 

@@ -1087,20 +1087,29 @@
     const { cm, ed } = makeEditor(DOC);
     ed.renderWysiwygMasks();
     await sleep(150); // 后处理 + 异步 pass flush
-    const out = { totalMasks: 0, btnMasks: 0, allHaveBtn: false, defaultOpacity: null, codeOffsetOk: null, plainOffset: null, click: null };
+    const out = { nonListMasks: 0, btnNonList: 0, listMasks: 0, btnList: 0, allHaveBtn: false, listNoBtn: false, defaultOpacity: null, codeOffsetOk: null, plainOffset: null, click: null };
     try {
+      // 2026-10-16 反馈 #1：列表块不挂「编辑」按钮（点行即编辑）→ 统计按「列表遮罩
+      // /非列表遮罩」分类（列表遮罩=遮罩内容顶层是 ul/ol，与渲染切块同一口径）。
       const masks = [];
       ed._wysiwygBlocks.forEach((b, idx) => {
         const mark = ed._wysiwygMarks.get(idx);
         if (!mark || !mark.replacedWith) return;
-        out.totalMasks++;
         const btn = mark.replacedWith.querySelector('button.block-edit-btn');
-        if (btn) {
-          out.btnMasks++;
-          masks.push({ idx, mark, btn, node: mark.replacedWith });
+        const isListMask = !!(mark.replacedWith.querySelector(':scope > ul') || mark.replacedWith.querySelector(':scope > ol'));
+        if (isListMask) {
+          out.listMasks++;
+          if (btn) out.btnList++;
+        } else {
+          out.nonListMasks++;
+          if (btn) {
+            out.btnNonList++;
+            masks.push({ idx, mark, btn, node: mark.replacedWith });
+          }
         }
       });
-      out.allHaveBtn = out.totalMasks > 0 && out.btnMasks === out.totalMasks;
+      out.allHaveBtn = out.nonListMasks > 0 && out.btnNonList === out.nonListMasks;
+      out.listNoBtn = out.listMasks > 0 && out.btnList === 0;
       const first = masks[0];
       if (first) out.defaultOpacity = getComputedStyle(first.btn).opacity;
       for (const m of masks) {
@@ -1108,8 +1117,8 @@
         if (m.node.querySelector('pre')) out.codeOffsetOk = (right === '76px');
         else if (out.plainOffset === null) out.plainOffset = (right === '10px');
       }
-      // 点击编辑：选列表块（当前应有遮罩、非活动块）
-      const target = (ed._wysiwygBlocks || []).find((b) => /^- 普通列表项 A$/.test(cm.getLine(b.start) || ''));
+      // 点击编辑：选非列表块（列表块 2026-10-16 起无块级入口，点行即编辑）
+      const target = (ed._wysiwygBlocks || []).find((b) => /^结尾段落。$/.test(cm.getLine(b.start) || ''));
       if (target) {
         const idx = (ed._wysiwygBlocks || []).indexOf(target);
         const mark = ed._wysiwygMarks.get(idx);
@@ -1164,7 +1173,8 @@
       out.inPara = { activeIdx: ed._wysiwygActiveIdx, line2: lineHas(2), para, unmasked: !ed._wysiwygMarks.has(ed._wysiwygActiveIdx) };
       // 光标移到列表块（行 12-16：CommonMark 松散列表——空行后列表项延续，整块 5 行）。
       // ⚠️ CM5 光标不能直接 setSelection 进被遮罩块（collapsed 标记钳到块边界）——走真实
-      // 用户路径：点遮罩右上「编辑」按钮进块（按钮在遮罩顶部 → 竖向比例≈0 → 光标落块首行 12）。
+      // 用户路径：点遮罩内首项行进块（2026-10-16 起列表块无「编辑」按钮，点行即用户路径；
+      // li 的 data-source-line=1 → 精确落块首行 12）。
       // → 2026-10-14 语义：**只有光标行（行 12）灰底**、块内其余行无底色；
       // 再块内移到行 13 → 灰底跟随（行 12 撤底）。
       const listBlk = (ed._wysiwygBlocks || []).find((b) => b.start === 12 && b.end >= 16);
@@ -1172,9 +1182,15 @@
       if (listBlk) {
         const idx = (ed._wysiwygBlocks || []).indexOf(listBlk);
         const mark = ed._wysiwygMarks.get(idx);
-        const btn = mark && mark.replacedWith ? mark.replacedWith.querySelector('button.block-edit-btn') : null;
-        if (btn) {
-          btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+        const li = mark && mark.replacedWith
+          ? mark.replacedWith.querySelector(':scope > ul > li, :scope > ol > li')
+          : null;
+        if (li) {
+          const r = li.getBoundingClientRect();
+          li.dispatchEvent(new MouseEvent('mousedown', {
+            bubbles: true, cancelable: true, button: 0,
+            clientX: r.x + r.width / 2, clientY: r.y + r.height / 2,
+          }));
           await sleep(120);
           cursorLine = cm.getCursor().line;
         }
@@ -2581,6 +2597,7 @@
             padLeft: cs.paddingLeft, padBottom: cs.paddingBottom, padTop: cs.paddingTop,
             fontSize: cs.fontSize,
             markX: sp ? Math.round(sp.getBoundingClientRect().left) : null,
+            markRight: sp ? Math.round(sp.getBoundingClientRect().right) : null,
             textX: tx ? Math.round(tx.getBoundingClientRect().left) : null,
           });
         }
@@ -3136,6 +3153,146 @@
     const el = document.querySelector('.CodeMirror');
     const cm = el && el.CodeMirror;
     return cm ? cm.getValue().split('\n').filter((l) => /^\|/.test(l.trim())) : null;
+  };
+
+  // ---------- S44：列表逐行点击光标落该行（2026-10-16 用户反馈 #2：点哪行光标落哪行）
+  //  + 列表块不挂「编辑」按钮（反馈 #1）。5 项列表：块首行 2（0-based），点第 N 项 →
+  //  光标落 2+N-1。松散列表：项 1 含两段（行 4/6），点第二段落落行 6（非项首行 2）。 ----------
+  const DOC44 = [
+    '普通段落行',
+    '',
+    '- 列表项一',
+    '- 列表项二',
+    '- 列表项三',
+    '- 列表项四',
+    '- 列表项五',
+    '',
+    '结尾段落行。',
+  ].join('\n');
+  const DOC44_LOOSE = [
+    '普通段落行',
+    '',
+    '- 第一项乙',
+    '',
+    '  第一段乙',
+    '',
+    '  第二段乙',
+    '- 列表项二',
+    '',
+    '结尾段落行。',
+  ].join('\n');
+  window.__s44setup = async function () {
+    const { cm, ed } = makeEditor(DOC44);
+    ed.renderWysiwygMasks();
+    await sleep(250);
+    window.__s44cm = cm; window.__s44ed = ed;
+    return true;
+  };
+  window.__s44setupLoose = async function () {
+    const { cm, ed } = makeEditor(DOC44_LOOSE);
+    ed.renderWysiwygMasks();
+    await sleep(250);
+    window.__s44cm = cm; window.__s44ed = ed;
+    return true;
+  };
+  // listMasked = 列表块（含行 2 的块）有遮罩（非活动）；listBtn = 该遮罩是否挂「编辑」按钮
+  window.__s44read = function () {
+    const ed = window.__s44ed; const cm = window.__s44cm;
+    if (!ed || !cm) return null;
+    const blks = ed._wysiwygBlocks || [];
+    const idx = blks.findIndex((b) => b.start <= 2 && 2 < b.end);
+    const listMasked = idx >= 0 && ed._wysiwygMarks.has(idx);
+    let listBtn = null;
+    if (listMasked) {
+      ed._wysiwygMarks.forEach((m) => {
+        const node = m && m.replacedWith;
+        if (listBtn === null && node && (node.querySelector(':scope > ul') || node.querySelector(':scope > ol'))) {
+          listBtn = !!node.querySelector('button.block-edit-btn');
+        }
+      });
+    }
+    const line = cm.getCursor().line;
+    return { listMasked, listBtn, cursorLine: line, lineText: cm.getLine(line) };
+  };
+  // 列表遮罩内第 n 个 li 的中心点
+  window.__s44liPoint = function (n) {
+    const ed = window.__s44ed;
+    if (!ed) return null;
+    let mask = null;
+    ed._wysiwygMarks.forEach((mark) => {
+      const node = mark && mark.replacedWith;
+      if (node && (node.querySelector(':scope > ul') || node.querySelector(':scope > ol'))) mask = node;
+    });
+    if (!mask) return null;
+    const li = mask.querySelectorAll(':scope > ul > li, :scope > ol > li')[n - 1];
+    if (!li) return null;
+    const r = li.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  };
+  // ---------- S48：混合列表黑点归位（2026-10-16 用户反馈 #3，按 CommonMark 规范）：
+  //  ul + 空行 + 任务列表 → 解析器合并为一个松散 contains-task-list（空行只是松散度，
+  //  同型列表从不因空行断开——用户确认按规范不拆块）。任务样式把 ul padding 清零后，
+  //  原生 outside disc 相对 li 边框缘定位 → 黑点偏左 24px（「黑点与左侧距离异常」）。
+  //  断言：块表单列表块 / 黑点 x 与正常 ul disc 像素同位 / 复选框 32 / 正文 56 / 任务行无点。 ----------
+  const DOC48_NORMAL = ['- 甲一', '- 乙二', '- 丙三'].join('\n');
+  const DOC48_MERGED = ['- 甲一', '- 乙二', '', '', '- [ ] 任务甲', '- [ ] 任务乙'].join('\n');
+  window.__s48setup = function (which) {
+    const R = window.UnifiedRenderer;
+    const doc = which === 'normal' ? DOC48_NORMAL : DOC48_MERGED;
+    const reading = document.getElementById('reading');
+    reading.style.fontSize = '16px';
+    reading.style.lineHeight = '1.7';
+    reading.innerHTML = R.renderMarkdown(doc, { softBreaks: false, tabSize: 4 });
+    const ul = reading.querySelector(':scope > ul');
+    if (!ul) return null;
+    const textXOf = (li) => {
+      // ⚠️ 元素间有 "\n" 空白文本节点（length=1 非空）——必须按 trim 跳过，
+      // 否则 range 落在空白节点上、left=0（2026-10-16 实测量错为 0 的根因）
+      const w = document.createTreeWalker(li, NodeFilter.SHOW_TEXT);
+      let tn = w.nextNode();
+      while (tn && tn.nodeValue.trim().length < 1) tn = w.nextNode();
+      if (!tn) return null;
+      const rg = document.createRange(); rg.setStart(tn, 0); rg.setEnd(tn, Math.max(1, tn.nodeValue.length));
+      const rr = rg.getBoundingClientRect();
+      return rr && rr.width > 0 ? rr.left : null;
+    };
+    return {
+      blocks: R.renderMarkdownBlocks(doc, { softBreaks: false, tabSize: 4 }).map((b) => [b.start, b.end]),
+      ulCls: ul.className,
+      lis: Array.from(ul.querySelectorAll(':scope > li')).map((li) => {
+        const r = li.getBoundingClientRect();
+        const p = li.querySelector('p');
+        const cb = li.querySelector('input[type="checkbox"]');
+        return {
+          top: r.top, h: r.height,
+          isTask: !!cb,
+          cbX: cb ? cb.getBoundingClientRect().left : null,
+          pX: p ? p.getBoundingClientRect().left : null,
+          textX: textXOf(li),
+        };
+      }),
+    };
+  };
+
+  // 松散列表项 1 的最后一段（行 6「第二段乙」）：点击应落该段自身行（行 6），而非项首行
+  // （行 2）。⚠️ 松散列表里标记行文字也自成 <p>（实测 3 个：第一项乙/第一段乙/第二段乙，
+  // data-source-line=1/3/5），「第二段落」= 最后一段，不能数 p:nth-of-type(2)。
+  window.__s44loosePoint = function () {
+    const ed = window.__s44ed;
+    if (!ed) return null;
+    let mask = null;
+    ed._wysiwygMarks.forEach((mark) => {
+      const node = mark && mark.replacedWith;
+      if (node && (node.querySelector(':scope > ul') || node.querySelector(':scope > ol'))) mask = node;
+    });
+    if (!mask) return null;
+    const li1 = mask.querySelector(':scope > ul > li:nth-of-type(1)');
+    if (!li1) return null;
+    const ps = Array.from(li1.querySelectorAll(':scope > p'));
+    const pLast = ps[ps.length - 1];
+    if (!pLast) return null;
+    const r = pLast.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, expectLine: 6, itemLine: 2, text: (pLast.textContent || '').trim() };
   };
 })();
 </script>

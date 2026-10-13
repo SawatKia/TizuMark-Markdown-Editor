@@ -2168,12 +2168,32 @@ body.is-resizing .side-btn {
   padding-left: 0;
 }
 
-/* 混合列表：任务列表后未空行时 remark-gfm 会把普通项也塞进同一个 <ul class="contains-task-list">，
-   导致普通项失去 marker。给这些非 task-list-item 的 li 单独恢复 disc，避免黑块/黑点丢失。 */
+/* 混合列表：普通项与任务项相邻（无论有无空行——CommonMark 里空行只把列表变松散，
+   同型列表从不因空行断开，2026-10-16 用户反馈 #3 确认按规范合并不拆块）时 remark-gfm
+   会把它们塞进同一个 <ul class="contains-task-list">。上面任务列表样式把 ul padding 清零，
+   普通项若只恢复 list-style:disc，原生 outside marker 相对 **li 边框缘**（=ul 内容缘）
+   定位 → 黑点落在 x≈13.5–19.5，比正常 ul 的黑点（x≈37.5–43.5）偏左 24px，即用户截图
+   「黑点与左侧距离异常」。修复：padding-left:24px 把正文拉回 x=56（与任务文本对齐）+
+   弃用原生 marker，::before 绝对定位画 6px 圆——落点 38–44px 与正常 ul 渲染 disc 及
+   WYSIWYG 画圆（.wysiwyg-list-bullet，同 38–44 口径）逐像素同位；top 锚点与 WYSIWYG
+   画圆同一式（S45 已用正常 ul 的 disc 像素校准 0.938em 口径），li 顶缘=首行行顶
+   （p 的 margin-top 与 li 外沿合并，无顶隙）。 */
 .preview-content ul:has(input[type="checkbox"]) > li:not(.task-list-item),
 .preview-content ul.contains-task-list > li:not(.task-list-item) {
-  list-style: disc;
+  list-style: none;
   padding-left: 24px;
+  position: relative;
+}
+.preview-content ul:has(input[type="checkbox"]) > li:not(.task-list-item)::before,
+.preview-content ul.contains-task-list > li:not(.task-list-item)::before {
+  content: '';
+  position: absolute;
+  left: 6px; /* li 左缘=ul 内容缘（任务样式 padding:0）→ 圆落 38–44px，与正常 ul disc 同位 */
+  top: calc(0.938em - 3px); /* 圆顶=行顶+12px、中心 15px：与 WYSIWYG 画圆同锚点（S45 像素验证） */
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .preview-content li input[type="checkbox"] {
@@ -2841,6 +2861,11 @@ body.is-resizing .side-btn {
 
 .CodeMirror .wysiwyg-block-mask.preview-content > *:first-child { margin-top: 0; }
 .CodeMirror .wysiwyg-block-mask.preview-content > *:last-child { margin-bottom: 0; }
+/* 列表块不挂「编辑」按钮（2026-10-16 用户反馈 #1）：按钮撤走后 ul/ol 成为 last-child，
+   上面的清零规则会把其 14px margin-bottom 抹掉、遮罩矮 14px → 渲染↔源码切换时块下内容
+   跳动（S43 逐像素等高被破坏）。no-btn 遮罩把内容元素底边距补回 14px，与有按钮时同高。
+   （列表块内容恰为单个 ul/ol 顶层元素，`*` 安全。） */
+.CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn > *:last-child { margin-bottom: 14px; }
 
 /* 纯链接引用定义块：阅读模式里定义被引用链接消费、不进正文，所见即所得必须同样
    不可见。renderMarkdownBlocks 对整块纯定义行输出本占位（零高度），遮罩照常盖行。 */
@@ -2935,8 +2960,32 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-text {
   font-family: var(--font-preview);
 }
+/* 有序序号「1.」渲染化为 24px 右对齐槽（= 渲染 ol 的 padding-left 区）：
+   ① 正文落点 = 行基准(32) + 24 = 56px，与渲染 li 内容缘逐像素重合——旧方案靠
+   「行缩进 +8px + 源空格自然宽」凑 56px，但「1. 」实测 16.48px ≠ 估算 16px →
+   正文偏右 0.48px、序号偏左 ~4px（2026-10-16 用户反馈「点入编辑态向右偏移」）。
+   ② 右对齐复刻渲染态原生 outside marker 的右缘对齐（多位数序号右缘一致）。
+   ⚠️ 用**固定 width:24px**（border-box）而非 min-width：min-width 下多位数序号
+   （内容宽 + 4px padding > 24px）会把槽撑宽 → 正文被推右 1px+（实测 10/11/12 落
+   57），与渲染态「所有序号右对齐、正文恒 56」不符。固定宽下长序号（≥4 位）向左
+   溢出进 32px 行留白（overflow 默认可见、不裁切），正文恒 56。
+   ⚠️ 源空格须零宽（.wysiwyg-ol-space），否则正文被再推一个空格宽。
+   ③ padding-right 4px——渲染态原生 marker 与正文留有 ~6px 间距（msedge 实测序号
+   墨迹右缘 50 / 正文 56），而右对齐文本字形「1.」自身右旁白仅 ~2px → 不补则序号
+   贴近正文 4px（比渲染态偏右）。补 4px（=6−2）后序号墨迹落 [45,50]≈渲染 [44,50]。
+   该值随预览字体右旁白微变（±1px），正文落点 56px 不受影响（恒等）。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-ol-marker {
   font-family: var(--font-preview);
+  display: inline-block;
+  width: 24px;
+  padding-right: 4px;
+  text-align: right;
+}
+/* 有序标记与正文之间的源空格：零宽（占位不占宽），让正文紧贴 24px 槽右缘。
+   用 inline-block+width:0 而非 font-size:0——后者可能扰动行盒基线测量。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-ol-space {
+  display: inline-block;
+  width: 0;
 }
 /* WYSIWYG 列表活动行的块级排版（2026-10-15 用户反馈：编辑态比渲染态「变小、变密、
    缩进不同」）。行类 wysiwyg-plain-text 已给同字号（16px）/行高（1.7），实测差异只剩
@@ -2945,11 +2994,13 @@ body.is-resizing .side-btn {
       用 padding-bottom 而非 margin：padding 计入行盒高（offsetHeight），CM 的
       heightAtLine 行高测量包含它，滚动/锚点计算不失真；margin 有相邻合并问题且不计入。
    ② 缩进——渲染 .preview-content ol/ul 有 padding-left:24px，正文统一从行基准+24px
-      起（=56px）；源行 marker 内联且宽度不同（16px 预览字号实测「- 」≈11px、
-      「1. 」≈16px）→ 按行型各补（24−marker 宽）：ul +13px / ol +8px，两类正文都
-      落回 56px 与阅读模式逐像素对齐（2026-15 统一 12px 时 ul 偏左 3px、ol 偏右 4px，
-      圆点更偏右 11px，用户截图对比打回）。⚠️ 必须 calc(var + Npx) 而非裸值：本规则
-      特异性更高，裸值会把基准 32px 整个替换掉（实测序号落到 x=12）。
+      起（=56px）。ul 标记行靠行缩进 +13px（24−「- 」≈11px）凑齐；ol 标记行
+      2026-10-16 起改走 24px 右对齐 marker 槽（.wysiwyg-ol-marker）——旧「+8px +
+      源空格」口径按「1. 」≈16px 估算、实测 16.48px → 正文偏右 0.48px、序号偏左
+      ~4px（用户反馈「有序列表点入编辑态向右偏移」）；ol 续行无 marker 槽，沿用
+      +8px + 源前导空格近似。2026-15 统一 12px 时 ul 偏左 3px、ol 偏右 4px，用户
+      截图对比打回。⚠️ 必须 calc(var + Npx) 而非裸值：本规则特异性更高，裸值会把
+      基准 32px 整个替换掉（实测序号落到 x=12）。
       任务列表渲染 padding-left:0（复选框贴行首，::before 已对齐行首）→ 不叠加。
       嵌套层级缩进（渲染每层 24px vs 源 2 空格）未对齐——本规则只对齐顶层左缘，
       深层保持源缩进（近似）。 */
@@ -2959,6 +3010,7 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ul {
   padding-left: calc(var(--wysiwyg-line-inset, 32px) + 13px);
 }
+/* 仅 ol 续行用（2026-10-16 起 ol 标记行改用 24px marker 槽，不再叠加行缩进） */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ol {
   padding-left: calc(var(--wysiwyg-line-inset, 32px) + 8px);
 }

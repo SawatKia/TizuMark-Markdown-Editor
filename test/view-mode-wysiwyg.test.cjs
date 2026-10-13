@@ -604,13 +604,26 @@ test('列表/代码块活动行渲染化 CSS：源符号透明化 + ::before 渲
   // 正文/序号：预览字族（与渲染列表一致）
   assert.match(css, /wysiwyg-list-text \{[\s\S]{0,100}var\(--font-preview\)/, '列表正文未用预览字族');
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,100}var\(--font-preview\)/, '有序序号未用预览字族');
+  // 有序序号 24px 右对齐槽（2026-10-16 用户反馈「有序列表点入编辑态有向右偏移」：
+  // 旧「行缩进+8px + 源空格自然宽」按「1. 」≈16px 估算、实测 16.48px → 正文偏右
+  // 0.48px、序号偏左 ~4px）。固定 width:24px（= 渲染 ol padding，border-box）右对齐
+  // + padding-right 4px（复刻渲染原生 marker ~6px 与正文间距 − 字形右旁白 ~2px）
+  // + 源空格零宽（.wysiwyg-ol-space）→ 正文恒 56px、序号墨迹 ≈ 渲染 [44,50]。
+  assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}display: inline-block;/, '有序序号未 inline-block（无法固定槽宽/右对齐）');
+  assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}width: 24px;/, '有序序号槽宽未固定 24px（= 渲染 ol padding；多位数撑宽会推正文）');
+  assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}text-align: right;/, '有序序号未右对齐（应复刻渲染 outside marker 右缘对齐）');
+  assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}padding-right: 4px;/, '有序序号未补 4px 右距（渲染 marker 与正文间距 ~6px − 字形右旁白 ~2px）');
+  assert.match(css, /wysiwyg-ol-space \{[\s\S]{0,120}width: 0;/, '有序源空格未零宽（会把正文再推一个空格宽）');
+  assert.match(wsrc2, /'wysiwyg-ol-space'/, '有序标记后未挂零宽空格 span');
+  assert.match(wsrc2, /else if \(!taskM && !olM && indentList\)/, 'ol 标记行未排除行缩进（应只由 24px marker 槽提供缩进，续行才走 -indent-ol）');
   // 列表活动行块级排版（2026-10-15 用户反馈：编辑态比渲染态「小、密、缩进不同」）：
   // 项间距 4px（渲染 li margin-bottom）+ ul/ol 行缩进在行基准 32px 上叠 12px（序号左缘对齐）
   assert.match(css, /wysiwyg-list-line \{[\s\S]{0,80}padding-bottom: 4px;/, '列表活动行缺项间距（渲染 li 有 4px margin-bottom，编辑态「密」）');
   assert.match(css, /wysiwyg-list-line\.wysiwyg-list-indent-ul \{[\s\S]{0,120}calc\(var\(--wysiwyg-line-inset, 32px\) \+ 13px\)/,
     'ul 缩进未在行基准上 calc 叠加 13px（「- 」≈11px，24−11=13 正文才落回渲染 56px）');
+  // ol **续行**仍走 +8px 行缩进 + 源前导空格近似（标记行已改用 24px marker 槽，见上）
   assert.match(css, /wysiwyg-list-line\.wysiwyg-list-indent-ol \{[\s\S]{0,120}calc\(var\(--wysiwyg-line-inset, 32px\) \+ 8px\)/,
-    'ol 缩进未在行基准上 calc 叠加 8px（「1. 」≈16px，24−16=8 正文才落回渲染 56px）');
+    'ol 续行缩进未在行基准上 calc 叠加 8px（续行无 marker 槽，沿用旧近似口径）');
   assert.match(css, /padding-left: var\(--wysiwyg-line-inset, 32px\);/, 'wysiwyg 行基准留白未变量化（列表缩进无法叠加）');
   // S42（2026-10-15 用户截图：列表项 "5454554" 编辑态带下划线、渲染态没有）：
   // gfm 模式 gitHubSpice 把 7–40 位十六进制串认成 SHA → cm-link token →
@@ -978,7 +991,7 @@ test('切标签进 wysiwyg 走预渲染管线（不裸奔源码）+ renderWysiwy
   assert.match(wsrc.slice(rIdx, rIdx + 400), /if \(this\._wysiwygPreRendering\) return;/, '预渲染在飞时 renderWysiwygMasks 未跳过（会消费到旧块表/空块表）');
 });
 
-test('块「编辑」按钮：每块挂载 + 点击先取区间再解罩 + 右键放行 + i18n/CSS 齐备', () => {
+test('块「编辑」按钮：非列表块挂载 + 列表块豁免（点行即编辑）+ 点击先取区间再解罩 + 右键放行 + i18n/CSS 齐备', () => {
   const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   assert.match(wsrc, /_addWysiwygEditButton\(node\) \{/, '缺少 _addWysiwygEditButton');
   const eIdx = wsrc.indexOf('_addWysiwygEditButton(node) {');
@@ -986,13 +999,34 @@ test('块「编辑」按钮：每块挂载 + 点击先取区间再解罩 + 右�
   assert.match(eblk, /class\.\.\.|'block-edit-btn'/, '按钮缺 block-edit-btn 类');
   assert.match(eblk, /t\('editBlock'\)/, '按钮文案未走 i18n');
   assert.match(eblk, /querySelector\('button\.block-edit-btn'\)/, '按钮未做去重（重复挂）');
-  assert.match(wsrc, /this\._addWysiwygEditButton\(node\);/, 'maskWysiwygBlock 未调用编辑按钮挂载');
+  // 列表块豁免（2026-10-16 用户反馈 #1）：maskWysiwygBlock 按块首行判列表，列表不挂按钮、
+  // 改挂 no-btn 类（补回 14px 底边距，遮罩高度与有按钮时一致）
+  assert.match(wsrc, /_wysiwygBlockIsList\(b\) \{/, '缺少 _wysiwygBlockIsList（列表块判据）');
+  const lIdx = wsrc.indexOf('_wysiwygBlockIsList(b) {');
+  const lblk = wsrc.slice(lIdx, lIdx + 700);
+  assert.match(lblk, /\^\s*\\s\{0,3\}\(\[-\*\+\]\|\\d\{1,9\}\[\.\)\]\)\(\\s\|\$\)/,
+    '列表判据未用「≤3 空格 + 列表标记，后随空格/Tab/行尾」CommonMark 口径（`1.` 独占一行也是合法标记）');
+  const mkIdx = wsrc.indexOf('maskWysiwygBlock(idx) {');
+  const mkblk = wsrc.slice(mkIdx, mkIdx + 4000);
+  assert.match(mkblk, /_wysiwygBlockIsList\(b\)\) node\.classList\.add\('wysiwyg-mask-no-btn'\);/, '列表块遮罩未挂 no-btn 类（ul 成 last-child 后 14px 边距被清零、遮罩矮 14px）');
+  assert.match(mkblk, /else this\._addWysiwygEditButton\(node\);/, 'maskWysiwygBlock 未在非列表块挂载编辑按钮');
+  // CSS：no-btn 遮罩补回内容元素 14px 底边距（特异性须压过 last-child 清零规则）
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  assert.match(css, /wysiwyg-mask-no-btn > \*:last-child \{ margin-bottom: 14px; \}/, 'no-btn 遮罩未补回 14px 底边距（渲染↔源码切换块下内容跳动）');
   // 点击：先 mark.find() 取块区间（撤罩后区间失效），再解罩 + 光标落块首
   const mIdx = wsrc.indexOf('button.block-edit-btn');
   assert.ok(mIdx > 0, '缺 block-edit-btn 的 mousedown 处理');
   const mblk = wsrc.slice(mIdx, mIdx + 900);
   assert.match(mblk, /mark\.find\(\)/, '编辑按钮点击未用 mark.find() 取块区间');
   assert.match(mblk, /setWysiwygActiveBlock/, '编辑按钮点击未解罩目标块');
+  // 列表行精确落行（2026-10-16 用户反馈 #2）：点 <li> 内走 data-source-line（remark 插件
+  // 标注的块切片内 1-based 行号）还原精确行，替代整块竖向比例估算（点中间项恒偏上一行）
+  assert.match(wsrc, /ev\.target\.closest\('li'\)/, '列表行点击未取 <li> 目标（精确落行入口缺失）');
+  const liIdx = wsrc.indexOf("ev.target.closest('li')");
+  const liblk = wsrc.slice(liIdx, liIdx + 1500);
+  assert.match(liblk, /data-source-line/, '列表行落点未用 data-source-line 标注');
+  assert.match(liblk, /r\.from\.line \+ Math\.max\(0, srcLine - 1\)/, '列表行精确行号未按「块首行 + 标注行号 − 1」还原');
+  assert.match(liblk, /!exactLine && rect\.height > 0/, '非列表项点击未保留比例估算回退');
   // 右键菜单放行（与 copy-btn 同待遇）
   const cmSrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'context-menu.js'), 'utf8');
   assert.ok((cmSrc.match(/\.copy-btn, \.block-edit-btn/g) || []).length >= 2, 'context-menu 右键放行未含 block-edit-btn（两处 handler 都要）');
@@ -1000,7 +1034,6 @@ test('块「编辑」按钮：每块挂载 + 点击先取区间再解罩 + 右�
   const i18n = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'i18n-data.js'), 'utf8');
   assert.ok((i18n.match(/editBlock: /g) || []).length >= 3, 'editBlock i18n 三语言不齐');
   // CSS：hover 显现 + 代码块块内让位复制按钮
-  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
   assert.match(css, /\.block-edit-btn \{/, '缺 .block-edit-btn 基础样式');
   assert.match(css, /\.wysiwyg-block-mask:hover \.block-edit-btn \{ opacity: 1/, '编辑按钮未在 hover 时显现');
   assert.match(css, /right: 76px/, '代码块块内编辑按钮未让位复制按钮');
@@ -1604,4 +1637,33 @@ test('下划线渲染化：<u> 原生 HTML 标签在编辑态同渲染观感（2
   assert.match(pblk, /push\(start, start \+ 3, 'wysiwyg-inline-marker'\);[\s\S]{0,120}push\(start \+ 3, end - 4, 'wysiwyg-underline'\);/,
     '开/闭标签宽度不对称（<u> 3 字符 / </u> 4 字符）未单独处理（走了对称 tick 分支会错位）');
   assert.match(css, /\.wysiwyg-underline \{ text-decoration: underline; \}/, '缺 .wysiwyg-underline 渲染样式（与渲染态 <u> 观感一致）');
+});
+
+test('混合列表黑点归位（CommonMark：空行不拆列表；::before 画圆取代原生 marker，2026-10-16 用户反馈 #3 规范口径）', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const rsrc = fs.readFileSync(path.join(ROOT, 'src', 'unified-renderer.js'), 'utf8');
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  // 用户场景 = ul + 空行 + 任务列表。CommonMark：空行只把列表变松散，同型列表从不因
+  // 空行断开 → 必须渲染为一个 contains-task-list（用户确认按规范、不拆块）。
+  // 任务样式把 ul padding 清零后，普通项若只恢复 list-style:disc，原生 outside marker
+  // 相对 **li 边框缘**（=ul 内容缘）定位 → 黑点偏左 24px（截图「黑点与左侧距离异常」）。
+  // 修复：list-style:none + padding-left:24px（正文回 x=56）+ ::before 画圆（38–44px，
+  // 与正常 ul disc / WYSIWYG 画圆同坐标）。
+  assert.match(css, /ul\.contains-task-list > li:not\(\.task-list-item\)\s*\{[^}]*list-style: none;/,
+    '混合列表普通项应 list-style:none（原生 disc 相对 li 边框缘定位会偏左 24px，不能恢复原生 marker）');
+  assert.match(css, /ul\.contains-task-list > li:not\(\.task-list-item\)\s*\{[^}]*padding-left: 24px;/,
+    '混合列表普通项未恢复 padding-left:24px（正文应与任务文本同列 x=56）');
+  assert.match(css, /li:not\(\.task-list-item\)\s*::before[^}]*left: 6px;[^}]*width: 6px;/,
+    '缺 ::before 画圆（left:6px → 38–44px，与正常 ul disc 同位）');
+  assert.match(css, /li:not\(\.task-list-item\)\s*::before[^}]*top: calc\(0\.938em - 3px\)/,
+    '画圆 top 锚点未用 WYSIWYG 画圆同式 0.938em（S45 已对正常 ul disc 做像素校准，两态同锚才同位）');
+  // 回归守卫：渲染层/遮罩层不得再出现「按空行拆列表」机制（2026-10-16 用户否决：
+  // 拆块与 CommonMark 相悖，且引入 gap 块/CM5 行合并等新问题）
+  assert.ok(!rsrc.includes('splitListAtBlankLines'), 'splitListAtBlankLines 不得复活（CommonMark 空行只松散、不拆）');
+  assert.ok(!rsrc.includes('wysiwyg-list-gap'), 'wysiwyg-list-gap 空行占位不得复活');
+  assert.ok(!wsrc.includes('listGap'), 'wysiwyg.js 的 listGap 遮罩特判不得复活');
+  // no-btn 列表判定：标记后允许「空格/Tab/行尾」（`1.` 独占一行的有序列表也是列表；
+  // 只认 \s 会误判为非列表 → 漏 no-btn，S14 实测）
+  assert.match(wsrc, /_wysiwygBlockIsList\(b\) \{[\s\S]{0,400}\(\\s\|\$\)/,
+    'no-btn 列表判定未允许标记位于行尾（`1.` 独占一行的有序列表被误判为非列表）');
 });

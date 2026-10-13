@@ -573,7 +573,12 @@
       node.setAttribute('contenteditable', 'false');
       this._wysiwygMaskTypography(node);
       this._postProcessWysiwygNode(node);
-      this._addWysiwygEditButton(node);
+      // 列表块不挂块级「编辑」按钮（2026-10-16 用户反馈 #1：点列表行直接进该行编辑，
+      // 块级源码入口多余）。⚠️ 撤按钮后 ul/ol 成为节点 last-child，styles.css 的
+      // `> *:last-child { margin-bottom: 0 }` 会把 14px 项距清零、遮罩矮 14px
+      // （渲染↔源码切换跳动）→ 挂 no-btn 类把底边距补回，遮罩高度与有按钮时逐像素一致。
+      if (this._wysiwygBlockIsList(b)) node.classList.add('wysiwyg-mask-no-btn');
+      else this._addWysiwygEditButton(node);
       this._addWysiwygTableTools(node);
 
       let mark = null;
@@ -714,11 +719,36 @@
           //    块首/块尾行，点块中间永远点不准；撤掉标记后目标行才是真实源码行。
           //    活动块索引按「目标行」查（增量刷新后闭包 idx 可能已位移，行→块才是准的）。
 
-          // 其余块：按点击纵向比例映射到块内源码行
+          // 其余块：默认按点击纵向比例映射到块内源码行
           //（表格格点击已在上方路由到 _wysiwygStartCellEdit 就地编辑，不再整块变源码）
           const rect = node.getBoundingClientRect();
           let target = r.from.line;
-          if (rect.height > 0 && r.to.line > r.from.line) {
+          // 列表项精确落行（2026-10-16 用户反馈 #2：点哪行光标落哪行）：比例估算的分母
+          // 是遮罩整高（含底 padding）、行数是块全行数（含松散列表项间空行），点中间项
+          // 恒偏上一行——实测 5 项列表点第 3 项落第 2 项、3 项列表点第 2 项上半落第 1 项。
+          // 渲染 HTML 的 <li>/<p> 自带 data-source-line（remark 插件标注的块切片内 1-based
+          // 行号，与任务复选框回写同一机制）：点击落在 <li> 内时取**最内层**标注还原精确
+          // 行（= 块首行 + 行号 − 1；松散列表多段 li 点第二段落落该段自身行而非项首行）。
+          // 仅列表项启用：代码块 pre 只标块首行号、表格格走上方就地编辑分支，比例对其更准。
+          const liEl = ev.target && ev.target.closest ? ev.target.closest('li') : null;
+          let exactLine = false;
+          if (liEl && node.contains(liEl)) {
+            let el2 = (ev.target && ev.target.nodeType === 1) ? ev.target : (ev.target ? ev.target.parentNode : null);
+            let srcLine = null;
+            while (el2 && el2 !== liEl) {
+              const v = el2.getAttribute ? el2.getAttribute('data-source-line') : null;
+              if (v) { srcLine = parseInt(v, 10); break; }
+              el2 = el2.parentNode;
+            }
+            if (!srcLine && liEl.getAttribute) {
+              srcLine = parseInt(liEl.getAttribute('data-source-line'), 10) || null;
+            }
+            if (srcLine && isFinite(srcLine)) {
+              target = r.from.line + Math.max(0, srcLine - 1);
+              exactLine = true;
+            }
+          }
+          if (!exactLine && rect.height > 0 && r.to.line > r.from.line) {
             const ratio = Math.min(1, Math.max(0, (ev.clientY - rect.top) / rect.height));
             target = r.from.line + Math.floor(ratio * (r.to.line - r.from.line));
           }
@@ -768,10 +798,23 @@
       } catch (_) { /* 区间非法则放弃该块遮罩 */ }
     },
 
+    // 块是否为顶层列表：块首行（前导空格 ≤3）+ 列表标记。块表由 remark 切分，顶层列表块
+    // 首行必是标记行；引用内列表首行是 `>`（判为引用块，保留按钮）；缩进 ≥4 空格是代码
+    // 不是列表。判据与渲染器切块同一 CommonMark 口径，保证「判为列表」⇔「渲染为 ul/ol」。
+    // ⚠️ 标记后允许「空格/Tab/行尾」三选一（CommonMark：`1.` 独占一行也是合法空项标记，
+    // 续行缩进承载内容）——只认 `\s` 会把此类有序列表误判为非列表、漏掉 no-btn。
+    _wysiwygBlockIsList(b) {
+      const cm = this.cm;
+      if (!cm || !b) return false;
+      const line = (b.start < cm.lineCount()) ? cm.getLine(b.start) : '';
+      return /^\s{0,3}([-*+]|\d{1,9}[.)])(\s|$)/.test(line);
+    },
+
     // 块右上「编辑」按钮（hover 显示，样式对齐代码块复制按钮，2026-10-11 用户反馈 #4）：
     // 大块内容的显式编辑入口，点击撤遮罩并定位块首行（见 mousedown 接管）。
     // 放在遮罩节点上而非 RenderPost：属所见即所得专属 chrome，阅读模式无「编辑块」概念。
-    // 所有渲染块统一挂（用户确认）；纯空占位块（引用定义）也挂，点了直接进该行编辑。
+    // 除列表块外统一挂（2026-10-16 用户反馈 #1：列表逐行点击即编辑，无需块级入口）；
+    // 纯空占位块（引用定义）也挂，点了直接进该行编辑。
     _addWysiwygEditButton(node) {
       if (!node || node.querySelector('button.block-edit-btn')) return;
       const btn = document.createElement('button');
@@ -2274,8 +2317,12 @@
             try {
               cm.addLineClass(lh, 'text', 'wysiwyg-list-line');
               if (ulM) cm.addLineClass(lh, 'text', 'wysiwyg-list-indent-ul');
-              else if (olM) cm.addLineClass(lh, 'text', 'wysiwyg-list-indent-ol');
-              else if (!taskM && indentList) {
+              // ⚠️ ol 标记行**不挂** -indent-ol 行缩进：24px 右对齐 marker 槽
+              // （wysiwyg-ol-marker inline-block）本身即渲染 ol 的 padding 区，正文落在
+              // 行基准+24=li 内容缘；再叠加行缩进会把整行（含正文）推右——2026-10-16
+              // 用户反馈「有序列表点入编辑态有向右偏移」的根因之一（旧 +8px 按
+              // 「1. 」≈16px 估算，实测 16.48px → 正文偏右 0.48px、序号偏左 ~4px）。
+              else if (!taskM && !olM && indentList) {
                 // 续行：按块型跟随（渲染态续行正文在 li 内容缘，同缩进近似）
                 cm.addLineClass(lh, 'text', indentOlBlock ? 'wysiwyg-list-indent-ol' : 'wysiwyg-list-indent-ul');
               }
@@ -2297,7 +2344,13 @@
             textStart = bulletAt + 1 + ulM[3].length;
           } else if (olM) {
             const numAt = olM[1].length;
+            // 有序序号「1.」→ 24px 右对齐槽（见 CSS .wysiwyg-ol-marker）；源空格零宽
+            // （.wysiwyg-ol-space）→ 正文恰好落在行基准+24=渲染 li 内容缘，与渲染态
+            // 原生 outside marker 的右对齐口径一致（固定 24px 槽：多位数序号右缘对齐、
+            // 正文恒 56px，长序号向左溢出行留白）。
             add(lineNo, numAt, numAt + olM[2].length + 1, 'wysiwyg-ol-marker');
+            add(lineNo, numAt + olM[2].length + 1,
+              numAt + olM[2].length + 1 + olM[4].length, 'wysiwyg-ol-space');
             textStart = numAt + olM[2].length + 1 + olM[4].length;
           } else {
             // 续行（缩进延续）：正文段从首个非空白字符起（前导缩进保留）
