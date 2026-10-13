@@ -245,7 +245,9 @@
       // 幽灵 → 取消（CM5 只在 input 事件读 DOM，beforeinput 取消则 CM 读不到）
       inputField.addEventListener('beforeinput', (e) => {
         if (e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph') return;
-        if (ed._lastEnterKeydownAt && Date.now() - ed._lastEnterKeydownAt < 300) e.preventDefault();
+        // 窗口 2000ms 与 editor-core 一致（2026-10-16：WebView2 IPC 延迟 + WYSIWYG 刷新
+        // 阻塞主线程 → 幽灵可在 keydown 后 300ms+ 到达，原窗口漏检 → 列表输入打散竖排）
+        if (ed._lastEnterKeydownAt && Date.now() - ed._lastEnterKeydownAt < 2000) e.preventDefault();
       });
     } catch (_) { /* 忽略 */ }
     return { cm, ed, host };
@@ -1967,8 +1969,8 @@
         const q = (s) => Array.from(document.querySelectorAll('.CodeMirror ' + s));
         return {
           bullets: q('.wysiwyg-list-bullet').length,
-          taskBoxes: q('.wysiwyg-task-box').length,
-          taskChecked: q('.wysiwyg-task-box.checked').length,
+          taskBoxes: q('.wysiwyg-task-prefix').length,
+          taskChecked: q('.wysiwyg-task-prefix.checked').length,
           olMarkers: q('.wysiwyg-ol-marker').map((e) => e.textContent),
           fences: q('.wysiwyg-code-fence').map((e) => e.textContent),
           listTexts: q('.wysiwyg-list-text').map((e) => e.textContent),
@@ -2587,7 +2589,7 @@
           const cs = getComputedStyle(el);
           const sp = Array.from(el.querySelectorAll('span')).filter(function (s) {
             const c = (s.className || '').toString();
-            return c.indexOf('wysiwyg-ol-marker') !== -1 || c.indexOf('wysiwyg-list-bullet') !== -1 || c.indexOf('wysiwyg-task-box') !== -1;
+            return c.indexOf('wysiwyg-ol-marker') !== -1 || c.indexOf('wysiwyg-list-bullet') !== -1 || c.indexOf('wysiwyg-task-prefix') !== -1 || c.indexOf('wysiwyg-task-box-zero') !== -1;
           })[0];
           const tx = Array.from(el.querySelectorAll('span')).filter(function (s) {
             return (s.className || '').toString().indexOf('wysiwyg-list-text') !== -1;
@@ -3293,6 +3295,103 @@
     if (!pLast) return null;
     const r = pLast.getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2, expectLine: 6, itemLine: 2, text: (pLast.textContent || '').trim() };
+  };
+
+  // ---------- S49：跨块选区（2026-10-16 用户反馈「选中/全选只能选中当前编辑的一小块」） ----------
+  // 5 块文档：h1[0,1) p[2,3) ul[4,6) p[7,8) quote[9,10)。初始激活 p 块（= 用户
+  // 「正在编辑某块」的现场）。__s49sel 读模型选区（归一化 from/to + 选区字符数）与
+  // 各遮罩的 wysiwyg-mask-selected 着色态。
+  window.__s49setup = function () {
+    const DOC = ['# 标题段', '', '段落一内容 A。', '', '- 列表项一', '- 列表项二', '', '段落二内容 B。', '', '> 引用行'].join('\n');
+    const { cm, ed } = window.__makeWysiwygEditor(DOC);
+    ed._wysiwygDoc = DOC;
+    ed.setWysiwygActiveBlock(1); // p 块活动（源码态），其余 4 块挂遮罩
+    cm.setCursor(2, 5);
+    cm.focus(); // Ctrl+A 等快捷键须编辑器持焦
+    window.__s49ed = ed;
+    return { lines: cm.lineCount(), len: DOC.length, activeIdx: ed._wysiwygActiveIdx };
+  };
+
+  window.__s49sel = function () {
+    const ed = window.__s49ed;
+    const cm = ed.cm;
+    // CM5 Range：anchor/head 是属性（Pos），from()/to() 才是方法
+    const ranges = cm.listSelections().map((r) => {
+      const a = r.anchor, h = r.head;
+      const from = a.line < h.line || (a.line === h.line && a.ch <= h.ch) ? a : h;
+      const to = from === a ? h : a;
+      return { from: { line: from.line, ch: from.ch }, to: { line: to.line, ch: to.ch } };
+    });
+    const masks = [];
+    ed._wysiwygMarks.forEach((mark, idx) => {
+      const node = mark && mark.replacedWith;
+      let f = null;
+      try { f = mark.find(); } catch (_) { /* 已销毁 */ }
+      masks.push({
+        idx,
+        range: f ? [f.from.line, f.from.ch, f.to.line, f.to.ch] : null,
+        selected: !!(node && node.classList.contains('wysiwyg-mask-selected')),
+      });
+    });
+    // 选区覆盖的文档字符数（含跨行的 \n；与 cm.getValue() 截取口径一致）
+    const selLen = ranges.reduce((s, r) => {
+      let len = 0;
+      for (let l = r.from.line; l <= r.to.line; l++) {
+        const txt = cm.getLine(l);
+        const a = l === r.from.line ? r.from.ch : 0;
+        const b = l === r.to.line ? r.to.ch : txt.length;
+        len += Math.max(0, b - a) + (l > r.from.line ? 1 : 0);
+      }
+      return s + len;
+    }, 0);
+    return { activeIdx: ed._wysiwygActiveIdx, ranges, masks: masks.sort((x, y) => x.idx - y.idx), selLen };
+  };
+
+  // 取某行/某遮罩的鼠标坐标
+  // ⚠️ CM5 getLineHandle/lineInfo 返回的是 Line 对象（非 DOM 元素）——真实行的 DOM 用
+  // pre.CodeMirror-line 按 DOM 序取（小文档全量渲染，序=行号）；getBoundingClientRect
+  // 是 viewport 坐标，与 Playwright mouse 同空间（S43/S46 遮罩点击同口径）
+  window.__s49point = function (what) {
+    const ed = window.__s49ed;
+    const lineEls = ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line');
+    const lineEl = (l) => lineEls[l] || null;
+    if (what === 'line2') { // p 块首行（激活态=真实行；非激活态=遮罩节点）
+      const mark = ed._wysiwygMarks.get(1);
+      const el = mark ? mark.replacedWith : lineEl(2);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left + 14, y: r.top + Math.min(10, r.height / 2) };
+    }
+    if (what === 'line9') { // quote 块（激活态=真实行；非激活态=遮罩节点）
+      const mark = ed._wysiwygMarks.get(4);
+      const el = mark ? mark.replacedWith : lineEl(9);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left + 30, y: r.top + Math.min(10, r.height / 2) };
+    }
+    if (what === 'ulMask') { // ul 遮罩（idx 2）中部
+      const mark = ed._wysiwygMarks.get(2);
+      if (!mark || !mark.replacedWith) return null;
+      const r = mark.replacedWith.getBoundingClientRect();
+      return { x: r.left + 40, y: r.top + r.height / 2 };
+    }
+    if (what === 'h1Mask' || what === 'p2Mask') { // S49③ 向下拖两端：h1=块0 顶 / p2=块3 底
+      const mark = ed._wysiwygMarks.get(what === 'h1Mask' ? 0 : 3);
+      if (!mark || !mark.replacedWith) return null;
+      const r = mark.replacedWith.getBoundingClientRect();
+      return {
+        x: r.left + r.width / 2,
+        y: what === 'h1Mask' ? r.top + Math.min(8, r.height / 2) : r.bottom - Math.min(8, r.height / 2),
+      };
+    }
+    if (what === 'ulLi') { // ul 遮罩第一个 <li>（点击测试用）
+      const mark = ed._wysiwygMarks.get(2);
+      const li = mark && mark.replacedWith ? mark.replacedWith.querySelector('li') : null;
+      if (!li) return null;
+      const r = li.getBoundingClientRect();
+      return { x: r.left + 30, y: r.top + r.height / 2 };
+    }
+    return null;
   };
 })();
 </script>

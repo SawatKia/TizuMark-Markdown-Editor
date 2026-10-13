@@ -2866,6 +2866,13 @@ body.is-resizing .side-btn {
    跳动（S43 逐像素等高被破坏）。no-btn 遮罩把内容元素底边距补回 14px，与有按钮时同高。
    （列表块内容恰为单个 ul/ol 顶层元素，`*` 安全。） */
 .CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn > *:last-child { margin-bottom: 14px; }
+/* 跨块选区（2026-10-16 用户反馈「选中和全选只能选中当前编辑的一小块」）：CM5 只给可见
+   源码行画选框，遮罩（replacedWith widget）节点无选中态 → 选区覆盖的遮罩块由
+   _applyWysiwygSelectionMaskClasses 挂本类，半透明着色与原生选区观感一致（浅蓝底，
+   透明度低于源码行原生选框以示「渲染态被选中」）。 */
+.CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-selected {
+  background-color: rgba(38, 139, 210, 0.16);
+}
 
 /* 纯链接引用定义块：阅读模式里定义被引用链接消费、不进正文，所见即所得必须同样
    不可见。renderMarkdownBlocks 对整块纯定义行输出本占位（零高度），遮罩照常盖行。 */
@@ -2970,15 +2977,17 @@ body.is-resizing .side-btn {
    57），与渲染态「所有序号右对齐、正文恒 56」不符。固定宽下长序号（≥4 位）向左
    溢出进 32px 行留白（overflow 默认可见、不裁切），正文恒 56。
    ⚠️ 源空格须零宽（.wysiwyg-ol-space），否则正文被再推一个空格宽。
-   ③ padding-right 4px——渲染态原生 marker 与正文留有 ~6px 间距（msedge 实测序号
-   墨迹右缘 50 / 正文 56），而右对齐文本字形「1.」自身右旁白仅 ~2px → 不补则序号
-   贴近正文 4px（比渲染态偏右）。补 4px（=6−2）后序号墨迹落 [45,50]≈渲染 [44,50]。
-   该值随预览字体右旁白微变（±1px），正文落点 56px 不受影响（恒等）。 */
+   ③ padding-right 5px——渲染态原生 outside marker 的**文本推进盒右缘**实测 ≈51
+   （= 正文 56 − 5：msedge 逐行像素扫描反推「1./2./3.」数字+点墨迹，2026-10-17
+   S51 复测）。右对齐文本的推进盒右缘 = 槽右缘 56 − padding-right：4px 时右缘=52，
+   数字墨迹比渲染态整体偏右 1px（用户截图「点入编辑态数字往右移动一点」的成因）；
+   5px 时右缘=51，与原生 marker 同位、墨迹重合（S51 像素断言 Δ≤1px）。
+   正文落点 56px 不受影响（槽宽恒 24px）。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-ol-marker {
   font-family: var(--font-preview);
   display: inline-block;
   width: 24px;
-  padding-right: 4px;
+  padding-right: 5px;
   text-align: right;
 }
 /* 有序标记与正文之间的源空格：零宽（占位不占宽），让正文紧贴 24px 槽右缘。
@@ -3050,10 +3059,7 @@ body.is-resizing .side-btn {
   height: 1.7em;
   vertical-align: top;
 }
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-box {
-  color: transparent;
-  position: relative;
-}
+
 /* 无序圆点：画圆而非 '•' 字符（2026-10-15 用户截图：'•' 字符比渲染态 disc marker
    小且偏上，「前面的点样式不一样」）。渲染态 disc 是浏览器按字号绘制的实心圆
    （16px 字号下直径 ≈6px）。⚠️ disc 垂直位**不是**行盒几何中心（0.85em）：
@@ -3077,31 +3083,59 @@ body.is-resizing .side-btn {
   border-radius: 50%;
   background: var(--text-primary);
 }
-/* 任务行的圆点字符不画符号（与渲染预览一致：任务项只有复选框） */
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-bullet::before {
-  content: none;
+/* 任务行前缀槽（2026-10-17 用户截图：任务列表编辑态与渲染态不一致）：
+   bullet 字符（「-」，单 token 必不拆分）进 **固定 24px** 的 inline-block 槽
+   （= 渲染态 .preview-content 复选框 16px + margin-right 8px），字符透明、
+   复选框由 ::before 画在槽左缘（left:0）；「空格 + [ ]」段进零宽槽
+   （.wysiwyg-task-box-zero，同 .wysiwyg-ol-space 机制）——
+   ① 复选框恒落 32px（行基准+0），与渲染 input[checkbox] 逐像素同位；
+   ② 正文恒落 56px（槽右缘），与渲染 li 正文同位，勾选/未勾选同位
+   （旧实现两处漂移，S51 像素实测：a) ::before left:-2ch 按等宽字口径估算
+   「- 」宽，预览比例字体下 2ch=17.25px 而「- 」实宽 10.8px → 框左移 6.4px；
+   b) 框 span 宽度随中字符变（「[x]」比「[ ]」宽 2.95px）→ 勾选行正文右移 4px）。
+   ⚠️ 24px 类只钉 bullet 字符：CM5 会把同一装饰区间按语法 token 拆成多个 span
+   （「- 」与「[ ]」是不同 token）→ 整段挂 24px 会出现两个槽（48px、正文跳 80，
+   S51 实测）。零宽段拆几个 span 总宽都是 0，天然抗拆分。
+   槽内字符保持真实宽度测量（光标精准），仅槽宽裁剪（bullet 自然宽 6.41px < 24px，
+   不溢出；零宽段字符溢出透明不可见）。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-prefix {
+  color: transparent;
+  position: relative;
+  display: inline-block;
+  width: 24px;
+  height: 1.7em;
+  vertical-align: top;
 }
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-box::before {
+/* 任务行「空格 + [ ]」零宽槽：占位不占宽（同 .wysiwyg-ol-space 机制），
+   保证正文恒落 24px 槽右缘 56px；CM5 token 拆分下多个零宽 span 总宽仍 0。
+   ⚠️ 必须 white-space:nowrap：多字符在 width:0 盒内默认逐字换行 → 盒高 = N 行高
+   → 行盒被撑高（S41 实测任务行距 31→59px）；nowrap 下单行右溢（透明不可见）。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-box-zero {
+  display: inline-block;
+  width: 0;
+  white-space: nowrap;
+  color: transparent;
+}
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-prefix::before {
   content: '';
   position: absolute;
-  /* 左移 2ch（隐藏的 "- "）：与渲染预览复选框同 x（行首），而非源 [ 的位置 */
-  left: -2ch;
+  left: 0;
   top: 0.3em;
-  width: 1em;
-  height: 1em;
+  width: 16px;
+  height: 16px;
   border: 1.5px solid var(--border-color);
   border-radius: 3px;
   background: var(--bg-primary);
   box-sizing: border-box;
 }
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-box.checked::before {
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-prefix.checked::before {
   background: var(--color-success);
   border-color: var(--color-success);
 }
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-box.checked::after {
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-prefix.checked::after {
   content: '';
   position: absolute;
-  left: calc(0.32em - 2ch);
+  left: 0.32em;
   top: 0.42em;
   width: 0.26em;
   height: 0.5em;
@@ -3231,7 +3265,8 @@ body.is-resizing .side-btn {
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-inline-marker"],
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-list-bullet"],
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-task-box"] {
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-task-prefix"],
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-task-box-zero"] {
   color: transparent;
 }
 

@@ -721,6 +721,10 @@
 
           // 其余块：默认按点击纵向比例映射到块内源码行
           //（表格格点击已在上方路由到 _wysiwygStartCellEdit 就地编辑，不再整块变源码）
+          // ⚠️ 「撤罩 + 落光标」在 mousedown 瞬间同步执行（原有时序，harness 模拟点击
+          //  只派发 mousedown）；拖选升级在其后按移动距离判定（见下）——mousedown 已
+          //  stopPropagation，CM 收不到这次按下，从遮罩起拖的选区完全由本分支自管
+          //  （2026-10-16 用户反馈「鼠标选中没法跨块」的根因之二）。
           const rect = node.getBoundingClientRect();
           let target = r.from.line;
           // 列表项精确落行（2026-10-16 用户反馈 #2：点哪行光标落哪行）：比例估算的分母
@@ -753,16 +757,66 @@
             target = r.from.line + Math.floor(ratio * (r.to.line - r.from.line));
           }
           const line = Math.min(Math.max(target, 0), cm.lineCount() - 1);
+
+          // —— 点击（同步执行，保持原行为）+ 拖选升级（2026-10-16 用户反馈「鼠标选中和
+          // 全选没法跨块」）——
+          // 本 mousedown 已 stopPropagation+preventDefault：CM 永远不会自行发起拖选，
+          // 原生选区也被禁用。旧行为在 mousedown 瞬间「切活动块 + 落光标」，从遮罩起拖
+          // 只会跳光标。现点击行为保持 mousedown 同步执行（harness 的模拟点击只派发
+          // mousedown、真机点击也须在按下瞬间解罩落光标，时序不可推迟到 mouseup），
+          // 再按移动距离**升级**为跨块选区拖拽：
+          //  · 移动 ≥4px → 以本遮罩边界为 anchor（向下/水平拖取块首 r.from、向上拖取块末
+          //    r.to——atomic 区间不可部分选中，整块作为单元；边界端点因
+          //    inclusiveLeft/Right:false 合法不钳制），head 随鼠标经 coordsChar 推进
+          //    （落在遮罩内被 skipAtomic 钳到该遮罩边界 → 选区逐遮罩单元跨越），选区视觉
+          //    由 _applyWysiwygSelectionMaskClasses 给被覆盖遮罩挂类着色。
+          //  · 释放前未移动 → 无追加动作（点击效果已在 mousedown 完成）。
+          //  拖拽期间 _wysiwygSelDragging 冻结 syncWysiwygActiveBlock：setSelection 触发的
+          //  cursorActivity 若照常切活动块，会把指针下的块解罩、几何变化打断拖拽。
           // Fresh：输入后 250ms 防抖窗口内点遮罩时块表行号滞后 → 旧表漏块 -1 → 误撤
           // 当前活动块（整篇瞬间全遮罩闪烁）；-1 时同步轻切块（parseOnly）再查。
           self.setWysiwygActiveBlock(self._wysiwygBlockIndexAtFresh(line));
           // 点击锚定：撤遮罩后把该源码行放回点击时的屏幕位置，杜绝点击后视口乱跳
-          self._wysiwygClickAnchor = { y: ev.clientY, line };
-          // 同上：scroll:false，避免 ensureCursorVisible 抢先滚动导致锚定失效
+          const downX = ev.clientX, downY = ev.clientY;
+          self._wysiwygClickAnchor = { y: downY, line };
+          // scroll:false，避免 ensureCursorVisible 抢先滚动导致锚定失效
           cm.setSelection({ line, ch: cm.getLine(line).length },
             { line, ch: cm.getLine(line).length }, { scroll: false, origin: '*mouse' });
           cm.focus();
           self._applyWysiwygClickAnchor();
+          // 拖选升级：mousedown 后移动 ≥4px → 覆盖点击结果为跨块选区（活动块保持被点块）
+          let dragging = false;
+          let anchor = null;
+          const onMove = (mv) => {
+            if (!dragging) {
+              if (Math.abs(mv.clientX - downX) + Math.abs(mv.clientY - downY) < 4) return;
+              dragging = true;
+              self._wysiwygSelDragging = true;
+              anchor = mv.clientY >= downY ? { line: r.from.line, ch: r.from.ch }
+                : { line: r.to.line, ch: r.to.ch };
+              try {
+                cm.setSelection(anchor, anchor, { scroll: false, origin: '*mouse' });
+              } catch (_) { /* 标记已失效则放弃本次拖拽 */ }
+              return;
+            }
+            try {
+              const p = cm.coordsChar({ left: mv.clientX, top: mv.clientY });
+              if (!p || !anchor) return;
+              const a = anchor, h = p;
+              const aFirst = a.line < h.line || (a.line === h.line && a.ch <= h.ch);
+              cm.setSelection(aFirst ? a : h, aFirst ? h : a, { scroll: false, origin: '*mouse' });
+            } catch (_) { /* 忽略（标记失效/坐标越界） */ }
+          };
+          const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            if (self._wysiwygSelDragging) {
+              self._wysiwygSelDragging = false;
+              self._applyWysiwygSelectionMaskClasses();
+            }
+          };
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
         } catch (_) { /* 标记已失效则忽略本次点击 */ }
       });
 
@@ -778,7 +832,13 @@
         mark = cm.markText(from, to, {
           replacedWith: node,
           clearWhenEmpty: false,
-          inclusiveLeft: true,
+          // ⚠️ 两端边界**非包含**（2026-10-16 跨块选区修复，原 inclusiveLeft:true 已移除）：
+          // inclusiveLeft:true 时连「恰好落在遮罩起点」的选区端点都算 atomic 区间内部，
+          // skipAtomic 把它推到遮罩末端 → Ctrl+A 的锚点 {0,0} 被推到首个块末尾（首块
+          // 永远选不中，实测全选 42/47 字符丢首块）、拖选端点也落不到遮罩边缘。
+          // 两端非包含后端点可合法停在遮罩边界（遮罩作为整体单元被选中），全选=全篇。
+          inclusiveLeft: false,
+          inclusiveRight: false,
           atomic: false,
         });
         this._wysiwygMarks.set(idx, mark);
@@ -2332,11 +2392,20 @@
           let textStart = line.length;
           if (taskM) {
             const bulletAt = taskM[1].length;
-            // 任务行圆点字符只透明、不画 •（渲染预览里任务项 list-style:none，只有复选框）
-            add(lineNo, bulletAt, bulletAt + 1, 'wysiwyg-list-bullet wysiwyg-task-bullet');
             const boxAt = bulletAt + 1 + taskM[3].length;
-            add(lineNo, boxAt, boxAt + 3,
-              'wysiwyg-task-box' + (/[xX]/.test(line.charAt(boxAt + 1)) ? ' checked' : ''));
+            // 任务行渲染化（2026-10-17 用户截图：任务列表编辑态与渲染态不一致）：
+            // bullet 字符单独进固定 24px 前缀槽（CSS .wysiwyg-task-prefix，= 渲染复选框
+            // 16px + margin 8px），复选框画在槽左缘（left:0）→ 框恒落行基准 32px；
+            // 「空格 + [ ]」进零宽槽（wysiwyg-task-box-zero，同 .wysiwyg-ol-space 机制）
+            // → 正文恒落 56px，勾选/未勾选同位。旧「-2ch 偏移 + 框宽随 [x]/[ ] 变」
+            // 在预览比例字体下框左漂 6.4px、勾选行正文右漂 4px（S51 实测）。
+            // ⚠️ 24px 类不可挂「- [ ]」整段：CM5 会把同一装饰区间按语法 token 拆成多个
+            // span（「- 」与「[ ]」是不同 token）→ 两个 24px 槽串联（48px、正文跳 80）。
+            // bullet 单字符必为单 token → 24px 类只钉它；其余段零宽，拆几个 span 总宽
+            // 都是 0。渲染预览里任务项 list-style:none，只有复选框（槽内字符全透明）。
+            add(lineNo, bulletAt, bulletAt + 1,
+              'wysiwyg-task-prefix' + (/[xX]/.test(line.charAt(boxAt + 1)) ? ' checked' : ''));
+            add(lineNo, bulletAt + 1, boxAt + 3, 'wysiwyg-task-box-zero');
             textStart = boxAt + 3;
           } else if (ulM) {
             const bulletAt = ulM[1].length;
@@ -2511,6 +2580,8 @@
         this._restoreWysiwygAnchor();
         // 行号可能已位移（同块内编辑）：高亮跟着重挂，保证底色始终盖在当前块上
         this._applyWysiwygActiveHighlight();
+        // 遮罩集合未变但选区覆盖判定的行号基准可能位移（同块内编辑），补刷选中着色
+        this._applyWysiwygSelectionMaskClasses();
         return;
       }
       this._captureWysiwygAnchor();
@@ -2528,6 +2599,8 @@
       this._wysiwygApplyActiveDecor(idx);
       // 撤旧块（prev）行的高亮、给新活动块行挂高亮（一次调用同时完成两端）
       this._applyWysiwygActiveHighlight();
+      // 旧块刚重挂遮罩：跨块选区可能正覆盖它，补刷选中着色
+      this._applyWysiwygSelectionMaskClasses();
     },
 
     // 按光标行现算活动块（供结构刷新路径调用：拖拽提交/增行增列重渲、防抖重算、全量
@@ -2542,8 +2615,62 @@
       return bi;
     },
 
+    // ---------------- 跨块选区视觉（2026-10-16 用户反馈「全选/选中只看到当前块」） ----------------
+    // CM5 只给可见源码行画选框；遮罩（replacedWith widget）节点永远没有选中态 →
+    // 跨块选区看起来像「只选中了当前编辑的一小块」。补齐：选区**完整覆盖**的遮罩块
+    // 给遮罩节点挂 wysiwyg-mask-selected（CSS 半透明着色）。覆盖判据
+    // range.from ≤ mark.from && mark.to ≤ range.to：atomic 标记本就不可被部分选中
+    // （端点被 skipAtomic 钳到遮罩边界），遮罩只有「整块被盖」或「完全不盖」，
+    // 该判据天然成立。调用点：selection 事件（每次选区变化）+ 各遮罩挂/撤路径
+    // （setWysiwygActiveBlock / renderWysiwygMasks / 增量刷新——遮罩变化不触发
+    // selection 事件，必须显式补刷）。
+    _applyWysiwygSelectionMaskClasses() {
+      const cm = this.cm;
+      if (!cm || !this._wysiwygMarks) return;
+      const ranges = cm.listSelections();
+      const le = (a, b) => a.line < b.line || (a.line === b.line && a.ch <= b.ch);
+      for (const mark of this._wysiwygMarks.values()) {
+        const node = mark && mark.replacedWith;
+        if (!node) continue;
+        let f = null;
+        try { f = mark.find(); } catch (_) { continue; }
+        if (!f) continue;
+        let covered = false;
+        for (const rg of ranges) {
+          if (le(rg.from(), f.from) && le(f.to, rg.to())) { covered = true; break; }
+        }
+        if (node.classList) node.classList.toggle('wysiwyg-mask-selected', covered);
+      }
+    },
+
+    // 选区变化接线（幂等；与 _ensureWysiwygTableClickGuard 同模式）。
+    // ⚠️ CM5 **没有 'selection' 事件**（on 未知事件名静默不触发，2026-10-16 实测
+    // S49 着色恒 0 的根因）——选区每次变化必触发 cursorActivity（含鼠标拖选），
+    // 挂 cursorActivity 即等价。
+    _ensureWysiwygSelectionHook() {
+      if (this._wysiwygSelectionHooked || !this.cm) return;
+      this._wysiwygSelectionHooked = true;
+      const self = this;
+      this.cm.on('cursorActivity', () => { self._applyWysiwygSelectionMaskClasses(); });
+    },
+
     syncWysiwygActiveBlock() {
       if (this.viewMode !== 'wysiwyg' || !this.cm) return;
+      // 跨块选区拖拽进行中：冻结活动块切换。
+      // 拖选 setSelection 的 head 会扫过各遮罩边界，若照常同步，指针下的块被解罩、
+      // 遮罩行消失行高变化 → 鼠标相对行几何漂移，拖选中途即断（2026-10-16 跨块选区）。
+      // 两条拖选路径都要冻：① 遮罩 mousedown 自管的拖选（_wysiwygSelDragging 置位）；
+      // ② CM 原生鼠标拖选（leftButtonSelect 期间 cm.state.selectingText 非空）——
+      // 从活动块真实行起拖时走 CM 自己的 extend/move，同样会扫过遮罩行。
+      // ⚠️ ②只在选区**非折叠**时冻：普通单击的 mousedown→mouseup 窗口内 selectingText
+      // 同样非空，但选区是折叠的——照常同步才能让光标行的灰底/高亮跟着点（S14 回归点）；
+      // 跨块拖选必然产生非折叠选区，冻结条件天然成立。释放后选区即用户意图，活动块
+      // 保持原块；下次点击/打字 cursorActivity 正常接管。
+      if (this._wysiwygSelDragging) return;
+      if (this.cm.state && this.cm.state.selectingText) {
+        const pr = this.cm.listSelections()[0];
+        if (pr && !pr.empty()) return;
+      }
       // 格编辑进行中：焦点在格内 contenteditable，任何 CM 块都不该保持源码态。进格编辑
       // 重遮罩旧块时，被钳制光标（reCheckSelection 推到块末行、仍在块内）会触发本同步——
       // 必须在此拦下，否则刚遮的块被重新解罩回源码态（2026-10-14 用户截图「点表格后
@@ -2708,6 +2835,7 @@
         this._ensureWysiwygTableClickGuard();
         this._ensureWysiwygTableTypeGuard();
         this._ensureWysiwygActiveDecorHook();
+        this._ensureWysiwygSelectionHook();
 
         this._wysiwygActiveIdx = this.wysiwygBlockIndexAt(cm.getCursor().line);
         if (full) {
@@ -2722,6 +2850,7 @@
         this.updateWysiwygBlankLines();
         this._applyWysiwygActiveHighlight();
         this._wysiwygApplyActiveDecor(this._wysiwygActiveIdx);
+        this._applyWysiwygSelectionMaskClasses();
       } finally {
         this._wysiwygReleasePreRenderLoad();
       }
@@ -2782,6 +2911,7 @@
         self.updateWysiwygBlankLines();
         self._applyWysiwygActiveHighlight();
         self._wysiwygApplyActiveDecor(self._wysiwygActiveIdx);
+        self._applyWysiwygSelectionMaskClasses();
       }, 250);
     },
 
@@ -2846,6 +2976,7 @@
       this.updateWysiwygBlankLines();
       this._applyWysiwygActiveHighlight();
       this._wysiwygApplyActiveDecor(this._wysiwygActiveIdx);
+      this._applyWysiwygSelectionMaskClasses();
     },
 
     // 视口受限遮罩：小文档（≤ maxBlocks）遮全部非活动块；大文档只遮视口 ± 边距内的块，
@@ -2912,6 +3043,8 @@
       // 显式冲刷异步 pass：operation 已结束、widget 已入 DOM。既覆盖本批新挂的遮罩，
       // 也捡回此前挂上但行未物化、此刻随视口滚动新物化的待跑节点。
       this.flushWysiwygAsyncPasses();
+      // 窗内挂/窗外撤了遮罩：跨块选区覆盖的遮罩集合变了，补刷选中着色
+      this._applyWysiwygSelectionMaskClasses();
 
       if (anchor) {
         try {

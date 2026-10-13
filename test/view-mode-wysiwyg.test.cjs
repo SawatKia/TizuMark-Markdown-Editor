@@ -467,10 +467,10 @@ test('点击遮罩块须先撤遮罩再落光标（CM5 会钳制标记区间内�
 test('活动块未变时也要消费点击锚点（残留会污染后续光标移动）', () => {
   const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   const sIdx = wsrc.indexOf('    setWysiwygActiveBlock(idx) {');
-  const sblk = wsrc.slice(sIdx, sIdx + 1400); // 开头含「在编格延迟提交」守卫（较长注释，2026-10-13 后变长，窗口需覆盖同块短路的 return）
+  const sblk = wsrc.slice(sIdx, sIdx + 1600); // 开头含「在编格延迟提交」守卫（较长注释，2026-10-13 后变长，窗口需覆盖同块短路的 return；2026-10-16 又加选区着色补刷语句）
   assert.match(sblk, /if \(prev === idx\)/, '缺少同块短路分支');
-  // 消费锚点必须在同块短路的 return 之前完成（中间允许高亮重挂等收尾语句）
-  assert.match(sblk, /this\._restoreWysiwygAnchor\(\);[\s\S]{0,220}?return;/,
+  // 消费锚点必须在同块短路的 return 之前完成（中间允许高亮重挂/选区着色补刷等收尾语句）
+  assert.match(sblk, /this\._restoreWysiwygAnchor\(\);[\s\S]{0,400}?return;/,
     '同块短路时未消费锚点（残留的 click 锚点会让下一次普通光标移动跳到无关位置）');
 });
 
@@ -492,7 +492,7 @@ test('进格编辑重遮罩旧活动块：重遮 + 无活动块 + 被钳光标�
   // ② syncWysiwygActiveBlock 守卫：进格编辑重遮罩时 reCheckSelection 把光标钳到旧块末行
   //    （仍在块内）触发的 cursorActivity 不得把刚遮的块重新激活
   const syncIdx = wsrc.indexOf('syncWysiwygActiveBlock() {');
-  const syncBlk = wsrc.slice(syncIdx, syncIdx + 800);
+  const syncBlk = wsrc.slice(syncIdx, syncIdx + 1600); // 窗口须越过拖选冻结守卫注释块（2026-10-16 跨块选区）
   assert.match(syncBlk, /if \(this\._wysiwygCellEditing\) \{ this\._restoreWysiwygAnchor\(\); return; \}/,
     'syncWysiwygActiveBlock 缺格编辑守卫（被钳 cursorActivity 会重解罩旧块）');
   // ③ 结构刷新现算：已挂遮罩的块不得「激活」（被钳光标落在遮罩块内 → -1）；
@@ -537,7 +537,7 @@ test('活动块源文态装饰：标题#前缀/列表符号/代码围栏 + 应�
   assert.match(dBlk, /RE\.fence\.test\(first\.trim\(\)\)/, '缺代码块（围栏）分支');
   assert.match(dBlk, /wysiwyg-code-fence/, '缺围栏行标记类（上下三个 ` 应灰显）');
   assert.match(dBlk, /wysiwyg-list-bullet/, '缺列表圆点标记类（• 应渲染化）');
-  assert.match(dBlk, /wysiwyg-task-box/, '缺任务复选框标记类（☐☑ 应渲染化）');
+  assert.match(dBlk, /wysiwyg-task-prefix/, '缺任务前缀槽标记类（☐☑ 应渲染化）');
   assert.match(dBlk, /checked/, '复选框无勾选态（[x] 应渲染为已勾选）');
   assert.match(dBlk, /wysiwyg-ol-marker/, '缺有序序号标记类');
   assert.match(dBlk, /!RE\.hr\.test\(first\.trim\(\)\)/, 'HR 行（- - -）未排除（会被误装饰成列表）');
@@ -570,8 +570,8 @@ test('列表/代码块活动行渲染化 CSS：源符号透明化 + ::before 渲
   // 不可用 width:0 + overflow:hidden——会连 ::before 符号一起裁掉）
   assert.match(css, /\.wysiwyg-list-bullet \{[\s\S]{0,400}color: transparent;/,
     '圆点 span 未透明化（源字符会同时可见）');
-  assert.match(css, /\.wysiwyg-task-box \{[\s\S]{0,200}color: transparent;/,
-    '复选框 span 未透明化（源字符会同时可见）');
+  assert.match(css, /\.wysiwyg-task-prefix \{[\s\S]{0,300}color: transparent;/,
+    '任务前缀槽 span 未透明化（源字符会同时可见）');
   // 画圆垂直居中锚定行盒（真机 WebView2 内联 span 字体盒按基线放置，与渲染 disc
   // 差 1px——2026-10-15 用户截图「点入编辑黑点往上移一点点」）：盒高=行高 1.7em +
   // vertical-align:top → ::before top:50% 严格=行盒中心
@@ -592,27 +592,39 @@ test('列表/代码块活动行渲染化 CSS：源符号透明化 + ::before 渲
   assert.match(css, /wysiwyg-list-bullet::before[\s\S]{0,300}top: calc\(0\.938em - 3px\);/,
     '画圆 top 须为 calc(0.938em - 3px)（disc 重心 0.906em + round/AA 取整差补偿的中值；50%/0.906em 都会在真机部分行偏 1px）');
   assert.match(css, /wysiwyg-list-bullet::before[\s\S]{0,300}background: var\(--text-primary\);/, '圆点未用正文色');
-  // 任务行圆点不画符号（渲染预览任务项 list-style:none，只有复选框）
-  assert.match(css, /wysiwyg-task-bullet::before[\s\S]{0,80}content: none;/, '任务行圆点未隐藏（与渲染预览不一致）');
+  // 任务行「- [ ]」整段进固定 24px 前缀槽（2026-10-17 用户截图：任务列表编辑态与渲染态
+  // 不一致——旧 -2ch 偏移按等宽字口径估算，预览比例字体下框左漂 6.4px；框宽随 [x]/[ ]
+  // 中字符变 → 勾选行正文右漂 4px）。固定 24px（= 渲染复选框 16px + margin 8px）
+  // 一次对齐：复选框恒落行基准 32px、正文恒落 56px、勾选/未勾选同位。
   const wsrc2 = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
-  assert.match(wsrc2, /wysiwyg-list-bullet wysiwyg-task-bullet/, '任务行未单独标记圆点字符');
-  // 复选框：未勾选边框 / 勾选主题成功色 + 白色对勾
-  assert.match(css, /wysiwyg-task-box::before[\s\S]{0,300}border: 1\.5px solid var\(--border-color\);/,
+  assert.match(wsrc2, /'wysiwyg-task-prefix' \+ \(\/\[xX]\/\.test/, 'bullet 字符未挂 24px 前缀槽');
+  assert.match(wsrc2, /'wysiwyg-task-box-zero'/,
+    '「空格 + [ ]」段未挂零宽槽（24px 类挂整段会被 CM5 按 token 拆成两个 24px 槽 → 正文跳 80，S51 实测）');
+  assert.match(css, /\.wysiwyg-task-prefix \{[\s\S]{0,300}display: inline-block;[\s\S]{0,120}width: 24px;/,
+    '任务前缀槽未固定 24px（= 渲染复选框 16px + margin 8px；框宽/位置随源字符变会漂移）');
+  assert.match(css, /\.wysiwyg-task-box-zero \{[\s\S]{0,160}width: 0;/,
+    '任务「空格 + [ ]」零宽槽缺失（[x]/[ ] 宽度差会把勾选行正文推右 4px）');
+  assert.match(css, /\.wysiwyg-task-prefix::before[\s\S]{0,200}left: 0;/,
+    '复选框未锚定槽左缘 left:0（左漂根因是旧 -2ch 随字体度量变）');
+  assert.match(css, /\.wysiwyg-task-prefix::before[\s\S]{0,400}width: 16px;[\s\S]{0,120}height: 16px;/,
+    '复选框尺寸未固定 16px（与渲染 input[checkbox] 一致）');
+  assert.match(css, /wysiwyg-task-prefix::before[\s\S]{0,300}border: 1\.5px solid var\(--border-color\);/,
     '复选框未对齐预览样式（1.5px 边框）');
-  assert.match(css, /wysiwyg-task-box\.checked::before[\s\S]{0,150}--color-success/, '勾选态未用主题成功色');
-  assert.match(css, /wysiwyg-task-box\.checked::after[\s\S]{0,200}transform: rotate\(45deg\);/, '缺勾选对勾');
+  assert.match(css, /wysiwyg-task-prefix\.checked::before[\s\S]{0,150}--color-success/, '勾选态未用主题成功色');
+  assert.match(css, /wysiwyg-task-prefix\.checked::after[\s\S]{0,200}transform: rotate\(45deg\);/, '缺勾选对勾');
   // 正文/序号：预览字族（与渲染列表一致）
   assert.match(css, /wysiwyg-list-text \{[\s\S]{0,100}var\(--font-preview\)/, '列表正文未用预览字族');
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,100}var\(--font-preview\)/, '有序序号未用预览字族');
   // 有序序号 24px 右对齐槽（2026-10-16 用户反馈「有序列表点入编辑态有向右偏移」：
   // 旧「行缩进+8px + 源空格自然宽」按「1. 」≈16px 估算、实测 16.48px → 正文偏右
   // 0.48px、序号偏左 ~4px）。固定 width:24px（= 渲染 ol padding，border-box）右对齐
-  // + padding-right 4px（复刻渲染原生 marker ~6px 与正文间距 − 字形右旁白 ~2px）
+  // + padding-right 5px（2026-10-17 S51 像素复测：渲染原生 marker 推进盒右缘 ≈51
+  // = 正文 56 − 5；4px 时右缘 52 → 序号墨迹比渲染态偏右 1px，用户截图「数字往右移」）
   // + 源空格零宽（.wysiwyg-ol-space）→ 正文恒 56px、序号墨迹 ≈ 渲染 [44,50]。
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}display: inline-block;/, '有序序号未 inline-block（无法固定槽宽/右对齐）');
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}width: 24px;/, '有序序号槽宽未固定 24px（= 渲染 ol padding；多位数撑宽会推正文）');
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}text-align: right;/, '有序序号未右对齐（应复刻渲染 outside marker 右缘对齐）');
-  assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}padding-right: 4px;/, '有序序号未补 4px 右距（渲染 marker 与正文间距 ~6px − 字形右旁白 ~2px）');
+  assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}padding-right: 5px;/, '有序序号右距须 5px（S51 像素实测：原生 marker 推进盒右缘 51；4px 时数字墨迹偏右 1px）');
   assert.match(css, /wysiwyg-ol-space \{[\s\S]{0,120}width: 0;/, '有序源空格未零宽（会把正文再推一个空格宽）');
   assert.match(wsrc2, /'wysiwyg-ol-space'/, '有序标记后未挂零宽空格 span');
   assert.match(wsrc2, /else if \(!taskM && !olM && indentList\)/, 'ol 标记行未排除行缩进（应只由 24px marker 槽提供缩进，续行才走 -indent-ol）');
@@ -1589,8 +1601,8 @@ test('token 中和 + 同身 span 渲染色重申（CM5 合并同区间 marker �
     '缺 <u> 同身 span 下划线重申（中和规则会洗掉，与渲染态 ins/u 不一致）');
   assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-strike"\][\s\S]{0,100}text-decoration: line-through;/,
     '缺 ~~ 同身 span 删除线重申（cm-strikethrough token 同身会被中和规则洗掉）');
-  assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-inline-marker"\][\s\S]{0,1200}wysiwyg-list-bullet[\][\s\S]{0,500}wysiwyg-task-box[\][\s\S]{0,120}color: transparent;/,
-    '标记透明/列表符号透明/任务框透明未用 (0,5,1) 重申（源字符会压住 ::before 渲染符号）');
+  assert.match(oblk, /wysiwyg-plain-text span\[class[*]="wysiwyg-inline-marker"\][\s\S]{0,1200}wysiwyg-list-bullet[\][\s\S]{0,500}wysiwyg-task-prefix[\][\s\S]{0,120}color: transparent;/,
+    '标记透明/列表符号透明/任务前缀槽透明未用 (0,5,1) 重申（源字符会压住 ::before 渲染符号）');
 });
 
 test('列表回车幽灵键双窗：keydown 重复投递窗（窗②）+ input 通道幽灵换行守卫', () => {
@@ -1607,8 +1619,8 @@ test('列表回车幽灵键双窗：keydown 重复投递窗（窗②）+ input �
   // extraKeys preventDefault 后浏览器不再投递 beforeinput → 窗口内到达者必为幽灵）
   assert.match(csrc, /addEventListener\('beforeinput', \(e\) => \{[\s\S]{0,120}insertLineBreak[\s\S]{0,80}insertParagraph/,
     '缺 input 通道守卫（幽灵 beforeinput insertLineBreak 会被 CM5 当裸换行读进模型）');
-  assert.match(csrc, /_lastEnterKeydownAt && Date\.now\(\) - this\._lastEnterKeydownAt < 300/,
-    '幽灵换行窗口未对齐 _lastEnterKeydownAt（300ms）');
+  assert.match(csrc, /_lastEnterKeydownAt && Date\.now\(\) - this\._lastEnterKeydownAt < 2000/,
+    '幽灵换行窗口未对齐 _lastEnterKeydownAt（2000ms；300ms 实测漏检 WebView2 IPC 延迟幽灵 → 有序列表输入打散竖排）');
   assert.match(csrc, /e\.preventDefault\(\);/, '缺幽灵 beforeinput 的取消（不取消则对应 input 事件仍触发、CM 仍读得到）');
 });
 
@@ -1666,4 +1678,90 @@ test('混合列表黑点归位（CommonMark：空行不拆列表；::before 画�
   // 只认 \s 会误判为非列表 → 漏 no-btn，S14 实测）
   assert.match(wsrc, /_wysiwygBlockIsList\(b\) \{[\s\S]{0,400}\(\\s\|\$\)/,
     'no-btn 列表判定未允许标记位于行尾（`1.` 独占一行的有序列表被误判为非列表）');
+});
+
+// ---------- 跨块选区（2026-10-16 用户反馈「用鼠标选中和全选都只能选中当前编辑的一小块，
+// 没法跨块去选中」） ----------
+// 根因（CM5 源码级）：遮罩 = markText+replacedWith → 强制 collapsed+atomic（codemirror.js
+// L6013/L6052）。① inclusiveLeft:true 让连遮罩起点都算「区间内部」→ reCheckSelection 把
+// Ctrl+A 锚点 {0,0} 推到首块末尾（实测 42/47 字符丢首块）；② 遮罩 mousedown 的
+// stopPropagation+preventDefault 让 CM 收不到按下 → 从遮罩起拖永远是「跳光标」；③ CM 只给
+// 可见源码行画选框，widget 节点无选中态 → 跨块选区看起来只剩当前活动块。
+test('跨块选区：遮罩两端非包含（选区端点可停在遮罩边界，Ctrl+A 不得丢首块）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const mIdx = wsrc.indexOf('maskWysiwygBlock(idx) {');
+  assert.ok(mIdx > 0, '缺 maskWysiwygBlock');
+  const mblk = wsrc.slice(mIdx, mIdx + 16000); // 窗口须覆盖到 mousedown 接管块之后的 markText 调用（接管块 2026-10-16 点击/拖拽分流后变长）
+  const optIdx = mblk.indexOf('cm.markText(from, to, {');
+  assert.ok(optIdx > 0, 'maskWysiwygBlock 未用 markText');
+  const opts = mblk.slice(optIdx, optIdx + 700);
+  assert.match(opts, /inclusiveLeft: false/, '遮罩标记须 inclusiveLeft:false（true 时 {0,0} 算区间内部被推到遮罩末 → Ctrl+A 丢首块）');
+  assert.match(opts, /inclusiveRight: false/, '遮罩标记须 inclusiveRight:false（右端点同样要能停在遮罩边界）');
+});
+
+test('跨块选区：遮罩 mousedown 点击同步执行 + ≥4px 升级为选区拖拽', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const md = mousedownBlock(wsrc);
+  // 点击行为必须在 mousedown 同步执行（不可推迟到 mouseup）：harness 模拟点击只派发
+  // mousedown，真机按下瞬间解罩落光标也是既有交互契约（S1/S3/S15 全依赖此时序）
+  assert.match(md, /self\.setWysiwygActiveBlock\(self\._wysiwygBlockIndexAtFresh\(line\)\);[\s\S]{0,700}cm\.focus\(\);[\s\S]{0,80}self\._applyWysiwygClickAnchor\(\);/,
+    '点击行为未在 mousedown 同步执行（撤罩目标块 + 落行尾 + 点击锚定）');
+  // 升级阈值：Manhattan 距离 <4px 视为未移动（不触发拖选）
+  assert.match(md, /Math\.abs\(mv\.clientX - downX\) \+ Math\.abs\(mv\.clientY - downY\) < 4/,
+    '缺 4px 升级阈值（从遮罩起拖永远是跳光标，选区跨不了块）');
+  // 拖拽期冻结活动块同步（setSelection 触发 cursorActivity 会解罩指针下的块打断拖拽）
+  assert.match(md, /self\._wysiwygSelDragging = true/, '拖拽分支未置 _wysiwygSelDragging 冻结位');
+  const sIdx = wsrc.indexOf('syncWysiwygActiveBlock() {');
+  const sblk = wsrc.slice(sIdx, sIdx + 1400);
+  assert.match(sblk, /if \(this\._wysiwygSelDragging\) return;/, 'syncWysiwygActiveBlock 缺遮罩拖选冻结守卫');
+  // CM 原生拖选冻结须限定「非折叠选区」：普通单击窗口内 selectingText 也非空但选区折叠，
+  // 无差别冻结会打断光标行灰底跟随（S15 回归）
+  assert.match(sblk, /if \(this\.cm\.state && this\.cm\.state\.selectingText\) \{[\s\S]{0,200}if \(pr && !pr\.empty\(\)\) return;/,
+    'syncWysiwygActiveBlock 缺 CM 原生拖选冻结守卫（活动块真实行起拖扫过遮罩行会中途解罩、几何漂移打断拖选）');
+  // 拖拽 anchor 取遮罩边界（atomic 整块单元：向下/水平拖取块首、向上拖取块末）
+  assert.match(md, /anchor = mv\.clientY >= downY \? \{ line: r\.from\.line, ch: r\.from\.ch \}[\s\S]{0,80}\{ line: r\.to\.line, ch: r\.to\.ch \}/,
+    '拖拽 anchor 未取遮罩边界（atomic 区间不可部分选中，须以块首/块末为端点整块选中）');
+  // head 随鼠标经 coordsChar 推进（落在遮罩内被 skipAtomic 钳到该遮罩边界 → 逐块跨越）
+  assert.match(md, /cm\.coordsChar\(\{ left: mv\.clientX, top: mv\.clientY \}\)/, '拖拽 head 未随鼠标坐标映射推进');
+});
+
+test('跨块选区：被选区覆盖的遮罩挂选中着色类（CM 不给 widget 画选框，须手动补）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  assert.match(wsrc, /_applyWysiwygSelectionMaskClasses\(\) \{/, '缺 _applyWysiwygSelectionMaskClasses');
+  // 选区变化接线：⚠️ CM5 没有 'selection' 事件（on 未知事件静默不触发）——必须挂
+  // cursorActivity（选区每次变化必触发，含鼠标拖选）
+  assert.match(wsrc, /_ensureWysiwygSelectionHook\(\) \{[\s\S]{0,400}this\.cm\.on\('cursorActivity'/, '选区着色未挂 cursorActivity（CM5 无 selection 事件，挂错事件名着色恒不生效）');
+  assert.ok(!/cm\.on\('selection'/.test(wsrc), "CM5 没有 'selection' 事件——挂错事件名会静默失效");
+  assert.match(wsrc, /this\._ensureWysiwygSelectionHook\(\);/, 'renderWysiwygMasks 未调 _ensureWysiwygSelectionHook');
+  // 覆盖判据：range.from ≤ mark.from 且 mark.to ≤ range.to（atomic 遮罩只有整块被盖/不盖）
+  const aIdx = wsrc.indexOf('_applyWysiwygSelectionMaskClasses() {');
+  const ablk = wsrc.slice(aIdx, aIdx + 1500);
+  assert.match(ablk, /classList\.toggle\('wysiwyg-mask-selected', covered\)/, '未给遮罩节点挂 wysiwyg-mask-selected 类');
+  // 遮罩挂/撤不触发 selection 事件：各变更路径须显式补刷（setWysiwygActiveBlock 两端 +
+  // 渲染/刷新路径）——只认 selection 事件一条路会让跨块选区下的点击切换瞬间丢着色
+  const calls = (wsrc.match(/this\._applyWysiwygSelectionMaskClasses\(\);|self\._applyWysiwygSelectionMaskClasses\(\);/g) || []).length;
+  assert.ok(calls >= 6, `遮罩变更路径补刷不足（应 ≥6 处：setWysiwygActiveBlock 两端 + 渲染/刷新/视口，实得 ${calls}）`);
+  // CSS 着色
+  assert.match(css, /\.wysiwyg-block-mask\.preview-content\.wysiwyg-mask-selected \{[^}]*background-color: rgba\(38, 139, 210, 0\.16\);/,
+    '缺 .wysiwyg-mask-selected 半透明着色（选区覆盖的遮罩块无选中观感）');
+});
+
+// ---------- 有序列表输入打散竖排（2026-10-16 用户截图） ----------
+// 根因：幽灵 insertLineBreak（WebView2 input 通道）经 IPC 延迟 + WYSIWYG 防抖刷新阻塞
+// 主线程后，可在 Enter keydown 后 300ms+ 才到达 → 原 300ms 守卫窗外泄漏 → 裸换行进
+// 模型、光标逃逸出列表，逐字+逐幽灵换行 = 每字一行。修复 = 窗口扩到 2000ms（安全性：
+// Enter keydown 恒被 extraKeys 消费 → 窗口内的 insertLineBreak 必是幽灵）。
+test('幽灵换行守卫窗口须覆盖 WebView2 IPC 延迟（300ms 实测漏检，须 2000ms）', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'editor-core.js'), 'utf8');
+  const harness = fs.readFileSync(path.join(ROOT, '_wysiwyg_compare.html'), 'utf8');
+  const GHOST = "e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph'";
+  const gIdx = core.indexOf(GHOST);
+  assert.ok(gIdx > 0, 'editor-core 缺幽灵换行守卫（input 通道，2026-10-15 修复不得回退）');
+  assert.match(core.slice(gIdx, gIdx + 1600), /_lastEnterKeydownAt < 2000/,
+    'editor-core 幽灵换行守卫窗口不足（300ms 漏检 WebView2 延迟幽灵 → 有序列表输入打散竖排）');
+  const hIdx = harness.indexOf(GHOST);
+  assert.ok(hIdx > 0, 'harness 缺幽灵换行守卫（与 editor-core 同一守卫）');
+  assert.match(harness.slice(hIdx, hIdx + 800), /_lastEnterKeydownAt < 2000/,
+    'harness 幽灵换行守卫窗口与 editor-core 不同步（浏览器回归无法复现真机守卫行为）');
 });

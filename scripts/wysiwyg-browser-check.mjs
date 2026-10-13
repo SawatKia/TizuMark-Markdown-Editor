@@ -1290,8 +1290,8 @@ try {
         await new Promise(rr => setTimeout(rr, 200));
         const st = await read();
         console.log('  点 task 后: ' + JSON.stringify(st));
-        checks31.push(['点 task：2 圆点 + 2 复选框（1 勾选）+ 任务文字（含框后源空格间距）',
-          st.bullets === 2 && st.taskBoxes === 2 && st.taskChecked === 1 &&
+        checks31.push(['点 task：0 圆点（任务项渲染态无黑点）+ 2 前缀槽（1 勾选）+ 任务文字（含框后源空格间距）',
+          st.bullets === 0 && st.taskBoxes === 2 && st.taskChecked === 1 &&
           st.listTexts.join('|') === ' 未完成任务| 已完成任务' && st.masks === 4]);
       }
       r = await page.evaluate(() => window.__s31rects());
@@ -1858,7 +1858,7 @@ try {
         await sleep38(250);
         const iT = await page.evaluate((n) => window.__s38spanInfo(n), t2);
         const iT0 = await page.evaluate((n) => window.__s38spanInfo(n), t2 - 1);
-        const box = spanOf(iT, 'wysiwyg-task-box'), box0 = spanOf(iT0, 'wysiwyg-task-box');
+        const box = spanOf(iT, 'wysiwyg-task-prefix'), box0 = spanOf(iT0, 'wysiwyg-task-prefix');
         chk38('任务行：复选框渲染化（[x] 勾选态 / [ ] 未勾选态）',
           !!box && box.cls.indexOf('checked') !== -1 && !!box0 && box0.cls.indexOf('checked') === -1,
           JSON.stringify({ box: box && box.cls, box0: box0 && box0.cls }));
@@ -2532,6 +2532,414 @@ try {
       }
     } catch (e) {
       s48Push('S48 场景执行', false, String(e && e.message || e).slice(0, 120));
+    }
+  }
+
+  // ---------- S49：跨块选区（2026-10-16 用户反馈「用鼠标选中和全选都只能选中当前编辑
+  // 的一小块，没法跨块去选中」） ----------
+  // 根因：遮罩 = CM5 replacedWith → 强制 atomic。① inclusiveLeft:true 把 Ctrl+A 锚点
+  // {0,0} 钳到首块末（42/47 字符丢首块）；② 遮罩 mousedown stopPropagation → 从遮罩
+  // 起拖 CM 收不到按下（只跳光标）；③ CM 不给 widget 画选框 + cursorActivity 切活动块
+  // → 视觉上只剩当前块高亮。修复：两端非包含 + 遮罩选区着色类 + 遮罩 mousedown 点击/
+  // 拖拽分流（4px 阈值，拖拽期冻结活动块同步）。
+  console.log('\n=== S49：跨块选区（Ctrl+A 全篇 / 拖拽跨块 / 遮罩起拖） ===');
+  {
+    const s49Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    // 从 p1 到 p2 的真实鼠标拖拽（10 步，模拟人手拖动）
+    const drag49 = async (p1, p2, steps = 10) => {
+      await page.mouse.move(p1.x, p1.y);
+      await page.mouse.down();
+      for (let i = 1; i <= steps; i++) {
+        await page.mouse.move(p1.x + ((p2.x - p1.x) * i) / steps, p1.y + ((p2.y - p1.y) * i) / steps);
+        await page.waitForTimeout(15);
+      }
+      await page.mouse.up();
+      await page.waitForTimeout(60);
+    };
+    try {
+      const setup = await page.evaluate(() => window.__s49setup());
+      s49Push('S49 初始化（5 块 / p 块活动 / 4 遮罩）',
+        !!setup && setup.lines === 10 && setup.len === 47 && setup.activeIdx === 1, JSON.stringify(setup));
+      if (setup) {
+        // ① Ctrl+A：模型选区必须覆盖全篇（含首块；修复前锚点被钳到首块末，42/47 字符）
+        await page.keyboard.press('Control+a');
+        await page.waitForTimeout(80);
+        let sel = await page.evaluate(() => window.__s49sel());
+        const r0 = (sel.ranges[0] || {});
+        s49Push('Ctrl+A 全选 = 全篇（含首块；修复前丢首块 42/47）',
+          r0.from && r0.from.line === 0 && r0.from.ch === 0 && r0.to && r0.to.line === 9 && r0.to.ch === 5 && sel.selLen === 47,
+          JSON.stringify(sel.ranges) + ' selLen=' + sel.selLen + '/47');
+        const selMasks1 = (sel.masks || []).filter((m) => m.selected).length;
+        s49Push('全选时 4 个遮罩块全部挂选中着色类（跨块选区视觉）',
+          (sel.masks || []).length === 4 && selMasks1 === 4,
+          'masks=' + (sel.masks || []).length + ' selected=' + selMasks1);
+
+        // ② 从活动块（Ctrl+A 后 head 在 quote → 活动块已切到 quote，行 9 为真实行）
+        //    向上拖到 p 遮罩（行 2）：CM 原生拖选路径，head 被 skipAtomic 钳到各遮罩
+        //    边界逐块跨越（两端非包含后端点能落在遮罩边缘）
+        const c1 = await page.evaluate(() => window.__s49point('line9'));
+        const c2 = await page.evaluate(() => window.__s49point('line2'));
+        s49Push('S49 拖点取位（quote 行 / p 行）', !!c1 && !!c2, JSON.stringify({ c1, c2 }));
+        if (c1 && c2) {
+          // 先普通点击折叠选区（有选区时 mousedown 走 CM leftButtonStartDrag 文本拖放，
+          // 不是拖选；点真实行由 CM 自己处理，光标落点击处）
+          await page.mouse.click(c1.x, c1.y);
+          await page.waitForTimeout(80);
+          await drag49(c1, c2);
+          sel = await page.evaluate(() => window.__s49sel());
+          const r1 = (sel.ranges[0] || {});
+          const spans1 = r1.from && r1.from.line <= 2 && r1.to && r1.to.line >= 7;
+          s49Push('活动块起拖到 p 遮罩：选区跨块（head 到 quote 末、覆盖 p 块边界）',
+            spans1 && sel.selLen >= 25, // (2,x)→(9,5) 全距=37 字符（含 6 个换行），钳位后 ≥25
+            JSON.stringify(sel.ranges) + ' selLen=' + sel.selLen);
+          const selMasks2 = (sel.masks || []).filter((m) => m.selected).length;
+          s49Push('拖选覆盖的遮罩挂着色类（≥2：ul/p2 必被整块覆盖）', selMasks2 >= 2,
+            'selected=' + selMasks2 + ' ' + JSON.stringify((sel.masks || []).map((m) => m.selected)));
+        }
+
+        // ③ 从遮罩起拖（h1 遮罩，行 0）向下拖到 p2 遮罩（行 7）：修复前 stopPropagation
+        //    让 CM 收不到 mousedown → 只跳光标、selLen=0；现 mousedown 点击行为同步执行
+        //    （h1 块激活）后升级为拖选——anchor 取遮罩块首 (0,0)，head 向下经 coordsChar
+        //    推进、被各遮罩 skipAtomic 钳到边界（向下拖钳到块首，CM 钳位方向依 head 移动
+        //    方向 bias）逐块跨越。路径上的 p/ul 遮罩整块被选区覆盖 → 着色类。
+        //    注：被拖到的终点遮罩 head 钳在其块首，自身不被覆盖（CM atomic 单元语义）
+        const c3 = await page.evaluate(() => window.__s49point('h1Mask'));
+        const c4 = await page.evaluate(() => window.__s49point('p2Mask'));
+        s49Push('S49 拖点取位（h1 遮罩 / p2 遮罩）', !!c3 && !!c4, JSON.stringify({ c3, c4 }));
+        if (c3 && c4) {
+          await drag49(c3, c4);
+          sel = await page.evaluate(() => window.__s49sel());
+          const r2 = (sel.ranges[0] || {});
+          const spans2 = r2.from && r2.from.line <= 3 && r2.to && r2.to.line >= 5;
+          s49Push('遮罩起拖产生跨块选区（修复前只跳光标 selLen=0）',
+            spans2 && sel.selLen >= 20, // (0,0)→(7,0) 全距=35 字符（含 6 换行），钳位后 ≥20
+            JSON.stringify(sel.ranges) + ' selLen=' + sel.selLen);
+          const selMasks3 = (sel.masks || []).filter((m) => m.selected).length;
+          s49Push('遮罩起拖：路径上 p/ul 遮罩整块覆盖挂着色类（≥2）', selMasks3 >= 2,
+            'selected=' + selMasks3 + ' ' + JSON.stringify((sel.masks || []).map((m) => m.selected)));
+        }
+
+        // ④ 普通点击（不动）行为保持：点 ul 遮罩第一个 <li> → ul 块激活 + 光标落该行行尾
+        const c5 = await page.evaluate(() => window.__s49point('ulLi'));
+        s49Push('S49 点击取位（ul 首项）', !!c5, JSON.stringify(c5));
+        if (c5) {
+          await page.mouse.click(c5.x, c5.y);
+          await page.waitForTimeout(120);
+          sel = await page.evaluate(() => window.__s49sel());
+          const rc = (sel.ranges[0] || {});
+          s49Push('点击遮罩仍走原行为（ul 块激活 + 光标落行尾 + 无选区）',
+            sel.activeIdx === 2 && rc.from && rc.from.line === 4 && rc.from.ch === 6 && sel.selLen === 0,
+            'activeIdx=' + sel.activeIdx + ' sel=' + JSON.stringify(sel.ranges) + ' selLen=' + sel.selLen);
+        }
+
+        // ⑤ 跨块选区上打字：Ctrl+A + 输入 → 整篇替换、遮罩干净重挂（atomic 标记随
+        //    区间被消费而清除，250ms 防抖刷新按新块表重挂）
+        await page.keyboard.press('Control+a');
+        await page.waitForTimeout(50);
+        await page.keyboard.type('X');
+        await page.waitForTimeout(450);
+        const after = await page.evaluate(() => {
+          const ed = window.__s49ed;
+          return { value: ed.cm.getValue(), marks: ed._wysiwygMarks.size, activeIdx: ed._wysiwygActiveIdx };
+        });
+        s49Push('跨块选区上打字整篇替换 + 遮罩重挂（无残留原子标记/崩溃）',
+          after.value === 'X' && after.marks === 0 && after.activeIdx === 0, JSON.stringify(after));
+      }
+    } catch (e) {
+      s49Push('S49 场景执行', false, String(e && e.message || e).slice(0, 120));
+    }
+  }
+
+  // ---------- S50：有序列表 IME 输入（2026-10-16 用户截图「有序列表输入时会出现
+  // 这种情况」：列表项被打散成每字一行的竖排 + 光标逃逸）。根因：WebView2 输入经
+  // IPC 投递，WYSIWYG 防抖刷新（computeWysiwygBlocks+重挂遮罩）阻塞主线程时，幽灵
+  // insertLineBreak（input 通道）可在 Enter keydown 后 300ms+ 才到达 → 原 300ms 守卫
+  // 窗外泄漏 → 裸换行进模型、光标逃出列表，逐字+逐幽灵换行 = 每字一行。修复 = 守卫
+  // 窗口 300→2000ms（editor-core + harness 同步）。本场景：IME 上屏 + 选字确认 Enter
+  // + **400ms 延迟幽灵**（旧窗口必漏）→ 必须被吞、文档逐字成行不打散；普通 Enter
+  // 续行不受影响（防过度吞除）。
+  console.log('\n=== S50：有序列表输入幽灵换行（WebView2 IME 延迟幽灵） ===');
+  {
+    const s50Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    try {
+      const setup = await page.evaluate(() => {
+        const DOC = ['1. 第一项内容', '2. 第二项内容', '', '段落内容测试。'].join('\n');
+        const { cm, ed } = window.__makeWysiwygEditor(DOC);
+        ed.setWysiwygActiveBlock(0); // 列表块活动
+        cm.setCursor(1, cm.getLine(1).length); // 第二项行尾
+        cm.focus();
+        window.__s50ed = ed;
+        return { lines: cm.lineCount() };
+      });
+      s50Push('S50 初始化（有序列表 2 项 / 列表块活动）', !!setup && setup.lines === 4, JSON.stringify(setup));
+      if (setup) {
+        // ① Enter 列表续行 → "3. "（正常路径，防抖窗口前无 IME 上下文）
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(100);
+        let v = await page.evaluate(() => window.__s50ed.cm.getValue());
+        s50Push('Enter 列表续行 "3. "（正常路径）',
+          v === '1. 第一项内容\n2. 第二项内容\n3. \n\n段落内容测试。', JSON.stringify(v));
+
+        // ② IME 上屏 + 选字确认 Enter + 400ms 延迟幽灵 insertLineBreak（旧 300ms 窗口
+        //    在此必漏 → 修复后必须吞）
+        await page.evaluate(() => {
+          const ed = window.__s50ed;
+          const cm = ed.cm;
+          const input = cm.getInputField();
+          cm.replaceSelection('啊', 'end'); // IME 候选上屏（= compositionend 后 CM 读 DOM）
+          input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '啊' }));
+        });
+        await page.keyboard.press('Enter'); // 选字确认 Enter（format.js 窗①应吞，不续行）
+        await page.waitForTimeout(400); // 幽灵延迟 400ms 到达（> 旧窗口 300ms）
+        const ghost = await page.evaluate(() => {
+          const ed = window.__s50ed;
+          const input = ed.cm.getInputField();
+          const e = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertLineBreak', data: '\n' });
+          input.dispatchEvent(e);
+          if (!e.defaultPrevented) ed.cm.replaceSelection('\n', 'end', '+insert'); // 未吞 = 模拟 CM 读到 DOM 换行（泄漏路径）
+          return { canceled: e.defaultPrevented };
+        });
+        await page.waitForTimeout(300);
+        const s50a = await page.evaluate(() => {
+          const ed = window.__s50ed;
+          const cm = ed.cm;
+          return { value: cm.getValue(), cursor: cm.getCursor(), activeIdx: ed._wysiwygActiveIdx };
+        });
+        s50Push('400ms 延迟幽灵换行被吞（旧 300ms 窗口在此泄漏）', ghost.canceled === true, JSON.stringify(ghost));
+        s50Push('文档完好（无裸换行、光标留在 "3. 啊" 行、列表块仍活动）',
+          s50a.value === '1. 第一项内容\n2. 第二项内容\n3. 啊\n\n段落内容测试。' &&
+          s50a.cursor.line === 2 && s50a.cursor.ch === 4 && s50a.activeIdx === 0,
+          JSON.stringify(s50a).slice(0, 200));
+
+        // ③ 连续 IME 输入（每字后跟一个 400ms 延迟幽灵）→ 整行成文，不逐字打散
+        for (const ch of ['手', '动', '阀']) {
+          await page.evaluate((c) => {
+            const ed = window.__s50ed;
+            const input = ed.cm.getInputField();
+            ed.cm.replaceSelection(c, 'end');
+            input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: c }));
+          }, ch);
+          await page.keyboard.press('Enter');
+          await page.waitForTimeout(400);
+          await page.evaluate(() => {
+            const ed = window.__s50ed;
+            const input = ed.cm.getInputField();
+            const e = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertLineBreak', data: '\n' });
+            input.dispatchEvent(e);
+            if (!e.defaultPrevented) ed.cm.replaceSelection('\n', 'end', '+insert');
+          });
+          await page.waitForTimeout(100);
+        }
+        const s50b = await page.evaluate(() => {
+          const ed = window.__s50ed;
+          const cm = ed.cm;
+          return { value: cm.getValue(), cursor: cm.getCursor(), activeIdx: ed._wysiwygActiveIdx };
+        });
+        s50Push('连续 IME 输入 + 逐字延迟幽灵：列表项一行成文（修复前打散竖排每字一行）',
+          s50b.value === '1. 第一项内容\n2. 第二项内容\n3. 啊手动阀\n\n段落内容测试。' &&
+          s50b.cursor.line === 2 && s50b.cursor.ch === 7 && s50b.activeIdx === 0,
+          JSON.stringify(s50b).slice(0, 200));
+
+        // ④ 输入停顿后的普通 Enter 仍正常续行 "4. "（守卫不过度吞合法换行：
+        //    距上次 compositionend 已 >250ms、距上次 Enter keydown 已 >150ms）
+        await page.waitForTimeout(300);
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(100);
+        v = await page.evaluate(() => window.__s50ed.cm.getValue());
+        s50Push('普通 Enter 仍续行 "4. "（守卫不过度吞除）',
+          v === '1. 第一项内容\n2. 第二项内容\n3. 啊手动阀\n4. \n\n段落内容测试。', JSON.stringify(v));
+      }
+    } catch (e) {
+      s50Push('S50 场景执行', false, String(e && e.message || e).slice(0, 120));
+    }
+  }
+
+  // ---------- S51：有序/任务列表 编辑态 vs 渲染态 像素一致（2026-10-17 用户截图「点击
+  // 有序列表进入编辑态时，数字会往右移动一点……任务列表也存在这个问题……保证编辑态和
+  // 渲染态的样式完全一致」）。两处根因（探针像素实测）：
+  // ① ol 序号槽 padding-right 4px → 右对齐文本推进盒右缘 52，渲染态原生 outside marker
+  //    推进盒右缘 ≈51 → 数字墨迹整体偏右 1px。修：5px（= 56−51）。
+  // ② 任务框 ::before left:-2ch 按等宽字口径估算「- 」宽，预览比例字体 2ch=17.25px ≠
+  //    实宽 10.8px → 框左漂 6.4px；且「[x]」比「[ ]」宽 2.95px → 勾选行正文右漂 4px。
+  //    修：bullet 字符进固定 24px 前缀槽（框画在槽左缘 32px）+「空格+[ ]」零宽槽
+  //    （正文恒 56px）。⚠️ CM5 会按 token 拆装饰 span → 24px 类只能钉 bullet 单字符。
+  // 断言 = 逐行像素剖面（截图→canvas→列墨迹计数）：墨迹左右缘 Δ≤1px、正文首墨 x Δ=0。
+  console.log('\n=== S51：有序/任务列表 编辑态 vs 渲染态 像素一致 ===');
+  {
+    const s51Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    // 行区域列墨迹剖面：pre 左缘起 120px 宽（坐标原点=行内容基准 32px 所在 pre 左缘）
+    const lineProfile = async (rect, thr) => {
+      const clip = { x: Math.floor(rect.x), y: Math.floor(rect.y - 1), width: 120, height: Math.ceil(rect.h) + 2 };
+      const shot = await page.screenshot({ clip });
+      return page.evaluate((arg) => {
+        const im = new Image();
+        im.src = 'data:image/png;base64,' + arg.src;
+        return new Promise((resolve) => {
+          im.onload = () => {
+            const W = im.width, H = im.height;
+            const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+            const cx = cv.getContext('2d', { willReadFrequently: true });
+            cx.drawImage(im, 0, 0);
+            const d = cx.getImageData(0, 0, W, H).data;
+            const prof = [];
+            for (let x = 0; x < W; x++) {
+              let ink = 0;
+              for (let y = 0; y < H; y++) {
+                const i = (y * W + x) * 4;
+                if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < arg.t) ink++;
+              }
+              prof.push(ink);
+            }
+            resolve(prof);
+          };
+          im.onerror = () => resolve([]);
+        });
+      }, { src: shot.toString('base64'), t: thr });
+    };
+    const inkRange = (prof, from, to) => {
+      const c = [];
+      for (let x = from; x < to && x < prof.length; x++) if (prof[x] > 0) c.push(x);
+      return c.length ? [c[0], c[c.length - 1]] : null;
+    };
+    const textInkX = (prof) => { for (let x = 53; x < prof.length; x++) if (prof[x] > 0) return x; return null; };
+    const near = (a, b, d) => a != null && b != null && Math.abs(a - b) <= d;
+    try {
+      // 逐行滚动→即时量 rect→截图（防 scrollIntoView 后陈旧坐标扫错行，探针 v2 教训）
+      const scanRenderLines = async () => page.evaluate(async () => {
+        const ed = window.__s51ed;
+        const mask = ed._wysiwygMarks.get(0).replacedWith;
+        const pre = mask.closest('pre.CodeMirror-line');
+        mask.scrollIntoView({ block: 'center' });
+        await new Promise((r) => setTimeout(r, 80));
+        const pr = pre.getBoundingClientRect();
+        const lis = Array.from(mask.querySelectorAll('li'));
+        const out = [];
+        for (const li of lis) {
+          const b = li.getBoundingClientRect();
+          out.push({ x: pr.left, y: b.top, w: 120, h: b.height, cb: li.querySelector('input[type="checkbox"]') ? li.querySelector('input[type="checkbox"]').getBoundingClientRect().left - pr.left : null });
+        }
+        return out;
+      });
+      const scanEditLines = async (count) => {
+        const out = [];
+        for (let i = 0; i < count; i++) {
+          const r = await page.evaluate((n) => {
+            const ed = window.__s51ed;
+            const cm = ed.cm;
+            const pre = cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[n];
+            pre.scrollIntoView({ block: 'center' });
+            const b = pre.getBoundingClientRect();
+            return { x: b.left, y: b.top, w: 120, h: b.height };
+          }, i);
+          await page.waitForTimeout(60);
+          const r2 = await page.evaluate((n) => {
+            const pre = window.__s51ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[n];
+            const b = pre.getBoundingClientRect();
+            return { x: b.left, y: b.top, w: 120, h: b.height };
+          }, i);
+          out.push(r2);
+        }
+        return out;
+      };
+
+      // ===== ① 有序列表：序号墨迹 + 正文起点 =====
+      await page.evaluate(() => {
+        const { ed } = window.__makeWysiwygEditor('1. 第一项内容\n2. 第二项内容\n3. 第三项内容');
+        window.__s51ed = ed;
+        ed.setWysiwygActiveBlock(-1); // 渲染态
+      });
+      await page.waitForTimeout(200);
+      const olRender = [];
+      for (const r of await scanRenderLines()) olRender.push(await lineProfile(r, 150));
+      await page.evaluate(() => {
+        const ed = window.__s51ed, cm = ed.cm;
+        ed.setWysiwygActiveBlock(0); // 编辑态
+        cm.setCursor(0, cm.getLine(0).length);
+        cm.focus();
+      });
+      await page.waitForTimeout(250);
+      const olEdit = [];
+      for (const r of await scanEditLines(3)) olEdit.push(await lineProfile(r, 150));
+      const olOk = [];
+      for (let i = 0; i < 3; i++) {
+        const R = inkRange(olRender[i], 24, 52), E = inkRange(olEdit[i], 24, 52);
+        olOk.push(near(R && R[0], E && E[0], 1) && near(R && R[1], E && E[1], 1) &&
+          textInkX(olRender[i]) === textInkX(olEdit[i]) && textInkX(olEdit[i]) !== null);
+      }
+      s51Push('有序序号墨迹 编辑态≡渲染态（Δ≤1px；修复前数字整体偏右 1px = 用户「往右移动一点」）',
+        olOk.every(Boolean),
+        'render=' + olRender.map((p) => JSON.stringify(inkRange(p, 24, 52))).join(',') + ' edit=' + olEdit.map((p) => JSON.stringify(inkRange(p, 24, 52))).join(','));
+      s51Push('有序正文首墨 x 两态相同（=56；槽宽恒 24px 保证）',
+        olRender.every((p, i) => textInkX(p) === textInkX(olEdit[i])) && textInkX(olEdit[0]) === 56,
+        'render=' + JSON.stringify(olRender.map(textInkX)) + ' edit=' + JSON.stringify(olEdit.map(textInkX)));
+
+      // ===== ② 任务列表：复选框 + 正文起点（勾选/未勾选） =====
+      await page.evaluate(() => {
+        const { ed } = window.__makeWysiwygEditor('- [ ] 任务一内容\n- [x] 任务二内容\n- [ ] 任务三内容');
+        window.__s51ed = ed;
+        ed.setWysiwygActiveBlock(-1); // 渲染态
+      });
+      await page.waitForTimeout(200);
+      const tkGeo = await scanRenderLines(); // 含 cb：渲染 input 左缘（相对 pre 左缘）
+      const tkRender = [];
+      for (const r of tkGeo) tkRender.push(await lineProfile(r, 150)); // 正文墨迹
+      await page.evaluate(() => {
+        const ed = window.__s51ed, cm = ed.cm;
+        ed.setWysiwygActiveBlock(0); // 编辑态
+        cm.setCursor(1, cm.getLine(1).length);
+        cm.focus();
+      });
+      await page.waitForTimeout(250);
+      const tkEditGeo = await scanEditLines(3);
+      const tkEdit = [];
+      for (const r of tkEditGeo) tkEdit.push(await lineProfile(r, 150));
+      // DOM 守卫：每行恰一个 24px 前缀槽（CM5 token 拆分成两个槽 → 双框/正文跳 80）
+      const tkSpans = await page.evaluate(() => {
+        const cm = window.__s51ed.cm;
+        return Array.from(cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')).slice(0, 3).map((pre) => {
+          const sp = pre.querySelector('span.wysiwyg-task-prefix');
+          const pr = pre.getBoundingClientRect();
+          const t = pre.querySelector('span.wysiwyg-list-text');
+          return {
+            prefix: pre.querySelectorAll('span.wysiwyg-task-prefix').length,
+            zero: pre.querySelectorAll('span.wysiwyg-task-box-zero').length,
+            slotL: sp ? sp.getBoundingClientRect().left - pr.left : null,
+            slotW: sp ? sp.getBoundingClientRect().width : null,
+            textL: t ? t.getBoundingClientRect().left - pr.left : null,
+          };
+        });
+      });
+      s51Push('任务行恰 1 个 24px 前缀槽 + ≥1 个零宽槽（CM5 按 token 拆分下 24px 类只钉 bullet）',
+        tkSpans.every((s) => s.prefix === 1 && s.zero >= 1) && tkSpans.every((s) => near(s.textL, 56, 0.5)),
+        JSON.stringify(tkSpans));
+      // 勾选行：框填充墨迹（渲染 = input 绿底，编辑 = ::before 绿底）
+      const R1 = inkRange(tkRender[1], 28, 52), E1 = inkRange(tkEdit[1], 28, 52);
+      s51Push('任务复选框（勾选行）编辑态≡渲染态（Δ≤1px；修复前框左漂 6.4px）',
+        near(R1 && R1[0], E1 && E1[0], 1) && near(R1 && R1[1], E1 && E1[1], 1),
+        'render=' + JSON.stringify(R1) + ' edit=' + JSON.stringify(E1));
+      // 未勾选行：渲染 input rect vs 编辑 24px 槽（槽左缘=框左缘、框宽 16px）
+      for (const i of [0, 2]) {
+        s51Push(`任务复选框（未勾选行${i + 1}）编辑 24px 槽 ≡ 渲染 input rect（Δ≤1px；修复前框左漂 6.4px）`,
+          tkGeo[i].cb != null && near(tkSpans[i].slotL, tkGeo[i].cb, 1) && near(tkSpans[i].slotW, 24, 0.5),
+          'render cb=' + tkGeo[i].cb + ' edit 槽=[' + tkSpans[i].slotL + ',' + (tkSpans[i].slotL + tkSpans[i].slotW) + ']');
+      }
+      s51Push('任务正文首墨 x 两态相同（逐行 Δ≤1；修复前勾选行右漂 4px）',
+        tkRender.every((p, i) => near(textInkX(p), textInkX(tkEdit[i]), 1)),
+        'render=' + JSON.stringify(tkRender.map(textInkX)) + ' edit=' + JSON.stringify(tkEdit.map(textInkX)));
+    } catch (e) {
+      s51Push('S51 场景执行', false, String(e && e.message || e).slice(0, 120));
     }
   }
 

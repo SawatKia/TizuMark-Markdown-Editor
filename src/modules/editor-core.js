@@ -384,7 +384,15 @@
           });
           inputField.addEventListener('beforeinput', (e) => {
             if (e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph') return;
-            if (this._lastEnterKeydownAt && Date.now() - this._lastEnterKeydownAt < 300) {
+            // ⚠️ 窗口 2000ms（2026-10-16 原 300ms 实测漏检）：WebView2 输入经 IPC 投递，
+            // WYSIWYG 防抖刷新（computeWysiwygBlocks+重挂遮罩）阻塞主线程时，幽灵
+            // insertLineBreak 可在 Enter keydown 后 300ms+ 才落进事件队列 → 窗外泄漏 →
+            // 裸换行进模型、光标逃逸出列表，后续逐字+逐幽灵换行 = 每字一行（有序列表
+            // 输入被打散成竖排，2026-10-16 用户截图）。安全性：本编辑器 Enter keydown
+            // 恒被 extraKeys 消费（preventDefault）→ 其后的 insertLineBreak/insertParagraph
+            // 不可能是合法键盘输入（命令走模型层不产生 beforeinput；粘贴 inputType 不同）
+            // → 窗口内一律吞。
+            if (this._lastEnterKeydownAt && Date.now() - this._lastEnterKeydownAt < 2000) {
               e.preventDefault();
               console.debug('[tizumark] 吞除幽灵换行（input 通道，Enter keydown 后 '
                 + (Date.now() - this._lastEnterKeydownAt) + 'ms）');
