@@ -3027,6 +3027,92 @@ try {
     }
   }
 
+  // ---------- S53：空列表项 IME 上屏后 Enter 必须续行（2026-10-19 用户反馈「有序列表
+  // 按回车没有新增一行，比如第一行是序号 1，行尾按回车，应该新增一行、序号是 2，但现在是直接
+  // 跳出有序列表了」）。根因：空列表项（"1. " / "- " / "- [ ] "）是列表行里唯一「正文没有文本
+  // 节点」的行（前缀槽固定 24px、源空格槽零宽），Chromium 把拼音组合串塞进前缀槽自己的文本节点
+  // → 上屏后 CM 读 DOM 得到 "1.中国 "（分隔空格被挤到行尾）→ 不再是合法列表项
+  // （continuelist 的 listRE 要求标记后必须有 \s）→ Enter 落到普通 newlineAndIndent = 退出列表。
+  // 修复 = format.js _recordBareListMarkerForIme（组合前记下纯标记行）/ _repairImeDamagedListPrefix
+  // （上屏后把丢掉的空格补回标记之后）。本场景驱动输入域原生 compositionstart/end（harness 已按
+  // 生产接线挂好，调用的是 format.js 真实方法）+ 把模型置为损坏形态，断言修复结果与 Enter 续行。
+  console.log('\n=== S53：空列表项 IME 上屏破坏前缀的修复（Enter 续行） ===');
+  {
+    const s53Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    // 驱动一次完整流程：建文档 → 组合开始 → 模型变损坏形态 → 组合结束 → 等修复 → 取模型
+    const s53Drive = (doc, damaged) => page.evaluate(([d, bad]) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      ed.setWysiwygActiveBlock(0);
+      cm.setCursor(0, cm.getLine(0).length);
+      cm.focus();
+      window.__s53ed = ed;
+      const input = cm.getInputField();
+      input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: 'zhongguo' }));
+      cm.setValue(bad);            // 模拟 IME 上屏后 CM 读 DOM 得到的损坏行
+      cm.setCursor(0, cm.getLine(0).length);
+      input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '中国' }));
+      return { value: cm.getValue() };
+    }, [doc, damaged]);
+
+    try {
+      await s53Drive('1. ', '1.中国 ');
+      await page.waitForTimeout(400);   // 修复轮询窗（80ms 一拍，上限 10 拍）
+      const v1 = await page.evaluate(() => window.__s53ed.cm.getValue());
+      s53Push('空 OL 项 IME 上屏后前缀被修回 "1. 中国"（修复前 "1.中国 "）',
+        v1 === '1. 中国', JSON.stringify(v1));
+
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(300);
+      const after1 = await page.evaluate(() => window.__s53ed.cm.getValue());
+      s53Push('修复后 Enter 续出下一项 "2. "（修复前退出列表 → "\\n"）',
+        after1 === '1. 中国\n2. ', JSON.stringify(after1));
+
+      await s53Drive('1. 已有', '1.已有中国 ');
+      await page.waitForTimeout(400);
+      const v2 = await page.evaluate(() => window.__s53ed.cm.getValue());
+      s53Push('有正文的 OL 项不被误改（该行组合串本就落在正文 span）',
+        v2 === '1.已有中国 ', JSON.stringify(v2));
+
+      await s53Drive('- ', '-中国 ');
+      await page.waitForTimeout(400);
+      const v3 = await page.evaluate(() => window.__s53ed.cm.getValue());
+      s53Push('空 UL 项同样被修回 "- 中国"（该形态也不是合法列表项）',
+        v3 === '- 中国', JSON.stringify(v3));
+
+      // 关键防误伤：组合前该行**已有正文**（非纯标记行）→ format.js 不该动它。
+      // 这里模拟「组合前是 '- abc'、上屏后模型被写成 '- abc中国 '」的形态，必须原样保留。
+      const v3b = await page.evaluate(() => {
+        const { cm, ed } = window.__makeWysiwygEditor('- abc');
+        ed.setWysiwygActiveBlock(0);
+        cm.setCursor(0, cm.getLine(0).length);
+        cm.focus();
+        window.__s53ed = ed;
+        const input = cm.getInputField();
+        input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: 'zhongguo' }));
+        cm.setValue('- abc中国 ');
+        cm.setCursor(0, cm.getLine(0).length);
+        input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '中国' }));
+        return cm.getValue();
+      });
+      void v3b;
+      await page.waitForTimeout(400);
+      const v3b2 = await page.evaluate(() => window.__s53ed.cm.getValue());
+      s53Push('组合前已有正文的 UL 项不被改动（非纯标记行 → 不记录、不修复）',
+        v3b2 === '- abc中国 ', JSON.stringify(v3b2));
+
+      await s53Drive('', '中国');
+      await page.waitForTimeout(400);
+      const v4 = await page.evaluate(() => window.__s53ed.cm.getValue());
+      s53Push('普通段落不被误改', v4 === '中国', JSON.stringify(v4));
+    } catch (e) {
+      s53Push('S53 场景执行', false, String(e && e.message || e).slice(0, 120));
+    }
+  }
+
   if (errors.length) {
     console.log('\n页面错误:');
     for (const e of errors) console.log('  ' + e);

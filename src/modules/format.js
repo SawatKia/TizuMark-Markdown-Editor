@@ -4,6 +4,14 @@
 (function () {
   'use strict';
 
+  // —— IME 上屏污染列表前缀的识别（见 _repairImeDamagedListPrefix）——
+  // 纯列表标记行：可带缩进与尾空格，标记后没有正文（空列表项）。
+  const IME_BARE_LIST_RE = /^(\s*)(?:\d{1,9}[.)]|[-*+])(\s*)$/;
+  // 被污染形态：标记与正文之间丢掉了必需的源空格（如 "1.中国 "）。markdown 列表要求标记后
+  // 必须有空白，故这种行不再是合法列表项；正文以 \S 开头保证只匹配「真的少了空格」的行。
+  // 尾随的 \s* 捕获的就是被挤到行尾的那个源空格——复原时丢掉它、把分隔空格补回标记之后。
+  const IME_DAMAGED_LIST_RE = /^(\s*)((?:\d{1,9}[.)]|[-*+]))(\S.*?)(\s*)$/;
+
   const mixin = {
       wrapSelection(before, after) {
         const sel = this.cm.getSelection();
@@ -204,6 +212,63 @@
         }
         // 无标题标记 → 沿用原有插入行为（含上一行非空时自动换行）
         this.insertLinePrefix(prefix);
+      },
+      // —— IME 组合串落在列表前缀槽上、把前缀写坏的修复 ——
+      // 用户反馈（2026-10-19）：「有序列表按回车没有新增一行，比如第一行是序号 1，行尾按回车，
+      // 应该新增一行、序号是 2，但现在是直接跳出有序列表了」。
+      // 成因（真机 CDP 复现，用 Input.insertText 模拟输入法上屏）：空列表项（"1. " / "- " /
+      // "- [ ] "）是列表行里唯一「正文没有文本节点」的行——前缀槽固定 24px、源空格槽零宽
+      // （styles.css 的 .wysiwyg-ol-marker / .wysiwyg-ol-space），Chromium 找不到能承载组合串的
+      // 正文文本节点，就把拼音组合串塞进前缀槽**自己的文本节点**（组合期实测 DOM：
+      // <span class="wysiwyg-ol-marker">1.zhongguo</span>）。上屏时 CM 读 DOM 差分，
+      // 源里 marker 与正文之间那个分隔空格被挤到行尾 → 模型变成 "1.中国 "，不再是合法列表项
+      // （continuelist 的 listRE 要求标记后必须有 \s）→ Enter 落到普通 newlineAndIndent 分支
+      // = 退出列表，而不是续出 "2. "。只有空的有序列表项会中招：空无序项 "- "、空任务项
+      // "- [ ] "、以及有正文的行（组合串落在正文 span）都正常。
+      // 修法：组合开始前记下「这行是否只有列表标记」，上屏后若这行变成「标记直接贴上内容」，
+      // 把丢掉的空格补回标记之后、并同步右移光标，使其重新成为合法列表项。
+      _recordBareListMarkerForIme() {
+        this._imeBareMarker = null;
+        const cm = this.cm;
+        if (!cm) return;
+        const pos = cm.getCursor();
+        const text = cm.getLine(pos.line);
+        // 只有「纯列表标记（可带缩进/尾空格）」才需要修——有正文的行组合串落在正文 span，天然安全
+        if (!IME_BARE_LIST_RE.test(text)) return;
+        this._imeBareMarker = { line: pos.line };
+      },
+      // 组合结束后修复被 IME 写坏的列表前缀（配合 _recordBareListMarkerForIme）。
+      // 只修「组合前是纯标记空项、且上屏后标记直接贴上非空格字符」的行，其余一律不动。
+      _repairImeDamagedListPrefix() {
+        const cm = this.cm;
+        const keep = this._imeBareMarker;
+        this._imeBareMarker = null;
+        if (!cm || !keep) return;
+        // CM 读 DOM 是防抖的（codemirror.js readFromDOMSoon 80ms 后才 updateFromDOM），
+        // compositionend 当下模型里可能还是旧文本 → 轮询到模型更新为止（上限 ~800ms，够用且不失控）。
+        let tries = 0;
+        const apply = () => {
+          tries++;
+          if (keep.line < cm.lineCount()) {
+            const line = cm.getLine(keep.line);
+            const m = IME_DAMAGED_LIST_RE.exec(line);
+            if (m) {
+              const indent = m[1], marker = m[2], body = m[3];
+              // 行尾的尾随空白（m[4]）就是被挤到行尾的那个源空格：复原时直接丢掉，
+              // 只把标记后的分隔空格补回去，还原成 "1. 中国"（而不是 "1. 中国 "）。
+              const fixed = indent + marker + ' ' + body;
+              const pos = cm.getCursor();
+              const pivot = indent.length + marker.length;   // 标记右缘：光标在此之后才需要右移
+              cm.operation(() => {
+                cm.replaceRange(fixed, { line: keep.line, ch: 0 }, { line: keep.line, ch: line.length });
+                if (pos.line === keep.line && pos.ch > pivot) cm.setCursor({ line: keep.line, ch: pos.ch + 1 });
+              });
+              return;
+            }
+          }
+          if (tries < 10) setTimeout(apply, 80);
+        };
+        setTimeout(apply, 80);
       },
       // 表格行内按 Enter 自动补充表格结构
       // 表格行内 Enter：整理整段表格（对齐/补齐分隔行/统一列数）并在当前行下方插入等列空白行。

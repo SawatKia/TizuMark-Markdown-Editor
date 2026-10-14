@@ -393,10 +393,13 @@
           // HEAD 版不被取消（defaultPrevented=false），挂原生 compositionstart 后恒被取消。
           inputField.addEventListener('compositionstart', () => {
             this._wysiwygComposing = true;
+            // 防御：format.js 万一未加载，也不得让组合监听器抛错（组合标志必须优先立起）
+            if (this._recordBareListMarkerForIme) this._recordBareListMarkerForIme();
           });
           inputField.addEventListener('compositionend', () => {
             this._wysiwygComposing = false;
             this._lastCompositionEnd = Date.now();
+            if (this._repairImeDamagedListPrefix) this._repairImeDamagedListPrefix();
           });
           inputField.addEventListener('beforeinput', (e) => {
             if (e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph') return;

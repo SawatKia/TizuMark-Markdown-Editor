@@ -243,10 +243,16 @@
       // composition 编辑器事件（上方 cm.on 是死代码），组合期内的 insertLineBreak 必是
       // 幽灵 → beforeinput 守卫一律吞（S50 场景：幽灵换行进模型）。与「拼音竖排」无关
       //（竖排是 CSS 层 24px 前缀槽折行，S52 守；组合期模型恒干净）。
-      inputField.addEventListener('compositionstart', () => { ed._wysiwygComposing = true; });
+      // 修复 IME 上屏写坏列表前缀：直接调用 format.js 的真实方法（与真实 app 完全同一实现，
+      // 见 format.js _recordBareListMarkerForIme / _repairImeDamagedListPrefix），本 harness 不复制逻辑。
+      inputField.addEventListener('compositionstart', () => {
+        ed._wysiwygComposing = true;
+        ed._recordBareListMarkerForIme();
+      });
       inputField.addEventListener('compositionend', () => {
         ed._wysiwygComposing = false;
         ed._lastCompositionEnd = Date.now();
+        ed._repairImeDamagedListPrefix();
       });
       // 与 editor-core 同一幽灵换行守卫（input 通道，2026-10-15 用户复现）：组合标志 +
       // 双时间戳（真实 Enter 被 extraKeys 消费后、紧随 _lastEnterKeydownAt/_lastCompositionEnd

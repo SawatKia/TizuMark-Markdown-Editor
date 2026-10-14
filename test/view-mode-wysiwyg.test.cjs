@@ -1803,3 +1803,63 @@ test('幽灵换行守卫：双时间戳（Enter keydown + compositionend）且 2
   assert.match(gH, /_lastCompositionEnd/, 'harness 守卫缺 _lastCompositionEnd 通道（与 editor-core 不同步）');
   assert.match(gH, /< 2000/, 'harness 幽灵换行守卫窗口与 editor-core 不同步（须 2000ms）');
 });
+
+// ---------- 13. IME 上屏写坏列表前缀 → Enter 必须续行（2026-10-19 用户反馈） ----------
+// 用户口径：「有序列表按回车没有新增一行，比如第一行是序号 1，行尾按回车，应该新增一行、
+// 序号是 2，但现在是直接跳出有序列表了」。
+// 成因（真机 CDP 用 Input.insertText 复现）：空列表项（"1. " / "- " / "- [ ] "）是列表行里唯一
+// 「正文没有文本节点」的行——前缀槽固定 24px、源空格槽零宽（styles.css .wysiwyg-ol-marker /
+// .wysiwyg-ol-space），Chromium 找不到能承载组合串的正文文本节点，就把拼音组合串塞进前缀槽**自己的
+// 文本节点**。上屏后 CM 读 DOM 差分，marker 与正文之间那个分隔空格被挤到行尾 → 模型成为 "1.中国 "，
+// 不再是合法列表项（continuelist 的 listRE 要求标记后必须有 \s）→ Enter 落到普通 newlineAndIndent
+// 分支 = 退出列表，而不是续出 "2. "。只有空的有序列表项会中招。
+// 修复 = format.js _recordBareListMarkerForIme（组合前记下「这行只有列表标记」）+
+// _repairImeDamagedListPrefix（上屏后把丢掉的空格补回标记之后、并同步右移光标）。
+// 行为回归在 scripts/wysiwyg-browser-check.mjs 的 S53 场景（真实浏览器 + 真实 DOM/CM 流程）；
+// 此处只断言接线与实现要点，防止修复被静默回退。
+
+const FORMAT_SRC = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'format.js'), 'utf8');
+
+test('IME 上屏写坏列表前缀的修复：接线齐备（组合前记录 + 组合后修复）', () => {
+  // ① 两个真实方法都在 format.js（不是散落在调用点的复制逻辑）
+  assert.match(FORMAT_SRC, /_recordBareListMarkerForIme\(\)\s*\{/,
+    'format.js 缺 _recordBareListMarkerForIme（组合前记录纯标记行）');
+  assert.match(FORMAT_SRC, /_repairImeDamagedListPrefix\(\)\s*\{/,
+    'format.js 缺 _repairImeDamagedListPrefix（上屏后修复被写坏的前缀）');
+  // ② 只在「组合前是纯列表标记」时才记录（有正文的行组合串落在正文 span，天然安全 → 不得误伤）
+  assert.match(FORMAT_SRC, /_imeBareMarker = \{ line: pos\.line \}/,
+    '未记录组合前的纯标记行（修复无从判断该不该动）');
+  assert.match(FORMAT_SRC, /if \(!IME_BARE_LIST_RE\.test\(text\)\) return;/,
+    '记录时未过滤「仅纯列表标记」→ 会误改有正文的行');
+  // ③ 损坏形态识别：标记后直接贴非空格正文
+  assert.match(FORMAT_SRC, /IME_DAMAGED_LIST_RE/,
+    'format.js 缺损坏形态识别正则（标记与正文之间丢了必需的分隔空格）');
+  // ④ 修复动作 = 把分隔空格补回标记之后，并右移光标
+  assert.match(FORMAT_SRC, /indent \+ marker \+ ' ' \+ body/,
+    '修复未把分隔空格补回标记之后（markdown 要求标记后必须有空白）');
+  assert.match(FORMAT_SRC, /pos\.ch > pivot[\s\S]{0,80}setCursor/,
+    '修复后未同步右移光标（光标会落在标记右缘、下次输入位置错）');
+  // ⑤ CM 读 DOM 是防抖的（readFromDOMSoon 80ms）→ 必须轮询重试，不能只取一次
+  assert.match(FORMAT_SRC, /tries < 10[\s\S]{0,40}setTimeout\(apply, 80\)/,
+    '修复未轮询等待 CM 读回 DOM（compositionend 当下模型可能还是旧文本 → 修复落空）');
+});
+
+test('IME 前缀修复接线：原生 compositionstart/end 调用 format.js 的真实方法', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'editor-core.js'), 'utf8');
+  const harness = fs.readFileSync(path.join(ROOT, '_wysiwyg_compare.html'), 'utf8');
+  const idx = core.indexOf("addEventListener('compositionstart'");
+  assert.ok(idx > 0, 'editor-core 缺输入域原生 compositionstart 接线');
+  const block = core.slice(idx, idx + 600);
+  assert.match(block, /_recordBareListMarkerForIme\(\)/,
+    'compositionstart 未记录组合前的纯标记行（修复拿不到「该不该修」的依据）');
+  assert.match(block, /_repairImeDamagedListPrefix\(\)/,
+    'compositionend 未调用前缀修复');
+  // 与幽灵换行守卫同一接线块，不得另起一套（避免两处口径漂移）
+  assert.match(block, /_wysiwygComposing = true/,
+    '组合标志与修复接线被拆散（须同一对原生监听器）');
+  // 对照物 harness 必须调用真实方法，不得复制一份逻辑
+  assert.match(harness, /_recordBareListMarkerForIme\(\)/,
+    'harness 未接线 _recordBareListMarkerForIme（对照物与产品脱节）');
+  assert.match(harness, /_repairImeDamagedListPrefix\(\)/,
+    'harness 未接线 _repairImeDamagedListPrefix（对照物与产品脱节）');
+});
