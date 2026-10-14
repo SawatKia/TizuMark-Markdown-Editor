@@ -2989,12 +2989,30 @@ body.is-resizing .side-btn {
   width: 24px;
   padding-right: 5px;
   text-align: right;
+  /* ⚠️ 必须 white-space:nowrap（2026-10-18 真机 CDP dump 定位）——中文 IME 组合期竖排的**真正**成因：
+     空列表项（`1. ` / `- [ ] ` 正文为空）时，Chromium 把拼音组合串作为文本节点插进光标处的
+     **本 24px 固定前缀槽**（真机 Input.imeSetComposition 实测：组合前 anchor 在 .wysiwyg-ol-space，
+     组合中 anchor 与槽文本同步变为 1. → 1.a's'd'f，即浏览器改了挂载容器）。
+     槽内容宽仅 19px（24−5 padding）且继承行盒 pre-wrap → 逐字折行，盒高 27.19 → 108.75px（= 4 行），
+     即用户截图「拼音竖排、字间有点」（`'` 是微软拼音音节分隔符）；有正文的行组合文本落在
+     自动宽正文 span、从不进本槽，故用户口径「先输点内容再打拼音就正常」。
+     固定 24px 是 S51 像素对齐的硬约束（不可改 min-width/auto，实测 auto 下盒宽 57.5px 会把正文推右），
+     故此处只能 nowrap：组合文本单行右溢（overflow 可见、不裁切），上屏后 CM 读 DOM 差分进模型，
+     重渲染恢复一行。⛔ 别再往 .wysiwyg-ol-space 上打主意——2026-10-17 曾据此改过，真机把该槽
+     加宽到 1px 后 marker 仍 108.75px 竖排，证实无效。同族先例：.wysiwyg-task-box-zero（S41）。 */
+  white-space: nowrap;
 }
 /* 有序标记与正文之间的源空格：零宽（占位不占宽），让正文紧贴 24px 槽右缘。
-   用 inline-block+width:0 而非 font-size:0——后者可能扰动行盒基线测量。 */
+   用 inline-block+width:0 而非 font-size:0——后者可能扰动行盒基线测量。
+   nowrap 沿用同族零宽槽口径（.wysiwyg-task-box-zero / S41：width:0 盒内多字符默认逐字
+   换行会撑高行盒），且此 span 在组合期可能临时被挂上组合字符——单行右溢比撑高安全。
+   ⚠️ 但它**不是** 2026-10-18 竖排 bug 的成因：真机 dump 实测（空 OL 项 + Input.imeSetComposition）
+   组合期 anchor 落在 .wysiwyg-ol-marker 而非本 span（见上条 marker 规则）；把本 span 加宽到 1px
+   亦无法阻止竖排（实测 marker 仍 108.75px），真正的修复在 marker 上。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-ol-space {
   display: inline-block;
   width: 0;
+  white-space: nowrap;
 }
 /* WYSIWYG 列表活动行的块级排版（2026-10-15 用户反馈：编辑态比渲染态「变小、变密、
    缩进不同」）。行类 wysiwyg-plain-text 已给同字号（16px）/行高（1.7），实测差异只剩
@@ -3105,6 +3123,12 @@ body.is-resizing .side-btn {
   width: 24px;
   height: 1.7em;
   vertical-align: top;
+  /* ⚠️ 必须 white-space:nowrap（2026-10-18 与 .wysiwyg-ol-marker 同批真机 dump 定位）：
+     与 ol marker 同族的**固定 24px 前缀槽**，组合期光标停在槽内（如光标在 `- [ ] ` 行首/首字符后）
+     时 Chromium 把拼音并进本槽文本节点 → 24px 盒内逐字折行（真机实测 scrollHeight 27→82/109px，
+     截图表现为 4 个竖排的选中块）；nowrap 后回到单行（scrollH=27）。字符本就 transparent，
+     右溢不可见，仅选中高亮会向右延伸——与修 ol marker 的取舍一致。 */
+  white-space: nowrap;
 }
 /* 任务行「空格 + [ ]」零宽槽：占位不占宽（同 .wysiwyg-ol-space 机制），
    保证正文恒落 24px 槽右缘 56px；CM5 token 拆分下多个零宽 span 总宽仍 0。

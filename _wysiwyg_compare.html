@@ -239,15 +239,27 @@
     });
     try {
       const inputField = cm.getInputField();
-      inputField.addEventListener('compositionend', () => { ed._lastCompositionEnd = Date.now(); });
-      // 与 editor-core 同一幽灵换行守卫（input 通道，2026-10-15 用户复现）：真实 Enter
-      // 被 extraKeys 消费后，紧随 _lastEnterKeydownAt 到达的 beforeinput 行内换行必是
-      // 幽灵 → 取消（CM5 只在 input 事件读 DOM，beforeinput 取消则 CM 读不到）
+      // ⚠️ 组合标志挂输入域原生 DOM 事件（与 editor-core 一致）：CM 5.65.18 不触发用户级
+      // composition 编辑器事件（上方 cm.on 是死代码），组合期内的 insertLineBreak 必是
+      // 幽灵 → beforeinput 守卫一律吞（S50 场景：幽灵换行进模型）。与「拼音竖排」无关
+      //（竖排是 CSS 层 24px 前缀槽折行，S52 守；组合期模型恒干净）。
+      inputField.addEventListener('compositionstart', () => { ed._wysiwygComposing = true; });
+      inputField.addEventListener('compositionend', () => {
+        ed._wysiwygComposing = false;
+        ed._lastCompositionEnd = Date.now();
+      });
+      // 与 editor-core 同一幽灵换行守卫（input 通道，2026-10-15 用户复现）：组合标志 +
+      // 双时间戳（真实 Enter 被 extraKeys 消费后、紧随 _lastEnterKeydownAt/_lastCompositionEnd
+      // 到达的 beforeinput 换行必是幽灵 → 取消；CM5 只在 input 事件读 DOM，取消则读不到）
       inputField.addEventListener('beforeinput', (e) => {
         if (e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph') return;
-        // 窗口 2000ms 与 editor-core 一致（2026-10-16：WebView2 IPC 延迟 + WYSIWYG 刷新
-        // 阻塞主线程 → 幽灵可在 keydown 后 300ms+ 到达，原窗口漏检 → 列表输入打散竖排）
-        if (ed._lastEnterKeydownAt && Date.now() - ed._lastEnterKeydownAt < 2000) e.preventDefault();
+        // ① 组合期幽灵（与 editor-core 一致）：双时间戳窗口罩不住正在组合中 → 组合标志识别吞
+        if (ed._wysiwygComposing) { e.preventDefault(); return; }
+        // ② 组合外幽灵：双时间戳窗口 2000ms，与 editor-core 一致（WebView2 IPC 延迟 + WYSIWYG 刷新阻塞）
+        const _now = Date.now();
+        const _se = ed._lastEnterKeydownAt ? _now - ed._lastEnterKeydownAt : Infinity;
+        const _sc = ed._lastCompositionEnd ? _now - ed._lastCompositionEnd : Infinity;
+        if (_se < 2000 || _sc < 2000) e.preventDefault();
       });
     } catch (_) { /* 忽略 */ }
     return { cm, ed, host };

@@ -626,6 +626,22 @@ test('列表/代码块活动行渲染化 CSS：源符号透明化 + ::before 渲
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}text-align: right;/, '有序序号未右对齐（应复刻渲染 outside marker 右缘对齐）');
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}padding-right: 5px;/, '有序序号右距须 5px（S51 像素实测：原生 marker 推进盒右缘 51；4px 时数字墨迹偏右 1px）');
   assert.match(css, /wysiwyg-ol-space \{[\s\S]{0,120}width: 0;/, '有序源空格未零宽（会把正文再推一个空格宽）');
+  // IME 组合文本落进固定 24px 前缀槽必须 nowrap（2026-10-18 真机 CDP dump 定位）：
+  // 空列表项（`1. ` / `- [ ] ` 正文为空）时，Chromium 把拼音组合串并进光标处最近的文本容器
+  // —— 恰是这两个 24px 固定前缀槽；槽内容宽仅 19px + 继承行盒 pre-wrap → 逐字折行，
+  // marker 盒高实测 27.19 → 108.75px（4 行）= 用户截图「拼音竖排、字间有点」；
+  // 有正文的行组合文本落自动宽正文 span，故「先输内容再打拼音就正常」。
+  // ⚠️ 旧修复（.wysiwyg-ol-space nowrap）无效：真机把该槽加宽到 1px 后 marker 仍 108.75px。
+  // 断言用「规则块内」匹配（{…} 内不含嵌套花括号），窗口按实测规则长度取宽（marker 规则含长注释
+  // 约 770 字符、task-prefix 约 500）——用固定小窗口会漏判。
+  const ruleBody = (sel) => {
+    const i = css.indexOf('.' + sel + ' {');
+    return i < 0 ? '' : css.slice(i, css.indexOf('\n}', i) + 2);
+  };
+  assert.match(ruleBody('wysiwyg-ol-marker'), /white-space: nowrap;/,
+    '有序 24px 序号槽未 nowrap（空列表项 IME 组合文本会在 19px 内容宽里逐字竖排）');
+  assert.match(ruleBody('wysiwyg-task-prefix'), /white-space: nowrap;/,
+    '任务 24px 前缀槽未 nowrap（同族缺陷：组合期 scrollHeight 27→82/109 竖排）');
   assert.match(wsrc2, /'wysiwyg-ol-space'/, '有序标记后未挂零宽空格 span');
   assert.match(wsrc2, /else if \(!taskM && !olM && indentList\)/, 'ol 标记行未排除行缩进（应只由 24px marker 槽提供缩进，续行才走 -indent-ol）');
   // 列表活动行块级排版（2026-10-15 用户反馈：编辑态比渲染态「小、密、缩进不同」）：
@@ -1572,8 +1588,16 @@ test('幽灵 Enter 吞除：WebView2 中文 IME 选字确认残影键不再多�
   // ② 时间戳必须来自输入域的原生 DOM compositionend：CM 5.65.18 不触发用户级
   // compositionstart/end 编辑器事件（cm.on 处理器不执行，官方源码已核），
   // 挂 cm.on 上的时间戳永远是 undefined → 守卫失效
-  assert.match(coreSrc, /getInputField\(\);[\s\S]{0,200}addEventListener\('compositionend', \(\) => \{[\s\S]{0,80}this\._lastCompositionEnd = Date\.now\(\);/,
+  assert.match(coreSrc, /inputField\.addEventListener\('compositionend', \(\) => \{[\s\S]{0,120}this\._lastCompositionEnd = Date\.now\(\);/,
     '幽灵 Enter 时间戳未挂输入域原生 DOM compositionend（cm.on compositionend 在 CM 5.65.18 不触发）');
+  // ③ 2026-10-17 补：组合标志须同样挂输入域原生 DOM compositionstart（cm.on compositionstart
+  // 是死代码）——组合期逐字幽灵 insertLineBreak 靠此标志识别吞除（S50 场景：防幽灵换行进模型）。
+  // ⚠️ 与「拼音竖排」症状无关：竖排是 CSS 层 24px 前缀槽折行（见 S52 + styles.css），
+  // 组合期模型全程干净（2026-10-18 真机 dump 证实 model 恒为 "1. "）。
+  assert.match(coreSrc, /inputField\.addEventListener\('compositionstart', \(\) => \{[\s\S]{0,60}this\._wysiwygComposing = true;/,
+    '组合标志未挂输入域原生 DOM compositionstart（cm.on compositionstart 死代码 → _wysiwygComposing 恒 false，组合期逐字幽灵全漏）');
+  assert.match(coreSrc, /if \(this\._wysiwygComposing\) \{[\s\S]{0,80}e\.preventDefault\(\);/,
+    'beforeinput 守卫缺「组合期吞换行」分支（_wysiwygComposing 为 true → 吞；双时间戳窗口无法覆盖组合中逐字幽灵）');
 });
 
 test('token 中和 + 同身 span 渲染色重申（CM5 合并同区间 marker 成同身 span）', () => {
@@ -1619,8 +1643,10 @@ test('列表回车幽灵键双窗：keydown 重复投递窗（窗②）+ input �
   // extraKeys preventDefault 后浏览器不再投递 beforeinput → 窗口内到达者必为幽灵）
   assert.match(csrc, /addEventListener\('beforeinput', \(e\) => \{[\s\S]{0,120}insertLineBreak[\s\S]{0,80}insertParagraph/,
     '缺 input 通道守卫（幽灵 beforeinput insertLineBreak 会被 CM5 当裸换行读进模型）');
-  assert.match(csrc, /_lastEnterKeydownAt && Date\.now\(\) - this\._lastEnterKeydownAt < 2000/,
-    '幽灵换行窗口未对齐 _lastEnterKeydownAt（2000ms；300ms 实测漏检 WebView2 IPC 延迟幽灵 → 有序列表输入打散竖排）');
+  assert.match(csrc, /_lastCompositionEnd \? \w+ - this\._lastCompositionEnd/,
+    '幽灵换行守卫缺 _lastCompositionEnd 通道（IME 确认 Enter 无残留 keydown 时 _lastEnterKeydownAt 不刷新 → 幽灵全漏 → 模型每字一行）');
+  assert.match(csrc, /< 2000 \|\|[\s\S]{0,60}< 2000/,
+    '幽灵守卫非双时间戳（Enter keydown + compositionend）OR 2000ms 窗口（300ms 漏检；单戳在 IME 确认 Enter 无残留 keydown 时漏）');
   assert.match(csrc, /e\.preventDefault\(\);/, '缺幽灵 beforeinput 的取消（不取消则对应 input 事件仍触发、CM 仍读得到）');
 });
 
@@ -1747,21 +1773,33 @@ test('跨块选区：被选区覆盖的遮罩挂选中着色类（CM 不给 widg
     '缺 .wysiwyg-mask-selected 半透明着色（选区覆盖的遮罩块无选中观感）');
 });
 
-// ---------- 有序列表输入打散竖排（2026-10-16 用户截图） ----------
-// 根因：幽灵 insertLineBreak（WebView2 input 通道）经 IPC 延迟 + WYSIWYG 防抖刷新阻塞
-// 主线程后，可在 Enter keydown 后 300ms+ 才到达 → 原 300ms 守卫窗外泄漏 → 裸换行进
-// 模型、光标逃逸出列表，逐字+逐幽灵换行 = 每字一行。修复 = 窗口扩到 2000ms（安全性：
-// Enter keydown 恒被 extraKeys 消费 → 窗口内的 insertLineBreak 必是幽灵）。
-test('幽灵换行守卫窗口须覆盖 WebView2 IPC 延迟（300ms 实测漏检，须 2000ms）', () => {
+// ---------- 有序列表输入打散竖排（2026-10-16 用户截图；2026-10-17 补 compositionend 通道） ----------
+// ⚠️ 2026-10-18 真机复核：本条守的是「幽灵换行进模型」（模型被打散成每字一行），
+// 与用户 2026-10-18 报的「拼音组合期竖排」（模型干净、纯 CSS 折行）是**两个不同**问题，
+// 后者见 S52 + styles.css 24px 前缀槽 nowrap。
+// 根因①（2026-10-16）：幽灵 insertLineBreak（WebView2 input 通道）经 IPC 延迟 + WYSIWYG
+//   防抖刷新阻塞主线程后，可在 Enter keydown 后 300ms+ 才到达 → 原 300ms 守卫窗外泄漏
+//   → 裸换行进模型、光标逃逸出列表，逐字+逐幽灵换行 = 每字一行。修复① = 窗口扩到 2000ms。
+// 根因②（2026-10-17）：IME 选字确认的 Enter 被输入法完整消费（无残留 keydown 进
+//   extraKeys）时 _lastEnterKeydownAt 不刷新，幽灵仍到达 → 单戳守卫全漏（harness 探针
+//   实测 6/6 漏、_lastEnterKeydownAt unset / _lastCompositionEnd set）。修复② = 守卫补
+//   _lastCompositionEnd 双时间戳。安全性：合法键盘 Enter 恒被 extraKeys 消费（不产生
+//   beforeinput）、粘贴 inputType 不同 → 窗口内 insertLineBreak/insertParagraph 必是幽灵。
+test('幽灵换行守卫：双时间戳（Enter keydown + compositionend）且 2000ms 窗口', () => {
   const core = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'editor-core.js'), 'utf8');
   const harness = fs.readFileSync(path.join(ROOT, '_wysiwyg_compare.html'), 'utf8');
   const GHOST = "e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph'";
   const gIdx = core.indexOf(GHOST);
   assert.ok(gIdx > 0, 'editor-core 缺幽灵换行守卫（input 通道，2026-10-15 修复不得回退）');
-  assert.match(core.slice(gIdx, gIdx + 1600), /_lastEnterKeydownAt < 2000/,
-    'editor-core 幽灵换行守卫窗口不足（300ms 漏检 WebView2 延迟幽灵 → 有序列表输入打散竖排）');
+  const gCore = core.slice(gIdx, gIdx + 2000);
+  assert.match(gCore, /_lastEnterKeydownAt/, 'editor-core 守卫缺 _lastEnterKeydownAt 通道');
+  assert.match(gCore, /_lastCompositionEnd/,
+    'editor-core 守卫缺 _lastCompositionEnd 通道（IME 确认 Enter 无残留 keydown 时漏检 → 模型每字一行）');
+  assert.match(gCore, /< 2000/, 'editor-core 幽灵换行守卫窗口不足（须 2000ms 覆盖 WebView2 IPC 延迟）');
   const hIdx = harness.indexOf(GHOST);
   assert.ok(hIdx > 0, 'harness 缺幽灵换行守卫（与 editor-core 同一守卫）');
-  assert.match(harness.slice(hIdx, hIdx + 800), /_lastEnterKeydownAt < 2000/,
-    'harness 幽灵换行守卫窗口与 editor-core 不同步（浏览器回归无法复现真机守卫行为）');
+  const gH = harness.slice(hIdx, hIdx + 1200);
+  assert.match(gH, /_lastEnterKeydownAt/, 'harness 守卫缺 _lastEnterKeydownAt 通道（与 editor-core 不同步）');
+  assert.match(gH, /_lastCompositionEnd/, 'harness 守卫缺 _lastCompositionEnd 通道（与 editor-core 不同步）');
+  assert.match(gH, /< 2000/, 'harness 幽灵换行守卫窗口与 editor-core 不同步（须 2000ms）');
 });

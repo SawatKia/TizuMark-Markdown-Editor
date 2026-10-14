@@ -2943,6 +2943,90 @@ try {
     }
   }
 
+  // ---------- S52：IME 组合文本落进「固定 24px 前缀槽」不得竖排（2026-10-18 真机 CDP dump 定位）。
+  // 根因链（真机实测，Input.imeSetComposition 复现）：中文 IME 组合期浏览器把拼音插进光标处最近的
+  // 文本容器。**空列表项**（`1. ` / `- [ ] ` 且正文为空）时该行没有可承载的文本节点，组合字符被并进
+  // **固定 24px 的前缀槽**（.wysiwyg-ol-marker / .wysiwyg-task-prefix）；槽内容宽仅 19px 且继承行盒
+  // pre-wrap → 逐字折行，marker 盒高 27.19 → 108.75px（=4 行），即用户截图「拼音竖排、字间有点」。
+  // 有正文的行组合文本落在自动宽正文 span，从不进前缀槽 → 用户口径「先输点内容再打拼音就正常」。
+  // ⚠️ 旧注释曾把成因写成零宽槽（.wysiwyg-ol-space）——2026-10-17 的 nowrap 改动因此无效
+  // （真机实测：把 ol-space 加宽到 1px，marker 仍 108.75px 竖排）。本场景锚定真实落点。
+  // 无头环境无真实 IME，直接向前缀槽文本节点塞组合文本（含 `'` 分隔符），布局行为与组合期一致。
+  console.log('\n=== S52：IME 组合文本落入 24px 前缀槽不得竖排（ol-marker / task-prefix） ===');
+  {
+    const s52Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    try {
+      const r = await page.evaluate(() => {
+        const out = {};
+        const COMP = "a's'd'f"; // 真实微软拼音组合串（含音节分隔符 `'`）
+        const seed = (span, lineNode) => {
+          const cs = getComputedStyle(span);
+          const lineH0 = lineNode.getBoundingClientRect().height;
+          // 模拟组合期：浏览器把组合文本作为文本节点插进该 24px 槽
+          span.appendChild(document.createTextNode(COMP));
+          const rect = span.getBoundingClientRect();
+          return {
+            nowrap: cs.whiteSpace === 'nowrap',
+            // task-prefix 的盒高被 height:1.7em 钉住 → 取 scrollHeight 才能看出内容折了几行
+            slotH: Math.max(rect.height, span.scrollHeight),
+            lineH0,
+            lineH2: lineNode.getBoundingClientRect().height,
+          };
+        };
+        // ① 空有序列表项：组合文本落 .wysiwyg-ol-marker（真机 dump 实测落点）
+        {
+          const { cm, ed } = window.__makeWysiwygEditor('1. \n');
+          window.__s52ed = ed;
+          ed.setWysiwygActiveBlock(0);
+          cm.setCursor(0, cm.getLine(0).length);
+          cm.focus();
+          const pre = cm.getWrapperElement().querySelector('pre.CodeMirror-line');
+          const marker = pre && pre.querySelector('span.wysiwyg-ol-marker');
+          if (!marker) return { olErr: '未找到 span.wysiwyg-ol-marker' };
+          out.ol = seed(marker, pre);
+        }
+        // ② 任务行空项：组合文本落 .wysiwyg-task-prefix（同族固定 24px 槽）
+        {
+          const ed = window.__s52ed;
+          ed.cm.setValue('- [ ] \n');
+          ed.setWysiwygActiveBlock(0);
+          ed.cm.setCursor(0, 0);
+          ed.cm.focus();
+          const pre = ed.cm.getWrapperElement().querySelector('pre.CodeMirror-line');
+          const pfx = pre && pre.querySelector('span.wysiwyg-task-prefix');
+          if (!pfx) return { ol: out.ol, tkErr: '未找到 span.wysiwyg-task-prefix' };
+          out.tk = seed(pfx, pre);
+        }
+        return out;
+      });
+      if (r.olErr) { s52Push('OL 24px 前缀槽组合文本', false, r.olErr); }
+      else if (r.ol) {
+        s52Push('OL .wysiwyg-ol-marker 带 white-space:nowrap（固定 24px 槽不可换行）',
+          r.ol.nowrap === true, 'nowrap=' + r.ol.nowrap);
+        s52Push("OL 24px marker 槽内组合文本 \"a's'd'f\" 不竖排（盒高 ≤1.6 行高；修复前 108.75px = 4 行）",
+          r.ol.slotH <= r.ol.lineH0 * 1.6,
+          'slotH=' + r.ol.slotH.toFixed(2) + ' lineH=' + r.ol.lineH0.toFixed(2));
+        s52Push('OL 行盒高不被组合文本撑高（修复前 27.19→108.75）',
+          Math.abs(r.ol.lineH2 - r.ol.lineH0) < 1.5,
+          'before=' + r.ol.lineH0.toFixed(2) + ' after=' + r.ol.lineH2.toFixed(2));
+      }
+      if (r.tkErr) { s52Push('任务 24px 前缀槽组合文本', false, r.tkErr); }
+      else if (r.tk) {
+        s52Push('任务 .wysiwyg-task-prefix 带 white-space:nowrap（同族修复）',
+          r.tk.nowrap === true, 'nowrap=' + r.tk.nowrap);
+        s52Push('任务 24px 前缀槽内组合文本不竖排（scrollHeight 27→82 修复）',
+          r.tk.slotH <= r.tk.lineH0 * 1.6,
+          'slotH=' + r.tk.slotH.toFixed(2) + ' lineH=' + r.tk.lineH0.toFixed(2));
+      }
+    } catch (e) {
+      s52Push('S52 场景执行', false, String(e && e.message || e).slice(0, 120));
+    }
+  }
+
   if (errors.length) {
     console.log('\n页面错误:');
     for (const e of errors) console.log('  ' + e);

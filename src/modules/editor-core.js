@@ -379,23 +379,50 @@
         //       不再触发，CM 读不到幽灵换行）。
         try {
           const inputField = this.cm.getInputField();
+          // ⚠️ 组合标志必须挂输入域**原生 DOM** 事件（上方 cm.on('compositionstart/end')
+          //    是死代码：CM 5.65.18 不触发用户级 composition 编辑器事件，2026-10-14 核过
+          //    npm 5.65.18 与 vendor 源码一致）。组合标志一死，wysiwyg.js 三处
+          //    if(_wysiwygComposing) 守卫（L2540 活动行装饰、L2889 重排顺延、L3155）全部失效，
+          //    本处 beforeinput 守卫也认不出「正在组合中」。
+          // 组合期（compositionstart→compositionend）内的 insertLineBreak/insertParagraph 必是幽灵
+          // （用户在敲拼音、没按 Enter）→ 一律吞。compositionend 必随 blur 到达（实测标志不残留）。
+          // 2026-10-18 真机复核：组合标志修复的是「幽灵换行进模型」（S50 场景），
+          // 与用户报的「拼音竖排」**无关**——竖排是 CSS 层（24px 前缀槽折行，
+          // 见 styles.css .wysiwyg-ol-marker / .wysiwyg-task-prefix），组合期模型恒干净。
+          // 2026-10-18 真机实测确认本处有效：组合期原生 beforeinput(insertLineBreak) 在
+          // HEAD 版不被取消（defaultPrevented=false），挂原生 compositionstart 后恒被取消。
+          inputField.addEventListener('compositionstart', () => {
+            this._wysiwygComposing = true;
+          });
           inputField.addEventListener('compositionend', () => {
+            this._wysiwygComposing = false;
             this._lastCompositionEnd = Date.now();
           });
           inputField.addEventListener('beforeinput', (e) => {
             if (e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph') return;
-            // ⚠️ 窗口 2000ms（2026-10-16 原 300ms 实测漏检）：WebView2 输入经 IPC 投递，
-            // WYSIWYG 防抖刷新（computeWysiwygBlocks+重挂遮罩）阻塞主线程时，幽灵
-            // insertLineBreak 可在 Enter keydown 后 300ms+ 才落进事件队列 → 窗外泄漏 →
-            // 裸换行进模型、光标逃逸出列表，后续逐字+逐幽灵换行 = 每字一行（有序列表
-            // 输入被打散成竖排，2026-10-16 用户截图）。安全性：本编辑器 Enter keydown
-            // 恒被 extraKeys 消费（preventDefault）→ 其后的 insertLineBreak/insertParagraph
-            // 不可能是合法键盘输入（命令走模型层不产生 beforeinput；粘贴 inputType 不同）
-            // → 窗口内一律吞。
-            if (this._lastEnterKeydownAt && Date.now() - this._lastEnterKeydownAt < 2000) {
+            // ① 组合期幽灵（S50 场景）：组合期逐字产生幽灵 insertLineBreak（input 通道），
+            //    双时间戳窗口罩不住「正在组合中」（两戳都是几秒前旧值 >2000ms）→ 组合标志
+            //    识别，一律吞（上屏由 IME 完成，组合期内的换行必是幽灵）。
+            if (this._wysiwygComposing) {
+              e.preventDefault();
+              console.debug('[tizumark] 吞除组合期幽灵换行（input 通道，compositionstart 内）');
+              return;
+            }
+            // ② 组合外幽灵——窗口 2000ms（2026-10-16 原 300ms 实测漏检 WebView2 IPC 延迟）：
+            //    双时间戳识别 a) _lastEnterKeydownAt：合法 Enter keydown 恒被 extraKeys
+            //    消费，其后 insertLineBreak 必是幽灵；b) _lastCompositionEnd：IME 确认
+            //    Enter 被输入法完整消费（无残留 keydown 进 extraKeys、_lastEnterKeydownAt
+            //    不刷新）时幽灵仍会到达，此时只有 compositionend 时间戳能识别。
+            //    安全性：合法键盘 Enter 恒被 extraKeys 消费（preventDefault 后不产生
+            //    beforeinput）；粘贴 inputType 为 insertFromPaste/insertText 不同 → 窗口内
+            //    的 insertLineBreak/insertParagraph 必为幽灵，一律吞。
+            const nowTs = Date.now();
+            const sinceEnter = this._lastEnterKeydownAt ? nowTs - this._lastEnterKeydownAt : Infinity;
+            const sinceCompEnd = this._lastCompositionEnd ? nowTs - this._lastCompositionEnd : Infinity;
+            if (sinceEnter < 2000 || sinceCompEnd < 2000) {
               e.preventDefault();
               console.debug('[tizumark] 吞除幽灵换行（input 通道，Enter keydown 后 '
-                + (Date.now() - this._lastEnterKeydownAt) + 'ms）');
+                + sinceEnter + 'ms / compositionend 后 ' + sinceCompEnd + 'ms）');
             }
           });
         } catch (_) { /* 编辑器已销毁等，忽略 */ }
