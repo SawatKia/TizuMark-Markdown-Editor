@@ -1224,6 +1224,23 @@
     // ⚠️ data-source-line 是渲染管线写入的「渲染输入（即块切片）内 1-based 行号」，
     // 不是整篇文档行号——必须加上所在块的起始行才是真实源码行（整篇渲染时块起点为 0，二者恰好一致，
     // 阅读模式的勾选框同步因此不受影响；逐块渲染时漏加偏移会勾错行）。
+    // 任务行勾选回写（渲染态/编辑态共用口径，2026-10-18 收口——此前渲染态回写正则在
+    // toggleWysiwygTaskCheckbox 内单份，编辑态点击接入时不得复制第二份）：切换 lineNo 行
+    // 「[ ]」/「[x]」中字符。返回切换后该行正文起始列（= 前缀长 + 分隔空格，供编辑态落
+    // 光标）；非任务行返回 null（调用方据此放行默认行为）。
+    _wysiwygToggleTaskLine(lineNo) {
+      const cm = this.cm;
+      if (!cm || !isFinite(lineNo) || lineNo < 0 || lineNo >= cm.lineCount()) return null;
+      const line = cm.getLine(lineNo);
+      const m = line.match(/^(\s*(?:[-*+]|\d{1,9}[.)])\s+\[)([ xX])(\])/);
+      if (!m) return null;
+      cm.replaceRange(m[2] === ' ' ? 'x' : ' ',
+        { line: lineNo, ch: m[1].length }, { line: lineNo, ch: m[1].length + 1 }, '+wysiwygTask');
+      let ch = m[0].length;
+      if (line.charAt(ch) === ' ') ch += 1;   // 正文起点越过 GFM 分隔空格（与装饰零宽槽边界一致）
+      return ch;
+    },
+
     toggleWysiwygTaskCheckbox(box) {
       const cm = this.cm;
       if (!cm || !box) return;
@@ -1242,10 +1259,7 @@
       if (!srcLine || !isFinite(srcLine)) return;
       const n = (block ? block.start : 0) + srcLine - 1;
       if (n < 0 || n >= cm.lineCount()) return;
-      const m = cm.getLine(n).match(/^(\s*(?:[-*+]|\d{1,9}[.)])\s+\[)([ xX])(\])/);
-      if (!m) return;
-      cm.replaceRange(m[2] === ' ' ? 'x' : ' ',
-        { line: n, ch: m[1].length }, { line: n, ch: m[1].length + 1 }, '+wysiwygTask');
+      if (this._wysiwygToggleTaskLine(n) == null) return;
       // 立即重渲染该块，不等 250ms 防抖（replaceRange 已同步触发 change → refreshWysiwygBlocks 重算块表）
       const blockIdx = this.wysiwygBlockIndexAt(n);
       const b = this._wysiwygBlocks && this._wysiwygBlocks[blockIdx];
@@ -2833,6 +2847,7 @@
         this._wysiwygVirtual = !full && !!(this._wysiwygBlocks[0] && this._wysiwygBlocks[0].skipped);
         this._ensureWysiwygScrollHook();
         this._ensureWysiwygTableClickGuard();
+        this._ensureWysiwygTaskBoxClick();
         this._ensureWysiwygTableTypeGuard();
         this._ensureWysiwygActiveDecorHook();
         this._ensureWysiwygSelectionHook();
@@ -3108,6 +3123,50 @@
         // 点空白处单元格失去焦点）；光标仍不动，表格块保持渲染态
         if (self._wysiwygCellEditing) self._wysiwygEndCellEdit(true, false);
         ev.preventDefault(); // 光标不动：表格块保持遮罩（渲染）态
+      }, true);
+    },
+
+    // 任务列表编辑态（活动块源文态）复选框点击（2026-10-18 用户反馈「任务列表编辑态时，
+    // 勾选框不能勾选」）：活动块里复选框是 .wysiwyg-task-prefix 的 ::before 伪元素（16px 盒
+    // 画在 24px 槽左缘，框本体无 DOM 节点，点击命中目标恒为槽 span 或其内层 token span/
+    // 文本节点），源文态**没有任何勾选入口**——渲染态入口在遮罩 mousedown 分支（真
+    // input[type=checkbox] → toggleWysiwygTaskCheckbox）。修复 = wrapper capture 阶段
+    // 拦截（同 _ensureWysiwygTableClickGuard 模式）：命中落在槽 span 内 → 该行调
+    // _wysiwygToggleTaskLine（与渲染态共用回写口径）切换 [ ]/[x]，光标落到该行正文起点
+    // （同「点该行」语义）；preventDefault 让 CM 跳过自身落光标（否则光标落透明 bullet 上）。
+    // change 钩子（_ensureWysiwygActiveDecorHook）随即按新行文本重挂装饰，checked 类/
+    // 勾选样式自动刷新。遮罩态（渲染态）点击走遮罩自己的复选框分支，不受此影响；IME
+    // 组合期放行不打断组合（与装饰钩子同口径）。
+    _ensureWysiwygTaskBoxClick() {
+      if (this._wysiwygTaskBoxClickHooked || !this.cm) return;
+      this._wysiwygTaskBoxClickHooked = true;
+      const self = this;
+      const wrapper = this.cm.getWrapperElement ? this.cm.getWrapperElement() : null;
+      if (!wrapper) return;
+      wrapper.addEventListener('mousedown', (ev) => {
+        if (self.viewMode !== 'wysiwyg' || !ev || ev.button !== 0) return;
+        if (self._wysiwygComposing) return;      // IME 组合期不打断（同装饰钩子口径）
+        // 命中目标可能是文本节点（透明 bullet 字符）：先爬到最近的元素节点再 closest
+        let el = ev.target;
+        while (el && el.nodeType !== 1) el = el.parentNode;
+        if (!el || !el.closest) return;
+        if (el.closest('.' + MASK_CLASS)) return;             // 渲染态（遮罩）自有复选框分支
+        if (el.closest('.wysiwyg-task-box-zero')) return;     // 零宽槽上的点击 = 点正文，放行
+        const slot = el.closest('.wysiwyg-task-prefix');
+        if (!slot || !slot.getBoundingClientRect) return;
+        const cm = self.cm;
+        if (!cm || !cm.coordsChar) return;
+        let pos = null;
+        try { pos = cm.coordsChar({ left: ev.clientX, top: ev.clientY }); } catch (_) { return; }
+        if (!pos || !isFinite(pos.line)) return;
+        const ch = self._wysiwygToggleTaskLine(pos.line);
+        if (ch == null) return;                           // 非任务行（理论上不会：槽只存在于任务行）→ 放行
+        ev.preventDefault();
+        ev.stopPropagation();
+        try {
+          cm.setSelection({ line: pos.line, ch }, { line: pos.line, ch }, { scroll: false, origin: '*mouse' });
+          cm.focus();
+        } catch (_) { /* 落光标失败不影响勾选 */ }
       }, true);
     },
 

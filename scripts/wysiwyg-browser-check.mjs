@@ -3003,6 +3003,181 @@ try {
       s51Push('任务复选框纵向位置 编辑态≡渲染态（框顶−正文顶 两态相等 Δ≤0.5px；修复前编辑态框上浮 2.2px = 用户「方框往上移动」）',
         tkVertOk,
         'render=' + (tkBoxTopR - tkTxtTopR).toFixed(2) + ' edit=' + (tkBoxTopE - tkTxtTopE).toFixed(2));
+
+      // ===== ⑤ 编辑态框样式 ≡ 渲染态（2026-10-15 用户「鼠标移到勾选框时显示小手；勾选前后样式
+      // 与渲染态完全一致」）。渲染态 = input[checkbox]（appearance:none + 1.5px 边 + 3px 圆角 +
+      // hover 变 success 边色 + 未勾选 opacity .7 + 0.15s transition + checked 对勾 5×9/2px）。
+      // 编辑态 = 槽的 ::before/::after 复刻。逐像素判据：16×16 框区域逐列 min-lum 剖面（未勾选）
+      // + 白墨最大连通域盒偏移 Δ≤1（勾选对勾）+ computed 口径相等（cursor/opacity/transition/hover）。
+      // ⚠️ 每次截图同 scanRenderLines/scanEditLines 口径：先把被测框滚动到视口中央 → 等稳定 →
+      // 即时取新 rect → 框周围 20×20 条带截图（clip 只依赖框坐标，不拼行盒 rect）。
+      // 套件前面场景已把页面滚走，直接取 rect（可能为视口外负值）拼 clip 会让 16×16 采样区
+      // 越界 → 整条剖面 NaN（2026-10-15 实测教训）。
+      const box16 = async (idx, kind) => {
+        await page.evaluate(({ idx, kind }) => {
+          const ed = window.__s51ed;
+          const el = kind === 'render'
+            ? ed.cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask input[type="checkbox"]')[idx]
+            : ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[idx].querySelector('span.wysiwyg-task-prefix');
+          el.scrollIntoView({ block: 'center' });
+        }, { idx, kind });
+        await page.waitForTimeout(120);
+        const g = await page.evaluate(({ idx, kind }) => {
+          const ed = window.__s51ed;
+          if (kind === 'render') {
+            const ir = ed.cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask input[type="checkbox"]')[idx].getBoundingClientRect();
+            return { boxL: ir.left, boxT: ir.top };
+          }
+          const slot = ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[idx].querySelector('span.wysiwyg-task-prefix');
+          const sr = slot.getBoundingClientRect();
+          return { boxL: sr.left, boxT: sr.top + parseFloat(getComputedStyle(slot, '::before').top || '0') };
+        }, { idx, kind });
+        const clip = { x: Math.max(0, Math.floor(g.boxL) - 2), y: Math.max(0, Math.floor(g.boxT) - 2), width: 20, height: 20 };
+        const shot = await page.screenshot({ clip });
+        const b64 = shot.toString('base64');
+        const px = await page.evaluate(async ({ b64, bx, by }) => {
+          const im = new Image();
+          im.src = 'data:image/png;base64,' + b64;
+          await im.decode();
+          const W = im.width, H = im.height;
+          const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+          const cx = cv.getContext('2d'); cx.drawImage(im, 0, 0);
+          const d = cx.getImageData(0, 0, W, H).data;
+          const lum = (x, y) => { const i = (y * W + x) * 4; return 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; };
+          const x0 = Math.round(bx), y0 = Math.round(by);
+          const colMin = [];
+          for (let x = 0; x < 16; x++) {
+            let m = 255;
+            for (let y = 0; y < 16; y++) m = Math.min(m, lum(x0 + x, y0 + y));
+            colMin.push(Math.round(m));
+          }
+          // 白墨：内区 [2,14)² 排除圆角外白底，取最大连通域 = 对勾
+          const isW = (x, y) => x >= 2 && x < 14 && y >= 2 && y < 14 && lum(x0 + x, y0 + y) > 240;
+          const seen = new Set(); let best = null;
+          for (let x = 2; x < 14; x++) for (let y = 2; y < 14; y++) {
+            if (seen.has(y * 16 + x) || !isW(x, y)) continue;
+            const q = [[x, y]]; seen.add(y * 16 + x);
+            let a = x, b = x, c = y, dd = y, n = 0;
+            while (q.length) {
+              const p = q.pop(); n++;
+              if (p[0] < a) a = p[0]; if (p[0] > b) b = p[0];
+              if (p[1] < c) c = p[1]; if (p[1] > dd) dd = p[1];
+              for (const [dx2, dy2] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                const nx = p[0] + dx2, ny = p[1] + dy2;
+                if (seen.has(ny * 16 + nx) || !isW(nx, ny)) continue;
+                seen.add(ny * 16 + nx); q.push([nx, ny]);
+              }
+            }
+            if (!best || n > best.count) best = { lx: a, ty: c, w: b - a + 1, h: dd - c + 1, count: n };
+          }
+          return { colMin, white: best && best.count > 3 ? best : null };
+        }, { b64, bx: g.boxL - clip.x, by: g.boxT - clip.y });
+        return { boxL: g.boxL, boxT: g.boxT, px };
+      };
+      // —— 渲染态：computed 口径 + 16×16 框区域（行 0 未勾选 / 行 1 勾选）+ hover 边色 ——
+      // 鼠标先归位视口左上角：滚动换位后旧鼠标点会压到新滚入中央的框上（:hover 变边色），
+      // 未勾选剖面必须在**非 hover** 态采。
+      await page.mouse.move(5, 5);
+      await page.evaluate(() => window.__s51ed.setWysiwygActiveBlock(-1));
+      await page.waitForTimeout(200);
+      const tbRcs = await page.evaluate(() => {
+        const ins = window.__s51ed.cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask input[type="checkbox"]');
+        const csU = getComputedStyle(ins[0]), csC = getComputedStyle(ins[1]);
+        return { cursor: csU.cursor, opU: csU.opacity, opC: csC.opacity, tr: csU.transition, borderU: csU.borderTopColor };
+      });
+      const tbR0 = await box16(0, 'render');
+      await page.mouse.move(tbR0.boxL + 8, tbR0.boxT + 8);
+      await page.waitForTimeout(300); // 等 0.15s transition 收敛
+      const tbRHover = await page.evaluate(() =>
+        getComputedStyle(window.__s51ed.cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask input[type="checkbox"]')[0]).borderTopColor);
+      await page.mouse.move(5, 5); // 归位：box16(1) 滚动换位后旧鼠标点不得压到新框上
+      const tbRBox = { u: tbR0.px, c: (await box16(1, 'render')).px };
+      // —— 编辑态：computed 口径 + 16×16 框区域（框顶 = 槽顶 + ::before top）+ hover 边色 ——
+      await page.evaluate(() => {
+        const ed = window.__s51ed, cm = ed.cm;
+        ed.setWysiwygActiveBlock(0);
+        cm.setCursor(2, cm.getLine(2).length); // 光标留第 3 行，不污染被测行
+        cm.focus();
+      });
+      await page.waitForTimeout(250);
+      const tbEcs = await page.evaluate(() => {
+        const slots = [0, 1].map((i) =>
+          window.__s51ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[i].querySelector('span.wysiwyg-task-prefix'));
+        const csB0 = getComputedStyle(slots[0], '::before');
+        const csB1 = getComputedStyle(slots[1], '::before');
+        return { cursor: getComputedStyle(slots[0]).cursor, opU: csB0.opacity, opC: csB1.opacity, tr: csB0.transition };
+      });
+      const tbE0 = await box16(0, 'edit');
+      await page.mouse.move(tbE0.boxL + 8, tbE0.boxT + 8);
+      await page.waitForTimeout(300);
+      const tbEHover = await page.evaluate(() =>
+        getComputedStyle(window.__s51ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[0].querySelector('span.wysiwyg-task-prefix'), '::before').borderTopColor);
+      await page.mouse.move(5, 5); // 归位：box16(1) 滚动换位后旧鼠标点不得压到新框上
+      const tbEBox = { u: tbE0.px, c: (await box16(1, 'edit')).px };
+      s51Push('复选框编辑态小手光标 ≡ 渲染态（cursor:pointer；修复前编辑态槽为 text 光标）',
+        tbRcs.cursor === 'pointer' && tbEcs.cursor === tbRcs.cursor,
+        'render=' + tbRcs.cursor + ' edit=' + tbEcs.cursor);
+      s51Push('复选框 hover 边框变色 ≡ 渲染态（→success 色；修复前编辑态无 hover 规则）',
+        tbRHover !== tbRcs.borderU && tbRHover === tbEHover,
+        'render=' + tbRHover + ' edit=' + tbEHover + ' (未 hover 时 ' + tbRcs.borderU + ')');
+      s51Push('复选框未勾选 opacity ≡ 渲染态（0.7 淡化；修复前编辑态无淡化）+ transition 同参',
+        tbEcs.opU === tbRcs.opU && tbEcs.opC === tbRcs.opC && tbEcs.tr === tbRcs.tr,
+        'render op=' + tbRcs.opU + '/' + tbRcs.opC + ' edit op=' + tbEcs.opU + '/' + tbEcs.opC +
+        ' transition=' + (tbEcs.tr === tbRcs.tr ? '一致' : 'render[' + tbRcs.tr + '] edit[' + tbEcs.tr + ']'));
+      let profMax = 0;
+      for (let x = 0; x < 16; x++) profMax = Math.max(profMax, Math.abs(tbRBox.u.colMin[x] - tbEBox.u.colMin[x]));
+      s51Push('复选框未勾选框 16×16 墨迹剖面 编辑≡渲染（逐列 min-lum Δ≤6）',
+        profMax <= 6, 'maxΔ=' + profMax);
+      const tbCwOk = tbRBox.c.white && tbEBox.c.white &&
+        near(tbRBox.c.white.lx, tbEBox.c.white.lx, 1) && near(tbRBox.c.white.ty, tbEBox.c.white.ty, 1) &&
+        near(tbRBox.c.white.w, tbEBox.c.white.w, 1) && near(tbRBox.c.white.h, tbEBox.c.white.h, 1);
+      s51Push('复选框对勾白墨盒 编辑≡渲染（框外缘相对偏移 Δ≤1px；修复前编辑态对勾高约 2px 且 1.5px 细笔）',
+        !!tbCwOk, 'render=' + JSON.stringify(tbRBox.c.white) + ' edit=' + JSON.stringify(tbEBox.c.white));
+
+      // ===== ④ 编辑态勾选（2026-10-18 用户「任务列表编辑态时，勾选框不能勾选」）：活动块里
+      // 复选框是 .wysiwyg-task-prefix 的 ::before（无 DOM 节点），源文态此前**没有勾选入口**
+      // （渲染态入口 = 遮罩内真 input[type=checkbox]）。修复 = wrapper capture mousedown 拦截
+      // → _wysiwygToggleTaskLine 回写源码（与渲染态共用口径）→ change 钩子重挂 checked 装饰。
+      // 真实鼠标点第 1 行框（非光标行，避免光标态干扰），验证源码字符/checked 类/正文落点；
+      // 再点一次验证反向。槽位几何两态不变，两次点击同一点。
+      const boxPt = await page.evaluate(() => {
+        const ed = window.__s51ed;
+        const pre = ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[0];
+        pre.scrollIntoView({ block: 'center' });
+        const slot = pre.querySelector('span.wysiwyg-task-prefix');
+        const r = slot.getBoundingClientRect();
+        const top = parseFloat(getComputedStyle(slot, '::before').top || '0');
+        return { x: r.left + 8, y: r.top + top + 8, src0: ed.cm.getLine(0) };
+      });
+      s51Push('编辑态勾选：点框前源码为未勾选态（场景前提）',
+        boxPt.src0 === '- [ ] 任务一内容', 'src=' + JSON.stringify(boxPt.src0));
+      await page.mouse.click(boxPt.x, boxPt.y);
+      await page.waitForTimeout(150);
+      const afterT1 = await page.evaluate(() => {
+        const ed = window.__s51ed;
+        const pre = ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[0];
+        const slot = pre.querySelector('span.wysiwyg-task-prefix');
+        const t = pre.querySelector('span.wysiwyg-list-text');
+        const pr = pre.getBoundingClientRect();
+        return {
+          src: ed.cm.getLine(0),
+          checked: slot ? slot.className.indexOf('checked') !== -1 : null,
+          textL: t ? t.getBoundingClientRect().left - pr.left : null,
+          cursor: ed.cm.getCursor(),
+        };
+      });
+      s51Push('编辑态勾选：点框即回写源码 [ ]→[x] + checked 装饰刷新 + 光标落该行正文起点（修复前点框无勾选入口、光标落透明 bullet）',
+        afterT1.src === '- [x] 任务一内容' && afterT1.checked === true &&
+        afterT1.cursor.line === 0 && afterT1.cursor.ch === 6,
+        'src=' + JSON.stringify(afterT1.src) + ' checked=' + afterT1.checked +
+        ' cursor=' + JSON.stringify(afterT1.cursor));
+      s51Push('编辑态勾选后正文落点不变（=56px；勾选态框宽不得漂移正文）',
+        near(afterT1.textL, 56, 0.5), 'textL=' + afterT1.textL);
+      await page.mouse.click(boxPt.x, boxPt.y);
+      await page.waitForTimeout(150);
+      const afterT2 = await page.evaluate(() => window.__s51ed.cm.getLine(0));
+      s51Push('编辑态再点一次反勾 [x]→[ ]（双向可勾）',
+        afterT2 === '- [ ] 任务一内容', 'src=' + JSON.stringify(afterT2));
     } catch (e) {
       s51Push('S51 场景执行', false, String(e && e.message || e).slice(0, 120));
     }

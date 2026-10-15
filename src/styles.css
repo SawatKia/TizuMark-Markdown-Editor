@@ -3135,6 +3135,10 @@ body.is-resizing .side-btn {
      截图表现为 4 个竖排的选中块）；nowrap 后回到单行（scrollH=27）。字符本就 transparent，
      右溢不可见，仅选中高亮会向右延伸——与修 ol marker 的取舍一致。 */
   white-space: nowrap;
+   /* 小手光标（2026-10-15 用户要求）：与渲染态 input[type=checkbox] 的 cursor:pointer 同口径；
+      整 24px 槽都是可点勾选区（编辑态点击勾选处理器覆盖整槽），小手与 hover 变色故对
+      整槽生效，与可交互区域一致。 */
+   cursor: pointer;
 }
 /* 任务行「空格 + [ ]」零宽槽：占位不占宽（同 .wysiwyg-ol-space 机制），
    保证正文恒落 24px 槽右缘 56px；CM5 token 拆分下多个零宽 span 总宽仍 0。
@@ -3163,20 +3167,36 @@ body.is-resizing .side-btn {
   border-radius: 3px;
   background: var(--bg-primary);
   box-sizing: border-box;
+  /* 未勾选态与渲染态 input:not(:checked) 同 opacity（0.7 淡化观感）；transition 与渲染态
+     同列表同时长——hover/勾选翻转变色同样 0.15s 过渡（2026-10-15 用户要求：勾选框勾选
+     前后样式与渲染态完全一致）。 */
+  opacity: 0.7;
+  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+}
+/* hover：与渲染态 input:hover 同口径——边框变成功色（整 24px 槽即可点击区，故整槽 hover） */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-prefix:hover::before {
+  border-color: var(--color-success);
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-prefix.checked::before {
   background: var(--color-success);
   border-color: var(--color-success);
+  opacity: 1;
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-prefix.checked::after {
   content: '';
   position: absolute;
-  left: 0.32em;
-  top: 0.42em;
-  width: 0.26em;
-  height: 0.5em;
+  /* 对勾：与渲染态 input:checked::after 同参（left 4px / top 1px / 5×9 / 2px，基于 input
+     内衬盒、较外缘内收 1.5px）；本侧 ::after 的包含块是槽（无 border/padding、外缘=原点），
+     框外缘在槽 (0,7)。按内衬盒推算本应 left = 0+1.5+4 = 5.5px、top = 7+1.5+1 = 9.5px，
+     但 2026-10-15 Edge 逐像素实测：该值下编辑态对勾墨盒比渲染态整体偏 (1,1)px
+     （渲染态白墨相对绿盒墨顶 = +(3,5) 11×8，编辑态 = +(4,6)）——渲染侧 input 的
+     绝对定位参照盒与按 border 内收推算不符 1px，故取实测校准值 4.5/8.5（两态墨盒重合）。 */
+  left: 4.5px;
+  top: 8.5px;
+  width: 5px;
+  height: 9px;
   border: solid #fff;
-  border-width: 0 1.5px 1.5px 0;
+  border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
 

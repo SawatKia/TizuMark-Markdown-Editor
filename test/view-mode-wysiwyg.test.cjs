@@ -394,6 +394,47 @@ test('复选框回写须加块起始行偏移（data-source-line 是切片内相
   assert.match(wsrc, /toggleWysiwygTaskCheckbox\(box\);\n            return;/, '复选框点击未短路光标定位');
 });
 
+test('复选框编辑态可勾选：前缀槽 mousedown 回写源码（回写口径与渲染态收口同一方法）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  // 共用回写方法（2026-10-18 收口：渲染态/编辑态不得各持一份回写正则）
+  assert.match(wsrc, /_wysiwygToggleTaskLine\(lineNo\)/, '缺少 _wysiwygToggleTaskLine');
+  assert.ok(wsrc.indexOf('this._wysiwygToggleTaskLine(n) == null) return;') >= 0,
+    '渲染态 toggleWysiwygTaskCheckbox 未走共用回写方法（重复口径漂移风险）');
+  // 编辑态点击接线（wrapper capture mousedown，与表格点击守卫同模式）
+  assert.match(wsrc, /_ensureWysiwygTaskBoxClick\(\) \{/, '缺少 _ensureWysiwygTaskBoxClick');
+  assert.match(wsrc, /this\._ensureWysiwygTableClickGuard\(\);\n        this\._ensureWysiwygTaskBoxClick\(\);/,
+    '_ensureWysiwygTaskBoxClick 未随模式进入接线');
+  assert.ok(wsrc.indexOf("el.closest('.wysiwyg-task-prefix')") >= 0,
+    '编辑态点击未识别任务行 24px 前缀槽（::before 框无 DOM，命中目标是槽 span）');
+  assert.ok(wsrc.indexOf("el.closest('.wysiwyg-task-box-zero')") >= 0,
+    '零宽槽上的点击未放行（= 点正文，不得当勾选）');
+});
+
+test('复选框编辑态样式 ≡ 渲染态：小手光标/hover 变色/未勾选 70% 透明度/对勾 5×9 2px（2026-10-15 用户要求）', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  // 小手光标（渲染态 input 为 pointer；整 24px 槽即可点区，对整槽生效）
+  assert.match(css, /wysiwyg-task-prefix \{[\s\S]*?cursor: pointer;/,
+    '编辑态前缀槽缺 cursor:pointer（与渲染态 input 不一致）');
+  // 未勾选态 opacity 0.7 + 与渲染态同列表同时长的 transition
+  assert.match(css,
+    /wysiwyg-task-prefix::before \{[\s\S]*?opacity: 0\.7;[\s\S]*?transition: background-color, color, border-color, opacity, transform, box-shadow 0\.15s ease;/,
+    '编辑态 ::before 缺未勾选 0.7 透明度 / 与渲染态同参 transition');
+  // hover 边框变成功色（渲染态 input:hover 同口径）
+  assert.match(css, /wysiwyg-task-prefix:hover::before \{[^}]*border-color: var\(--color-success\);/,
+    '缺编辑态 hover 边框变色（渲染态 input:hover 有）');
+  // 勾选态 opacity 1
+  assert.match(css, /wysiwyg-task-prefix\.checked::before \{[^}]*opacity: 1;/,
+    '勾选态 ::before 未恢复 opacity 1（与渲染态 checked 不一致）');
+  // 对勾与渲染态 input:checked::after 同参（5×9、2px 笔；left/top = 2026-10-15 Edge 逐像素
+  // 实测校准值 4.5/8.5——渲染侧 input 参照盒与 border 内收推算差 1px，按推算值 5.5/9.5 时
+  // 编辑态墨盒整体偏 (1,1)px）
+  assert.match(css,
+    /wysiwyg-task-prefix\.checked::after \{[^}]*left: 4\.5px;[^}]*top: 8\.5px;[^}]*width: 5px;[^}]*height: 9px;[^}]*border-width: 0 2px 2px 0;/,
+    '编辑态对勾几何与渲染态 input:checked::after 不一致（left/top/5×9/2px）');
+  assert.ok(css.indexOf('left: 0.32em;') < 0 && css.indexOf('border-width: 0 1.5px 1.5px 0;') < 0,
+    '旧 em 值对勾（5.12/6.72、4.16×8、1.5px 笔）残留——比渲染态高约 2px 且笔细');
+});
+
 // ---------- 11. 点击锚定（真机反馈「点击后屏幕乱跳」的根因修复） ----------
 
 // 取遮罩 mousedown 处理器的完整源码块。
@@ -611,7 +652,9 @@ test('列表/代码块活动行渲染化 CSS：源符号透明化 + ::before 渲
   assert.match(css, /wysiwyg-task-prefix::before[\s\S]{0,300}border: 1\.5px solid var\(--border-color\);/,
     '复选框未对齐预览样式（1.5px 边框）');
   assert.match(css, /wysiwyg-task-prefix\.checked::before[\s\S]{0,150}--color-success/, '勾选态未用主题成功色');
-  assert.match(css, /wysiwyg-task-prefix\.checked::after[\s\S]{0,200}transform: rotate\(45deg\);/, '缺勾选对勾');
+  assert.match(css,
+    /wysiwyg-task-prefix\.checked::after[\s\S]{0,600}border-width: 0 2px 2px 0;[\s\S]{0,40}transform: rotate\(45deg\);/,
+    '缺勾选对勾（2px 笔 + 45° 旋转）');
   // 正文/序号：预览字族（与渲染列表一致）
   assert.match(css, /wysiwyg-list-text \{[\s\S]{0,100}var\(--font-preview\)/, '列表正文未用预览字族');
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,100}var\(--font-preview\)/, '有序序号未用预览字族');
