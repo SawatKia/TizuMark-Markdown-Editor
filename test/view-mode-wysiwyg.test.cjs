@@ -618,13 +618,15 @@ test('列表/代码块活动行渲染化 CSS：源符号透明化 + ::before 渲
   // 有序序号 24px 右对齐槽（2026-10-16 用户反馈「有序列表点入编辑态有向右偏移」：
   // 旧「行缩进+8px + 源空格自然宽」按「1. 」≈16px 估算、实测 16.48px → 正文偏右
   // 0.48px、序号偏左 ~4px）。固定 width:24px（= 渲染 ol padding，border-box）右对齐
-  // + padding-right 5px（2026-10-17 S51 像素复测：渲染原生 marker 推进盒右缘 ≈51
-  // = 正文 56 − 5；4px 时右缘 52 → 序号墨迹比渲染态偏右 1px，用户截图「数字往右移」）
-  // + 源空格零宽（.wysiwyg-ol-space）→ 正文恒 56px、序号墨迹 ≈ 渲染 [44,50]。
+  // + padding-right 4.4px（2026-10-18 整墨迹 L1 子像素扫描：「N.」整墨迹两态一致的最优窗口
+  // 4.36–4.42px，6 个 preL 小数相位下窗口不变；4px 时「1/2」细笔左缘越像素边界、编辑态整字偏右 1px）
+  // ⚠️ 历史教训（2026-10-17）：曾按「数字墨迹右缘 render=50 / edit=50 逐行重合」取 4px——右缘列重合 ≠ 同相：2px 宽的 period
+  // 墨迹跨像素边界时右列相同、质量中心却差 0.5px；右对齐对齐的是**锚点**（推进盒右缘 = 56 − padding-right），详见 styles.css ③ 注释
+  // + 源空格零宽（.wysiwyg-ol-space）→ 正文恒 56px、序号墨迹与原生逐列一致。
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}display: inline-block;/, '有序序号未 inline-block（无法固定槽宽/右对齐）');
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}width: 24px;/, '有序序号槽宽未固定 24px（= 渲染 ol padding；多位数撑宽会推正文）');
   assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}text-align: right;/, '有序序号未右对齐（应复刻渲染 outside marker 右缘对齐）');
-  assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}padding-right: 5px;/, '有序序号右距须 5px（S51 像素实测：原生 marker 推进盒右缘 51；4px 时数字墨迹偏右 1px）');
+  assert.match(css, /wysiwyg-ol-marker \{[\s\S]{0,200}padding-right: 4\.4px;/, '有序序号右距须 4.4px（整墨迹扫描最优窗口 4.36–4.42px、6 个 preL 小数相位下不变；4px 时编辑态数字偏右 1px）');
   assert.match(css, /wysiwyg-ol-space \{[\s\S]{0,120}width: 0;/, '有序源空格未零宽（会把正文再推一个空格宽）');
   // IME 组合文本落进固定 24px 前缀槽必须 nowrap（2026-10-18 真机 CDP dump 定位）：
   // 空列表项（`1. ` / `- [ ] ` 正文为空）时，Chromium 把拼音组合串并进光标处最近的文本容器

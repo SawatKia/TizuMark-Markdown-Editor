@@ -501,7 +501,11 @@
         const needNewline = line.trim() !== '';
         const prefix = needNewline ? '\n\n' : '';
         const addedLines = needNewline ? 2 : 0;
-        this.cm.replaceRange(prefix + text + '\n', cursor);
+        // 尾随换行只在该插入点之后还有内容时才补：光标在文末行末补换行会多留一条空源码行，
+        // 该空行在 WYSIWYG 下坍缩成 12px 空白并被活动块底色刷成灰条（用户报「多出来一行灰色空白行」）。
+        const hasTail = cursor.ch < line.length || cursor.line < this.cm.lastLine();
+        const suffix = hasTail ? '\n' : '';
+        this.cm.replaceRange(prefix + text + suffix, cursor);
         if (cursorOffset !== undefined) {
           const before = text.substring(0, cursorOffset);
           const lastNewline = before.lastIndexOf('\n');

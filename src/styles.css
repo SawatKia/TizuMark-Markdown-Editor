@@ -2977,23 +2977,29 @@ body.is-resizing .side-btn {
    57），与渲染态「所有序号右对齐、正文恒 56」不符。固定宽下长序号（≥4 位）向左
    溢出进 32px 行留白（overflow 默认可见、不裁切），正文恒 56。
    ⚠️ 源空格须零宽（.wysiwyg-ol-space），否则正文被再推一个空格宽。
-   ③ padding-right 5px——渲染态原生 outside marker 的**文本推进盒右缘**实测 ≈51
-   （= 正文 56 − 5：msedge 逐行像素扫描反推「1./2./3.」数字+点墨迹，2026-10-17
-   S51 复测）。右对齐文本的推进盒右缘 = 槽右缘 56 − padding-right：4px 时右缘=52，
-   数字墨迹比渲染态整体偏右 1px（用户截图「点入编辑态数字往右移动一点」的成因）；
-   5px 时右缘=51，与原生 marker 同位、墨迹重合（S51 像素断言 Δ≤1px）。
-   正文落点 56px 不受影响（槽宽恒 24px）。 */
+    ③ padding-right 4.4px——右对齐锚点须与渲染态原生 outside marker 逐像素同相（2026-10-18 msedge 整墨迹 L1 子像素扫描）：
+    「N.」整墨迹（数字+点）编辑态与渲染态逐像素一致的最优窗口为 4.36–4.42px（0.01px 步进），且对 6 个 preL 小数
+    相位（0.0/0.3/0.4/0.5/0.7）均不变、窗口内最小代价相同——取 4.4（锚点 = 56−4.4 = 51.6，落在原生锚点置信区间
+    51.5±0.25 内；后者由 period 墨迹质心 = 内容缘−6.5、质心 = 锚点−2.0 估出，与 ol padding-left 无关）。4px 时锚点 = 52.0、
+    比窗口中心 51.6 偏右约 0.4px——「1/2」细笔左缘越过像素边界，编辑态数字整字偏右 1px
+    （2026-10-18 用户截图「点入编辑态数字会往右偏一点」的成因）。窗口内数字墨迹两态逐像素一致；
+    period（2px 小墨点）的 AA 尾列在原生与 span 栅化间仍差约 1 列（固有差异，padding 无法消除），
+    故像素断言只钉数字墨迹（见 scripts/wysiwyg-browser-check.mjs S51）。
+    ⚠️ 历史教训（2026-10-17）：曾按「数字墨迹右缘实测 50」取 4px——右缘列重合 ≠ 同相：2px 宽的
+    period 墨迹跨像素边界时右列相同、质量中心却差 0.5px；右对齐真正对齐的是**锚点**（推进盒
+    右缘 = 56 − padding-right），须按锚点同相取值，不能只看墨迹边界列；更早曾按盒缘推 5px、
+    与墨迹实测差 1px（右对齐文本墨迹不贴盒缘，字形右侧有边距）。正文落点 56px 不受影响（槽宽恒 24px）。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-ol-marker {
   font-family: var(--font-preview);
   display: inline-block;
   width: 24px;
-  padding-right: 5px;
+  padding-right: 4.4px;
   text-align: right;
   /* ⚠️ 必须 white-space:nowrap（2026-10-18 真机 CDP dump 定位）——中文 IME 组合期竖排的**真正**成因：
      空列表项（`1. ` / `- [ ] ` 正文为空）时，Chromium 把拼音组合串作为文本节点插进光标处的
      **本 24px 固定前缀槽**（真机 Input.imeSetComposition 实测：组合前 anchor 在 .wysiwyg-ol-space，
      组合中 anchor 与槽文本同步变为 1. → 1.a's'd'f，即浏览器改了挂载容器）。
-     槽内容宽仅 19px（24−5 padding）且继承行盒 pre-wrap → 逐字折行，盒高 27.19 → 108.75px（= 4 行），
+     槽内容宽仅 19.6px（24−4.4 padding）且继承行盒 pre-wrap → 逐字折行，盒高 27.19 → 108.75px（= 4 行），
      即用户截图「拼音竖排、字间有点」（`'` 是微软拼音音节分隔符）；有正文的行组合文本落在
      自动宽正文 span、从不进本槽，故用户口径「先输点内容再打拼音就正常」。
      固定 24px 是 S51 像素对齐的硬约束（不可改 min-width/auto，实测 auto 下盒宽 57.5px 会把正文推右），
@@ -3140,11 +3146,17 @@ body.is-resizing .side-btn {
   white-space: nowrap;
   color: transparent;
 }
+/* 任务复选框伪元素（框本体）。
+   ⚠️ top 必须是 7px（= 渲染态 input[checkbox] 的行内上距实测值），不能用 em 相对值：
+   旧值 `top: 0.3em`（= 4.8px）使编辑态框比渲染态高 2.2px，即用户 2026-10-18 反馈的
+   「点击任务列表进入编辑态时左边的方框会往上移动」（DOM 实测：渲染态 框顶−正文顶 = 4.00px，
+   编辑态 = 1.80px；改 7px 后两态同为 4.00px）。改 px 而非 em 的理由：参照物
+   input[checkbox] 是固定 16px 盒，槽内字号变化不应带动框位置。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-prefix::before {
   content: '';
   position: absolute;
   left: 0;
-  top: 0.3em;
+  top: 7px;
   width: 16px;
   height: 16px;
   border: 1.5px solid var(--border-color);

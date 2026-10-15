@@ -46,8 +46,10 @@ function findChromium() {
 // Chromium（13x，几何中心 0.85em）不同，用自带 Chromium 校准的样式在真机差 1px
 //（用户截图复测才发现）。Edge 无前置校准意义时（CI 无 Edge）才回退自带 Chromium。
 let browser;
+let isEdgeDriver = false; // 真机 WebView2 同引擎 → 像素级断言可用（见 S51）
 try {
   browser = await pw.chromium.launch({ headless: true, channel: 'msedge' });
+  isEdgeDriver = true;
   console.log('[driver] 浏览器: 系统 Edge（与 app WebView2 同引擎）');
 } catch (e) {
   try {
@@ -2765,13 +2767,14 @@ try {
   // ---------- S51：有序/任务列表 编辑态 vs 渲染态 像素一致（2026-10-17 用户截图「点击
   // 有序列表进入编辑态时，数字会往右移动一点……任务列表也存在这个问题……保证编辑态和
   // 渲染态的样式完全一致」）。两处根因（探针像素实测）：
-  // ① ol 序号槽 padding-right 4px → 右对齐文本推进盒右缘 52，渲染态原生 outside marker
-  //    推进盒右缘 ≈51 → 数字墨迹整体偏右 1px。修：5px（= 56−51）。
+  // ① ol 序号槽 padding-right = 4.4px：右对齐锚点 = 56−4.4 = 51.6，落在渲染态原生 outside
+  //    marker 锚点窗口（整墨迹 L1 扫描最优窗口 4.36–4.42px，6 个 preL 小数相位下不变）。4px → 数字整字偏右 1px。
   // ② 任务框 ::before left:-2ch 按等宽字口径估算「- 」宽，预览比例字体 2ch=17.25px ≠
   //    实宽 10.8px → 框左漂 6.4px；且「[x]」比「[ ]」宽 2.95px → 勾选行正文右漂 4px。
   //    修：bullet 字符进固定 24px 前缀槽（框画在槽左缘 32px）+「空格+[ ]」零宽槽
   //    （正文恒 56px）。⚠️ CM5 会按 token 拆装饰 span → 24px 类只能钉 bullet 单字符。
-  // 断言 = 逐行像素剖面（截图→canvas→列墨迹计数）：墨迹左右缘 Δ≤1px、正文首墨 x Δ=0。
+  // 断言 = 逐行像素剖面（截图→canvas→列墨迹计数）：序号墨迹右缘逐像素相等（Edge）、
+// 「2」行左缘逐像素相等（Edge，其余左缘 Δ≤1px）、正文首墨 x Δ=0。
   console.log('\n=== S51：有序/任务列表 编辑态 vs 渲染态 像素一致 ===');
   {
     const s51Push = (label, ok, extra) => {
@@ -2875,10 +2878,13 @@ try {
       const olOk = [];
       for (let i = 0; i < 3; i++) {
         const R = inkRange(olRender[i], 24, 52), E = inkRange(olEdit[i], 24, 52);
-        olOk.push(near(R && R[0], E && E[0], 1) && near(R && R[1], E && E[1], 1) &&
-          textInkX(olRender[i]) === textInkX(olEdit[i]) && textInkX(olEdit[i]) !== null);
+        // 2026-10-18 复测（padding-right 4.4px，锚点 = 51.6 ∈ 原生锚点窗口 4.36–4.42px）：右缘
+        // （period 墨迹右列）与「2」行左缘（实心墨、无光标）须两态逐像素相等——4px 时「1/2」左缘恒 +1px（用户「数字会往右偏一点」）、
+        // 5px 时恒 −1px（用户「往左移动一点」），宽松 Δ≤1 均漏判、严格逐行相等才捕获。「1」行（光标行底色使细笔 AA 移 ±1 列）与「3」左缘细尖（Y 相位跨阈值）留 Δ≤1。
+        olOk.push(R && E && (isEdgeDriver ? E[1] === R[1] : near(R[1], E[1], 1)) &&
+          ((i === 1 && isEdgeDriver) ? E[0] === R[0] : near(R[0], E[0], 1)) && textInkX(olRender[i]) === textInkX(olEdit[i]) && textInkX(olEdit[i]) !== null);
       }
-      s51Push('有序序号墨迹 编辑态≡渲染态（Δ≤1px；修复前数字整体偏右 1px = 用户「往右移动一点」）',
+      s51Push('有序序号墨迹 编辑态≡渲染态（右缘逐像素 +「2」行左缘逐像素；4px 时「1/2」左缘恒 +1px = 用户「往右偏一点」、5px 时 −1px =「往左移动一点」，严格相等均捕获）',
         olOk.every(Boolean),
         'render=' + olRender.map((p) => JSON.stringify(inkRange(p, 24, 52))).join(',') + ' edit=' + olEdit.map((p) => JSON.stringify(inkRange(p, 24, 52))).join(','));
       s51Push('有序正文首墨 x 两态相同（=56；槽宽恒 24px 保证）',
@@ -2895,10 +2901,38 @@ try {
       const tkGeo = await scanRenderLines(); // 含 cb：渲染 input 左缘（相对 pre 左缘）
       const tkRender = [];
       for (const r of tkGeo) tkRender.push(await lineProfile(r, 150)); // 正文墨迹
+      // ③ 用的**渲染态**纵向几何必须在此刻（遮罩还在）取：切到编辑态后遮罩被卸载，
+      // _wysiwygMarks.get(0) 取不到 → TypeError。
+      // 口径：框顶边 = input rect 顶；正文顶边 = 行内首个非空文本节点首行 rect 顶。
+      // 该取值函数在页面上下文注册一次，渲染态/编辑态共用（避免两份拷贝漂移）。
+      await page.evaluate(() => {
+        window.__s51FirstTextTop = (root) => {
+          const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+          let n;
+          while ((n = w.nextNode())) {
+            if (!(n.textContent || '').trim()) continue;
+            const r = document.createRange();
+            r.selectNodeContents(n);
+            const rects = r.getClientRects();
+            if (rects.length) return rects[0].top;
+          }
+          return null;
+        };
+      });
+      const tkVertRender = await page.evaluate(() => {
+        const ed = window.__s51ed;
+        const mask = ed._wysiwygMarks.get(0).replacedWith;
+        const li = mask.querySelectorAll('li')[1];
+        const cb = li.querySelector('input[type="checkbox"]');
+        return { box: cb.getBoundingClientRect().top, txt: window.__s51FirstTextTop(li) };
+      });
       await page.evaluate(() => {
         const ed = window.__s51ed, cm = ed.cm;
         ed.setWysiwygActiveBlock(0); // 编辑态
-        cm.setCursor(1, cm.getLine(1).length);
+        // ⚠️ 光标必须离开被测行（idx 1）：光标盒是整行高的墨迹，落在此行会把该行的
+        // 「正文墨迹顶边」量成行盒顶而非字形顶，两态同口径后差异被抹平（实测退化成
+        // render=-2 / edit=-2，缺陷漏判）。放第 3 行，被测行只留字形墨迹。
+        cm.setCursor(2, cm.getLine(2).length);
         cm.focus();
       });
       await page.waitForTimeout(250);
@@ -2938,6 +2972,37 @@ try {
       s51Push('任务正文首墨 x 两态相同（逐行 Δ≤1；修复前勾选行右漂 4px）',
         tkRender.every((p, i) => near(textInkX(p), textInkX(tkEdit[i]), 1)),
         'render=' + JSON.stringify(tkRender.map(textInkX)) + ' edit=' + JSON.stringify(tkEdit.map(textInkX)));
+
+      // ===== ③ 任务复选框**纵向**几何：编辑态≡渲染态（2026-10-18 用户「点击任务列表进入编辑态
+      // 时左边的方框会往上移动」）。原 S51 只量横向 x，纵向偏移完全漏测（也因此该缺陷长期潜伏）。
+      // 判据 = 「框顶边 − 同行正文顶边」，两态必须相等：
+      //   · 用 DOM 几何（getBoundingClientRect + computed ::before top）而非像素扫描——扫描口径
+      //     受 scrollIntoView 后陈旧 rect 影响，实测两态恒等（-2/-2）而漏判过真实 2px 偏移；
+      //   · 编辑态框顶 = 槽 rect 顶 + computed ::before top（伪元素不在 rect 内）；
+      //   · 两态同取「差值」，消掉行盒高度差（渲染 li 27.2px vs 编辑 pre 31.2~44.2px）。
+      // 修复前实测（旧 top:0.3em=4.8px）：框顶−正文顶 编辑态 1.80px / 渲染态 4.00px，
+      // 差 2.2px（= 4.8px 与 7px 之差），本断言判红；改 7px 后两态同为 4.00px。
+      const tkVertGeo = await page.evaluate(() => {
+        const ed = window.__s51ed;
+        const pre = ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[1];
+        pre.scrollIntoView({ block: 'center' });
+        const slot = pre.querySelector('span.wysiwyg-task-prefix');
+        const cs = getComputedStyle(slot, '::before');
+        const body = pre.querySelector('span.wysiwyg-list-text') || pre;
+        return {
+          box: slot.getBoundingClientRect().top + parseFloat(cs.top || '0'),
+          txt: window.__s51FirstTextTop(body),
+        };
+      });
+      const tkBoxTopR = tkVertRender.box;
+      const tkTxtTopR = tkVertRender.txt;
+      const tkBoxTopE = tkVertGeo.box;
+      const tkTxtTopE = tkVertGeo.txt;
+      const tkVertOk = tkBoxTopR != null && tkBoxTopE != null && tkTxtTopR != null && tkTxtTopE != null &&
+        Math.abs((tkBoxTopR - tkTxtTopR) - (tkBoxTopE - tkTxtTopE)) <= 0.5;
+      s51Push('任务复选框纵向位置 编辑态≡渲染态（框顶−正文顶 两态相等 Δ≤0.5px；修复前编辑态框上浮 2.2px = 用户「方框往上移动」）',
+        tkVertOk,
+        'render=' + (tkBoxTopR - tkTxtTopR).toFixed(2) + ' edit=' + (tkBoxTopE - tkTxtTopE).toFixed(2));
     } catch (e) {
       s51Push('S51 场景执行', false, String(e && e.message || e).slice(0, 120));
     }
