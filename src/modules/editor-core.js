@@ -395,11 +395,18 @@
             this._wysiwygComposing = true;
             // 防御：format.js 万一未加载，也不得让组合监听器抛错（组合标志必须优先立起）
             if (this._recordBareListMarkerForIme) this._recordBareListMarkerForIme();
+            // 标题行组合期字号保持（2026-10-19 用户反馈 #2：组合文本在装饰 span 外按基准
+            // 字号渲染 → 输入标题时字号闪），wysiwyg.js 挂类，未加载时跳过
+            if (this._wysiwygImeCompositionStart) this._wysiwygImeCompositionStart();
           });
           inputField.addEventListener('compositionend', () => {
             this._wysiwygComposing = false;
             this._lastCompositionEnd = Date.now();
             if (this._repairImeDamagedListPrefix) this._repairImeDamagedListPrefix();
+            // 组合确认立即读 DOM 进模型（CM5 readFromDOMSoon 的 80ms 定时器之前先一步）：
+            // 空窗期标题行装饰 span 缺失 → 基准字号闪烁（2026-10-19 用户反馈 #2）
+            if (this._wysiwygImeCompositionEnd) this._wysiwygImeCompositionEnd();
+            if (this._wysiwygImeFlushDOM) this._wysiwygImeFlushDOM();
           });
           inputField.addEventListener('beforeinput', (e) => {
             if (e.inputType !== 'insertLineBreak' && e.inputType !== 'insertParagraph') return;

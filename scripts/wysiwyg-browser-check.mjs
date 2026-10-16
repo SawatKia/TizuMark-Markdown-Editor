@@ -373,6 +373,8 @@ try {
     [`每个非列表遮罩块均挂编辑按钮: ${bt.btnNonList}/${bt.nonListMasks}`, bt.allHaveBtn === true],
     [`列表遮罩块不挂编辑按钮（2026-10-16 反馈 #1：点行即编辑）: ${bt.listMasks} 个列表块 / ${bt.btnList} 个带按钮`,
       bt.listNoBtn === true],
+    [`标题遮罩块不挂编辑按钮（2026-10-17 用户要求：点遮罩即编辑）: ${bt.headingMasks} 个标题块 / ${bt.btnHeading} 个带按钮 / ${bt.headingNoBtnCls} 个挂 no-btn-heading 类`,
+      bt.headingNoBtn === true],
     [`按钮默认隐藏（opacity 0，hover 显现）: ${bt.defaultOpacity}`, bt.defaultOpacity === '0'],
     [`代码块内让位复制按钮（right=76px）: ${bt.codeOffsetOk}`, bt.codeOffsetOk === true],
     [`普通块 right=10px: ${bt.plainOffset}`, bt.plainOffset === true],
@@ -3430,6 +3432,101 @@ try {
       } else {
         s54Push('文档B：空行点击点未定位', false);
       }
+    }
+  }
+
+  // ---------- S55：空任务项回车退出列表不得整页跳到文档顶（2026-10-18 真机用户反馈） ----------
+  // 用户精确流程：① 末任务项（有文本）按回车 → 续出新空项；② 空项再按回车 → 列表退出
+  //（标记移除）光标离开块 → 块重遮罩。修复前 _restoreWysiwygAnchor 在 operation 内
+  // refresh → 行高计算错乱 → 垃圾 delta 过视口守卫 → scrollTo 负值被 operation 末钳到 0。
+  {
+    console.log('\n=== S55：空任务项回车退出列表（页面不得跳到文档顶） ===');
+    const s55Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    const setup = await page.evaluate(() => window.__runEnterExit2026());
+    if (setup.err) {
+      s55Push('S55 初始化', false, setup.err);
+    } else {
+      // ① 末任务项（有文本）按回车 → 续出新空任务项
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(600);
+      const m1 = await page.evaluate(() => window.__s55state());
+      s55Push('末项按回车续出新空任务项（光标在新行、行 = "- [ ] "）',
+        m1.err == null && m1.lastLine === '"- [ ] "', 'cursor=' + JSON.stringify(m1.cursor) + ' last=' + m1.lastLine);
+      // ② 空项再按回车 → 列表退出（标记移除）→ 光标离开块 → 块重遮罩 → 锚点补偿
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(800); // 越过 setTimeout(0) 延迟补偿 + 250ms 块表防抖
+      const m2 = await page.evaluate(() => window.__s55state());
+      s55Push('空项按回车退出列表（末行标记移除 = 空行）', m2.err == null && m2.lastLine === '""', 'last=' + m2.lastLine);
+      s55Push('退出后块恢复渲染态（activeIdx=-1）', m2.err == null && m2.activeIdx === -1, 'activeIdx=' + m2.activeIdx);
+      s55Push('退出后页面不跳顶（scrollTop 未钳到 0 且位移 <150px）',
+        m2.err == null && m2.scrollTop > 0 && Math.abs(m2.scrollTop - m1.scrollTop) < 150,
+        `scrollTop=${m1.scrollTop}→${m2.scrollTop}`);
+      s55Push('退出后光标仍在编辑器视口内（输入行可见，未被甩出视口）',
+        m2.err == null && m2.cursorVisibleInWrapper === true, 'cursor=' + JSON.stringify(m2.cursor));
+    }
+  }
+
+  // ---------- S56：标题输入字号稳定（2026-10-19 用户反馈 #2）+ 空行标题不得误遮 ----------
+  // 根因①：IME 组合文本以裸文本节点进输入域 DOM、落在装饰 span 外 → 组合期按基准字号渲染；
+  // 根因②：compositionend 后 CM5 readFromDOMSoon 80ms 才读 DOM → span 重挂再晚 80ms。
+  // 修复：compositionstart 给 pre 挂类（基准字号抬到标题尺寸）+ compositionend 立即读 DOM。
+  {
+    console.log('\n=== S56：标题输入字号稳定（IME 组合期 + 上屏后立即重挂装饰） ===');
+    const s56Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    for (const level of [1, 6]) {
+      // harness --wysiwyg-text-size=16px → h1 正文 32px / h6 正文 14.4px / 基准 16px
+      const targetFs = level === 1 ? '32px' : '14.4px';
+      const st = await page.evaluate((lv) => window.__s56Start({ level: lv, doc: 'A' }), level);
+      if (st.err) { s56Push(`S56 初始化 h${level}`, false, st.err); continue; }
+      // ① 直输「# 」后标题文本已按标题尺寸（活动行装饰 span 生效）
+      const p0 = await page.evaluate(() => window.__s56State());
+      s56Push(`h${level}：直输「# 」后标题文本已按 ${targetFs} 显示（活动行装饰生效）`,
+        p0.err == null && p0.lastGlyphFs === targetFs, `lastGlyph=${p0.lastGlyphFs}`);
+      // ② IME 组合中：组合文本必须已是标题尺寸（挂类抬基准字号，无基准字号空帧）
+      const i1 = await page.evaluate(() => window.__s56ImeStart('测试'));
+      if (i1.err) { s56Push(`h${level} IME 组合`, false, i1.err); continue; }
+      await page.waitForTimeout(120); // 留一帧让浏览器绘制组合期状态
+      const p1 = await page.evaluate(() => window.__s56State());
+      s56Push(`h${level}：组合期组合文本保持 ${targetFs}（不缩/胀到基准 16px）`,
+        p1.err == null && p1.lastGlyphFs === targetFs, `lastGlyph=${p1.lastGlyphFs}`);
+      s56Push(`h${level}：组合期 pre 挂 wysiwyg-ime-heading-${level}`,
+        p1.err == null && p1.imeClass === `wysiwyg-ime-heading-${level}`, p1.imeClass || '(未挂类)');
+      // ③ 上屏（compositionend+input）：模型立即拿到文本、装饰 span 同任务重挂（无 16px 空帧）
+      const i2 = await page.evaluate(() => window.__s56ImeEnd('测试'));
+      if (i2.err) { s56Push(`h${level} IME 上屏`, false, i2.err); continue; }
+      const p2 = await page.evaluate(() => window.__s56State());
+      s56Push(`h${level}：上屏后模型立即拿到组合文本（80ms 空窗消除）`,
+        p2.err == null && p2.modelLine === JSON.stringify((level === 1 ? '# ' : '###### ') + '大标题' + '测试'),
+        'model=' + p2.modelLine);
+      s56Push(`h${level}：上屏后字号立即保持 ${targetFs}（装饰 span 同任务重挂）`,
+        p2.err == null && p2.lastGlyphFs === targetFs, `lastGlyph=${p2.lastGlyphFs}`);
+      s56Push(`h${level}：compositionend 后组合期类已摘（原 span 接管）`,
+        p2.err == null && p2.imeClass == null, p2.imeClass || '类已摘 ✓');
+      // ④ 防抖重切后：行仍是源码态、块仍活动、字号不变
+      await page.waitForTimeout(450); // 越过 250ms 防抖重切
+      const p3 = await page.evaluate(() => window.__s56State());
+      s56Push(`h${level}：防抖重切后标题行仍源码态且活动（activeIdx=${st.line}）、字号不变`,
+        p3.err == null && p3.isRealLine === true && p3.activeIdx === st.line && p3.lastGlyphFs === targetFs,
+        `real=${p3.isRealLine} activeIdx=${p3.activeIdx} lastGlyph=${p3.lastGlyphFs}`);
+    }
+    // ⑤ 空行标题：两段落间空行直输「# 标题」→ 防抖重切后不得被误遮成渲染态
+    //（修复前：新表索引撞旧 marks → 光标新块误判已遮罩 → 重遮、字号 16px→渲染尺寸跳变）
+    for (const level of [1, 6]) {
+      const b = await page.evaluate((lv) => window.__s56BlankRun(lv), level);
+      if (b.err) { s56Push(`S56 空行标题 h${level} 初始化`, false, b.err); continue; }
+      await page.waitForTimeout(450); // 越过 250ms 防抖重切
+      const p = await page.evaluate(() => window.__s56State());
+      s56Push(`空行标题 h${level}：重切后标题块保持源码态（未被误遮、块仍活动）`,
+        p.err == null && p.isRealLine === true && p.activeIdx === 1,
+        `real=${p.isRealLine} activeIdx=${p.activeIdx} model=${p.modelLine}`);
     }
   }
 

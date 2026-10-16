@@ -248,11 +248,16 @@
       inputField.addEventListener('compositionstart', () => {
         ed._wysiwygComposing = true;
         ed._recordBareListMarkerForIme();
+        // 标题行组合期字号保持（与 editor-core 同一接线，2026-10-19 用户反馈 #2）
+        if (ed._wysiwygImeCompositionStart) ed._wysiwygImeCompositionStart();
       });
       inputField.addEventListener('compositionend', () => {
         ed._wysiwygComposing = false;
         ed._lastCompositionEnd = Date.now();
         ed._repairImeDamagedListPrefix();
+        // 摘组合期标题类 + 立即读 DOM（跳过 CM5 80ms 空窗，与 editor-core 同一接线）
+        if (ed._wysiwygImeCompositionEnd) ed._wysiwygImeCompositionEnd();
+        if (ed._wysiwygImeFlushDOM) ed._wysiwygImeFlushDOM();
       });
       // 与 editor-core 同一幽灵换行守卫（input 通道，2026-10-15 用户复现）：组合标志 +
       // 双时间戳（真实 Enter 被 extraKeys 消费后、紧随 _lastEnterKeydownAt/_lastCompositionEnd
@@ -455,6 +460,206 @@
       out.err = String(e && e.message || e);
       return out;
     }
+  };
+
+  // ---------- S55：空任务项回车退出列表不得整页跳到文档顶（2026-10-18 真机用户反馈） ----------
+  // 用户精确流程：① 末任务项（有文本）按回车 → 续出新空项；② 空项再按回车 → 列表退出
+  //（标记移除），光标离开块 → 块重遮罩 → _restoreWysiwygAnchor。修复前 operation 内
+  // refresh 行高错乱 → 垃圾 delta 过视口守卫 → scrollTo 负值被 operation 末钳到 0=跳顶。
+  // 驱动：__runEnterExit2026 → 按 Enter（续行）→ 等 600ms → __s55state → 按 Enter（退出）
+  // → 等 800ms（越过 setTimeout(0) 延迟补偿）→ __s55state。
+  const S55_DOC = ['asdfsadfsdf', '', '- [ ] asadfsadfs', '- [ ] sadfsdfsaf', '- dfasfs撤地方',
+    '1. dfsdfs', '2. 士大夫萨芬士大夫', '3. 撒旦飞洒登封市', '', '| 列1 | 列2 | 列3 |',
+    '| --- | --- | --- |', '| 内容 | 内容 | 内容 |', '', '1. 阿萨撒地方', '2. 阿斯蒂芬撒adf',
+    '3. 撒旦飞洒飞洒地方', '4. 阿斯顿发射点', '', '- [ ] 撒旦飞洒发', '- [ ] 阿萨是撒飞酒',
+    '- [ ] 啊手动阀十分士大夫', '- [ ] 的飞洒发生', '- [ ] 撒旦飞洒地方撒地方'].join('\n');
+
+  window.__runEnterExit2026 = function () {
+    const out = { err: null };
+    try {
+      // ⚠️ 必须走 __makeWysiwygEditor（内部 renderWysiwygMasks 初始化 _wysiwygMarks/_wysiwygBlocks）：
+      // 裸 makeEditor 的 ed 未初始化遮罩状态，250ms 防抖重切走 updateWysiwygViewportMasks 时
+      // Array.from(undefined marks) 直接抛「undefined is not iterable」（S55 首版踩坑）。
+      const E = window.__makeWysiwygEditor(S55_DOC);
+      window.__s55ed = { cm: E.cm, ed: E.ed };
+      E.cm.getWrapperElement().style.height = '676px';
+      E.cm.refresh();
+      const lastIdx = S55_DOC.split('\n').length - 1;
+      E.cm.setCursor({ line: lastIdx, ch: E.cm.getLine(lastIdx).length });
+      // 滚到真机截图状态：末段有序列表（行 12）顶到视口顶（scrollTop≈409，近底）
+      const y12 = E.cm.charCoords({ line: 12, ch: 0 }, 'local').top;
+      E.cm.scrollTo(0, y12);
+      E.cm.focus();
+      out.scrollTopBefore = E.cm.getScrollInfo().top;
+      out.cursorBefore = E.cm.getCursor();
+      return out;
+    } catch (e) {
+      out.err = String(e && e.message || e);
+      return out;
+    }
+  };
+
+  window.__s55state = function () {
+    const out = { err: null };
+    try {
+      const E = window.__s55ed;
+      const cmx = E.cm;
+      const wrap = cmx.getWrapperElement();
+      const wr = wrap.getBoundingClientRect();
+      const c = cmx.getCursor();
+      const cc = cmx.cursorCoords(c, 'window');
+      out.scrollTop = Math.round(cmx.getScrollInfo().top);
+      out.cursor = c;
+      // 光标必须仍在编辑器视口内（修复前：scrollTop 被钳到 0，末行光标滚出视口到文档顶）
+      out.cursorVisibleInWrapper = !!(cc && isFinite(cc.top) && cc.top > wr.top && cc.top < wr.bottom);
+      out.lastLine = JSON.stringify(cmx.getLine(cmx.lineCount() - 1));
+      out.activeIdx = E.ed._wysiwygActiveIdx;
+      return out;
+    } catch (e) {
+      out.err = String(e && e.message || e);
+      return out;
+    }
+  };
+
+  // ---------- S56：标题输入字号稳定（2026-10-19 用户反馈 #2）+ 空行标题不得误遮（同源根因） ----------
+  // 字号闪根因（探针实测时间线）：① IME 组合文本以裸文本节点进输入域 DOM、落在
+  // wysiwyg-heading-text span 之外 → 组合期按 pre 基准字号渲染；② compositionend 后
+  // CM5 readFromDOMSoon 80ms 定时器才读 DOM 进模型 → 装饰 span 重挂再晚 80ms。
+  // 修复：compositionstart 给标题行 pre 挂 wysiwyg-ime-heading-{级}（基准字号抬到标题尺寸，
+  // 行内 span 反比缩放）；compositionend 立即 cm.input.updateFromDOM() 跳过 80ms 空窗。
+  // 空行标题误遮（同批修复）：刷新路径「钳光标在遮罩块」判定拿新表索引查旧 marks → 索引
+  // 撞车 → 光标新块被误判已遮罩 → 重遮成渲染态。判定改用旧表+旧 marks 配套键空间。
+  // 驱动：__s56Start({level,doc}) 建实例并直输「# 」→ __s56ImeStart('测试') 模拟组合入 DOM
+  // → __s56State 采样（组合中末字形号）→ __s56ImeEnd('测试') 上屏 → __s56State 采样
+  // （确认后末字形号/模型行/activeIdx/是否真实行）。
+  window.__s56Start = function (arg) {
+    const out = { err: null };
+    try {
+      const DOC = (arg.doc === 'B') ? ['段落一内容 A。', '', '段落二内容 B。'] : ['大标题', '', '段落二内容 B。'];
+      const E = window.__makeWysiwygEditor(DOC.join('\n'));
+      window.__s56ed = E;
+      E.cm.getWrapperElement().style.height = '500px';
+      E.cm.refresh();
+      const target = (arg.doc === 'B') ? 1 : 0;
+      E.cm.focus();
+      E.cm.setCursor({ line: target, ch: 0 });
+      let s = '';
+      for (let i = 0; i < arg.level; i++) s += '#';
+      // 直输「# + 空格」→ 行成为标题（doc A 的旧表是单行段落 → 活动行装饰 span 应已挂）
+      E.cm.replaceRange(s + ' ', E.cm.getCursor());
+      out.doc = arg.doc;
+      out.line = target;
+      out.text = E.cm.getLine(target);
+      return out;
+    } catch (e) { out.err = String(e && e.message || e); return out; }
+  };
+
+  // CM5 无 lineInfo（CM6 API）：按视口行取 pre.CodeMirror-line（与产品 _wysiwygLinePreOf 同机制）
+  window.__s56LinePre = function (cmx, lineNo) {
+    try {
+      const view = cmx.display && cmx.display.view;
+      if (!view) return null;
+      const handle = cmx.getLineHandle(lineNo);
+      for (const lv of view) {
+        if (lv && lv.line === handle) {
+          const el = lv.node;
+          if (!el) return null;
+          return el.tagName === 'PRE' ? el : el.querySelector('pre.CodeMirror-line');
+        }
+      }
+    } catch (_) { /* 视口结构异常 */ }
+    return null;
+  };
+
+  // 模拟 IME 组合：原生 compositionstart（harness 接线置 _wysiwygComposing + 调
+  // _wysiwygImeCompositionStart 挂类）→ 组合文本裸文本节点追加到目标行 pre 末尾
+  //（= 光标在行尾的真实浏览器行为：落在 span 外）
+  window.__s56ImeStart = function (text) {
+    const out = { err: null };
+    try {
+      const E = window.__s56ed;
+      const input = E.cm.getInputField();
+      const pre = window.__s56LinePre(E.cm, E.cm.getCursor().line);
+      if (!pre) { out.err = 'pre-not-found（目标行已遮罩/未物化？）'; return out; }
+      input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      pre.appendChild(document.createTextNode(text));
+      return out;
+    } catch (e) { out.err = String(e && e.message || e); return out; }
+  };
+
+  // 模拟 IME 上屏：compositionend（harness 接线摘类 + _wysiwygImeFlushDOM 立即读 DOM）
+  // + input 事件（CM 内部 composing 对象在 → 被挡，80ms 定时器为兜底 no-op）
+  window.__s56ImeEnd = function (text) {
+    const out = { err: null };
+    try {
+      const E = window.__s56ed;
+      const input = E.cm.getInputField();
+      input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: text }));
+      // 同步快照（事件返回后同一任务内）：装饰 span 是否已重挂
+      const snap = () => {
+        const pre = window.__s56LinePre(E.cm, E.cm.getCursor().line);
+        if (!pre) return { real: false };
+        const tw = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT);
+        let lastN = null, n;
+        while ((n = tw.nextNode())) { if (n.nodeValue && n.nodeValue.trim()) lastN = n; }
+        return {
+          real: true,
+          fs: lastN ? getComputedStyle(lastN.parentElement).fontSize : null,
+          parentTag: lastN ? lastN.parentElement.className : null,
+        };
+      };
+      out.sync = snap();
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+      out.afterInput = snap();
+      out.model = E.cm.getLine(E.cm.getCursor().line);
+      return out;
+    } catch (e) { out.err = String(e && e.message || e); return out; }
+  };
+
+  // 采样目标行：是否真实源码行（被遮罩 = 渲染态）、模型行、活动块、末字形号
+  //（pre 内最后一个非空文本节点的父元素计算字号 = 用户真正看到的字形尺寸）
+  window.__s56State = function () {
+    const out = { err: null };
+    try {
+      const E = window.__s56ed;
+      const cmx = E.cm;
+      const line = cmx.getCursor().line;
+      const pre = window.__s56LinePre(cmx, line);
+      out.isRealLine = !!pre && pre.tagName === 'PRE';
+      out.modelLine = JSON.stringify(cmx.getLine(line));
+      out.activeIdx = E.ed._wysiwygActiveIdx;
+      out.lastGlyphFs = null;
+      if (pre) {
+        const tw = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT);
+        let lastN = null, n;
+        while ((n = tw.nextNode())) { if (n.nodeValue && n.nodeValue.trim()) lastN = n; }
+        if (lastN) out.lastGlyphFs = getComputedStyle(lastN.parentElement).fontSize;
+        const mCls = (pre.className || '').match(/wysiwyg-ime-heading-\d/);
+        out.imeClass = mCls ? mCls[0] : null;
+      }
+      return out;
+    } catch (e) { out.err = String(e && e.message || e); return out; }
+  };
+
+  // 空行标题：两段落间空行直输「# 标题」，400ms 后（越过 250ms 防抖重切）该行必须
+  // 仍是源码态（活动块），不得被重遮成渲染态（修复前：新表索引撞旧 marks → 误遮）
+  window.__s56BlankRun = function (level) {
+    const out = { err: null };
+    try {
+      const DOC = ['段落一内容 A。', '', '段落二内容 B。'];
+      const E = window.__makeWysiwygEditor(DOC.join('\n'));
+      window.__s56ed = E;
+      E.cm.getWrapperElement().style.height = '500px';
+      E.cm.refresh();
+      E.cm.focus();
+      E.cm.setCursor({ line: 1, ch: 0 });
+      let s = '';
+      for (let i = 0; i < level; i++) s += '#';
+      E.cm.replaceRange(s + ' 标题', E.cm.getCursor());
+      out.line = 1;
+      out.text = E.cm.getLine(1);
+      return out;
+    } catch (e) { out.err = String(e && e.message || e); return out; }
   };
 
   const tagsOf = (h) => (h.match(/<(h\d|p|ol|ul|li|blockquote|table|thead|tbody|tr|pre|code|input)[^>]*>/g) || [])
@@ -1308,17 +1513,24 @@
     const { cm, ed } = makeEditor(DOC);
     ed.renderWysiwygMasks();
     await sleep(150); // 后处理 + 异步 pass flush
-    const out = { nonListMasks: 0, btnNonList: 0, listMasks: 0, btnList: 0, allHaveBtn: false, listNoBtn: false, defaultOpacity: null, codeOffsetOk: null, plainOffset: null, click: null };
+    const out = { nonListMasks: 0, btnNonList: 0, listMasks: 0, btnList: 0, headingMasks: 0, btnHeading: 0, headingNoBtnCls: 0, allHaveBtn: false, listNoBtn: false, headingNoBtn: false, defaultOpacity: null, codeOffsetOk: null, plainOffset: null, click: null };
     try {
       // 2026-10-16 反馈 #1：列表块不挂「编辑」按钮（点行即编辑）→ 统计按「列表遮罩
       // /非列表遮罩」分类（列表遮罩=遮罩内容顶层是 ul/ol，与渲染切块同一口径）。
+      // 2026-10-17 用户要求：标题遮罩块同样不挂「编辑」按钮（点遮罩即编辑，
+      // wysiwyg-mask-no-btn-heading 补 12px 底距）→ 按 _wysiwygBlockIsHeading 归类。
       const masks = [];
       ed._wysiwygBlocks.forEach((b, idx) => {
         const mark = ed._wysiwygMarks.get(idx);
         if (!mark || !mark.replacedWith) return;
         const btn = mark.replacedWith.querySelector('button.block-edit-btn');
         const isListMask = !!(mark.replacedWith.querySelector(':scope > ul') || mark.replacedWith.querySelector(':scope > ol'));
-        if (isListMask) {
+        const isHeadingMask = typeof ed._wysiwygBlockIsHeading === 'function' && ed._wysiwygBlockIsHeading(b);
+        if (isHeadingMask) {
+          out.headingMasks++;
+          if (btn) out.btnHeading++;
+          if (mark.replacedWith.classList.contains('wysiwyg-mask-no-btn-heading')) out.headingNoBtnCls++;
+        } else if (isListMask) {
           out.listMasks++;
           if (btn) out.btnList++;
         } else {
@@ -1331,6 +1543,7 @@
       });
       out.allHaveBtn = out.nonListMasks > 0 && out.btnNonList === out.nonListMasks;
       out.listNoBtn = out.listMasks > 0 && out.btnList === 0;
+      out.headingNoBtn = out.headingMasks > 0 && out.btnHeading === 0 && out.headingNoBtnCls === out.headingMasks;
       const first = masks[0];
       if (first) out.defaultOpacity = getComputedStyle(first.btn).opacity;
       for (const m of masks) {
@@ -3592,7 +3805,17 @@
     }
     if (what === 'line9') { // quote 块（激活态=真实行；非激活态=遮罩节点）
       const mark = ed._wysiwygMarks.get(4);
-      const el = mark ? mark.replacedWith : lineEl(9);
+      let el = mark ? mark.replacedWith : lineEl(9);
+      if (!el) {
+        // DOM 序兜底（与 __s35lineEl 同口径）：CM5 物化会丢遮罩区间内的空行（行5），
+        // pre.CodeMirror-line 的 DOM 序随之偏移——lineEl(9) 未必是引用行（2026-10-18：
+        // 锚点补偿延迟刷新提前落定 display，80ms 时 DOM 已 9 个 pre，索引 9 越界）。
+        const coords = ed.cm.charCoords({ line: 9, ch: 0 }, 'page');
+        if (coords) {
+          let n = document.elementFromPoint(coords.left - window.scrollX + 2, coords.top - window.scrollY + 2);
+          while (n) { if (n.classList && n.classList.contains('CodeMirror-line')) { el = n; break; } n = n.parentNode; }
+        }
+      }
       if (!el) return null;
       const r = el.getBoundingClientRect();
       return { x: r.left + 30, y: r.top + Math.min(10, r.height / 2) };

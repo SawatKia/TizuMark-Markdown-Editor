@@ -2881,6 +2881,9 @@ body.is-resizing .side-btn {
    跳动（S43 逐像素等高被破坏）。no-btn 遮罩把内容元素底边距补回 14px，与有按钮时同高。
    （列表块内容恰为单个 ul/ol 顶层元素，`*` 安全。） */
 .CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn > *:last-child { margin-bottom: 14px; }
+/* 标题块不挂「编辑」按钮（2026-10-19 用户反馈 #1）：同 no-btn 机制——h1–h6 成为
+   last-child 后 12px margin-bottom（预览 h1–h6 统一值）被清零、遮罩矮 12px → 补回。 */
+.CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn-heading > *:last-child { margin-bottom: 12px; }
 /* 跨块选区（2026-10-16 用户反馈「选中和全选只能选中当前编辑的一小块」）：CM5 只给可见
    源码行画选框，遮罩（replacedWith widget）节点无选中态 → 选区覆盖的遮罩块由
    _applyWysiwygSelectionMaskClasses 挂本类，半透明着色与原生选区观感一致（浅蓝底，
@@ -2970,6 +2973,36 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-heading-text-4 { font-size: 1.1em; }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-heading-text-5 { font-size: 1em; color: var(--text-secondary); }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-heading-text-6 { font-size: 0.9em; color: var(--text-secondary); }
+
+/* WYSIWYG 标题行 IME 组合期（2026-10-19 用户反馈 #2：输入标题字号闪）：组合期浏览器把
+   组合文本以裸文本节点插进输入域 DOM，它落在 wysiwyg-heading-text span **之外**（span 只
+   覆盖模型已有文本）→ 按 pre 基准字号渲染（16px）；compositionend 后 CM5 的 80ms DOM 读
+   延迟又让确认后的重挂晚半拍——两者叠加 = H1 先缩后胀、H6 先胀后缩（探针实测时间线）。
+   compositionstart 时 JS 给该行 pre 挂本类：基准字号抬到标题尺寸（组合文本直接同尺寸），
+   行内 # 前缀/正文 span 反比缩放回同一像素值（calc 以 --wysiwyg-text-size 为基准，与渲染
+   值逐像素对齐）→ 全程字号恒定；compositionend 摘类，原 span 接管（同尺寸，无跳变）。
+   行高 1.7 同乘字号，摘类前后行盒高度一致，无高度跳。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-1 { font-size: calc(var(--wysiwyg-text-size, 16px) * 2); font-weight: var(--preview-bold-weight, 700); }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-2 { font-size: calc(var(--wysiwyg-text-size, 16px) * 1.5); font-weight: var(--preview-bold-weight, 700); }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-3 { font-size: calc(var(--wysiwyg-text-size, 16px) * 1.25); font-weight: var(--preview-bold-weight, 700); }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-4 { font-size: calc(var(--wysiwyg-text-size, 16px) * 1.1); font-weight: var(--preview-bold-weight, 700); }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-5 { font-size: var(--wysiwyg-text-size, 16px); font-weight: var(--preview-bold-weight, 700); }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-6 { font-size: calc(var(--wysiwyg-text-size, 16px) * 0.9); font-weight: var(--preview-bold-weight, 700); }
+/* 行内渲染化 span 反比缩放：pre 已抬到标题尺寸，span 回到 1em = 与裸组合文本同尺寸；
+   # 前缀固定 0.8×基准（各级统一，与 .wysiwyg-heading-hash 同口径）。特异性须压过
+   .wysiwyg-heading-text-{n}（0,4,0）与 .wysiwyg-heading-hash（0,4,0）。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-1 .wysiwyg-heading-text,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-2 .wysiwyg-heading-text,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-3 .wysiwyg-heading-text,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-4 .wysiwyg-heading-text,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-5 .wysiwyg-heading-text,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-6 .wysiwyg-heading-text { font-size: 1em; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-1 .wysiwyg-heading-hash,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-2 .wysiwyg-heading-hash,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-3 .wysiwyg-heading-hash,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-4 .wysiwyg-heading-hash,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-5 .wysiwyg-heading-hash,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-heading-6 .wysiwyg-heading-hash { font-size: calc(var(--wysiwyg-text-size, 16px) * 0.8); }
 
 /* WYSIWYG 列表活动行装饰（2026-10-14 用户要求，Typora 式）：活动列表块是源文态，但逐行
    text marker 把语法符号渲染化——

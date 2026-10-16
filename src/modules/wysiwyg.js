@@ -496,11 +496,13 @@
       return parts.join('\n');
     },
 
-    // 光标所在块的索引；不在任何块内（空行/文档尾）返回 -1
-    wysiwygBlockIndexAt(line) {
-      const blocks = this._wysiwygBlocks || [];
-      for (let k = 0; k < blocks.length; k++) {
-        if (line >= blocks[k].start && line < blocks[k].end) return k;
+    // 光标所在块的索引；不在任何块内（空行/文档尾）返回 -1。
+    // blocks 可传显式块表（刷新路径用旧表做「钳光标在遮罩块」判定时与旧 marks 配套，见
+    // _wysiwygActiveIdxFromCursor）。
+    wysiwygBlockIndexAt(line, blocks) {
+      const table = blocks || this._wysiwygBlocks || [];
+      for (let k = 0; k < table.length; k++) {
+        if (line >= table[k].start && line < table[k].end) return k;
       }
       return -1;
     },
@@ -577,11 +579,14 @@
       node.setAttribute('contenteditable', 'false');
       this._wysiwygMaskTypography(node);
       this._postProcessWysiwygNode(node);
-      // 列表块不挂块级「编辑」按钮（2026-10-16 用户反馈 #1：点列表行直接进该行编辑，
-      // 块级源码入口多余）。⚠️ 撤按钮后 ul/ol 成为节点 last-child，styles.css 的
-      // `> *:last-child { margin-bottom: 0 }` 会把 14px 项距清零、遮罩矮 14px
-      // （渲染↔源码切换跳动）→ 挂 no-btn 类把底边距补回，遮罩高度与有按钮时逐像素一致。
+      // 列表块 / 标题块不挂块级「编辑」按钮（2026-10-16 用户反馈 #1：点列表行直接进该行编辑，
+      // 块级源码入口多余；2026-10-19 用户反馈 #1：标题块同理，点标题行即进该行编辑，按钮多余
+      // ——遮罩 mousedown 本就把点击映射到源码行）。⚠️ 撤按钮后内容元素成为节点 last-child，
+      // styles.css 的 `> *:last-child { margin-bottom: 0 }` 会把其底边距清零、遮罩矮一截
+      // （渲染↔源码切换跳动）→ 挂 no-btn 类把底边距补回（列表 14px / 标题 12px，各对应该
+      // 渲染值），遮罩高度与有按钮时逐像素一致。
       if (this._wysiwygBlockIsList(b)) node.classList.add('wysiwyg-mask-no-btn');
+      else if (this._wysiwygBlockIsHeading(b)) node.classList.add('wysiwyg-mask-no-btn-heading');
       else this._addWysiwygEditButton(node);
       this._addWysiwygTableTools(node);
 
@@ -779,10 +784,14 @@
           //  cursorActivity 若照常切活动块，会把指针下的块解罩、几何变化打断拖拽。
           // Fresh：输入后 250ms 防抖窗口内点遮罩时块表行号滞后 → 旧表漏块 -1 → 误撤
           // 当前活动块（整篇瞬间全遮罩闪烁）；-1 时同步轻切块（parseOnly）再查。
-          self.setWysiwygActiveBlock(self._wysiwygBlockIndexAtFresh(line));
-          // 点击锚定：撤遮罩后把该源码行放回点击时的屏幕位置，杜绝点击后视口乱跳
+          // 点击锚定：撤遮罩后把该源码行放回点击时的屏幕位置，杜绝点击后视口乱跳。
+          // ⚠️ 必须先于 setWysiwygActiveBlock 设置（2026-10-18 回归）：该调用内部的
+          // _capture/_restoreWysiwygAnchor 以 click 锚点为守卫整体跳过——若在其后才设，
+          // 光标锚点补偿会与点击锚点双补偿，其中 operation 内的延迟补偿（setTimeout）
+          // 在 _applyWysiwygClickAnchor 之后执行、把点击锚定的滚动冲掉（S43 段落 Δ104px）。
           const downX = ev.clientX, downY = ev.clientY;
           self._wysiwygClickAnchor = { y: downY, line };
+          self.setWysiwygActiveBlock(self._wysiwygBlockIndexAtFresh(line));
           // scroll:false，避免 ensureCursorVisible 抢先滚动导致锚定失效
           cm.setSelection({ line, ch: cm.getLine(line).length },
             { line, ch: cm.getLine(line).length }, { scroll: false, origin: '*mouse' });
@@ -874,11 +883,20 @@
       return /^\s{0,3}([-*+]|\d{1,9}[.)])(\s|$)/.test(line);
     },
 
+    // 块是否为标题：单行块 + ATX 标题（与 RE.heading 同一 CommonMark 口径）。
+    // 标题块不挂「编辑」按钮（2026-10-19 用户反馈 #1：点标题行即编辑，按钮多余）。
+    _wysiwygBlockIsHeading(b) {
+      const cm = this.cm;
+      if (!cm || !b || b.end - b.start !== 1) return false;
+      const line = (b.start < cm.lineCount()) ? cm.getLine(b.start) : '';
+      return /^\s{0,3}#{1,6}(\s|$)/.test(line);
+    },
+
     // 块右上「编辑」按钮（hover 显示，样式对齐代码块复制按钮，2026-10-11 用户反馈 #4）：
     // 大块内容的显式编辑入口，点击撤遮罩并定位块首行（见 mousedown 接管）。
     // 放在遮罩节点上而非 RenderPost：属所见即所得专属 chrome，阅读模式无「编辑块」概念。
-    // 除列表块外统一挂（2026-10-16 用户反馈 #1：列表逐行点击即编辑，无需块级入口）；
-    // 纯空占位块（引用定义）也挂，点了直接进该行编辑。
+    // 除列表块（2026-10-16 用户反馈 #1）与标题块（2026-10-19 用户反馈 #1）外统一挂
+    // （二者逐行点击即编辑，无需块级入口）；纯空占位块（引用定义）也挂，点了直接进该行编辑。
     _addWysiwygEditButton(node) {
       if (!node || node.querySelector('button.block-edit-btn')) return;
       const btn = document.createElement('button');
@@ -1819,10 +1837,11 @@
       if (this._wysiwygFull) {
         this._refreshWysiwygFullIncremental();
       } else {
+        const oldBlocks = this._wysiwygBlocks;
         this._wysiwygBlocks = this.computeWysiwygBlocks();
         this._wysiwygVirtual = !!(this._wysiwygBlocks[0] && this._wysiwygBlocks[0].skipped);
         this._ensureWysiwygScrollHook();
-        this._wysiwygActiveIdx = this._wysiwygCellEditing ? -1 : this._wysiwygActiveIdxFromCursor();
+        this._wysiwygActiveIdx = this._wysiwygCellEditing ? -1 : this._wysiwygActiveIdxFromCursor(oldBlocks);
         if (this._wysiwygMarks) {
           for (const idx of Array.from(this._wysiwygMarks.keys())) this.unmaskWysiwygBlock(idx);
         }
@@ -2605,15 +2624,23 @@
         return;
       }
       this._captureWysiwygAnchor();
-      if (prev >= 0) {
+      // ⚠️ 锚点补偿只在真做了挂/撤遮罩工作时执行（2026-10-18 套件回归 S54B）：
+      // 幻影切换（如新实例首个 cursorActivity：prev=undefined、idx=-1，两端皆 no-op）
+      // 结构未变，而 operation 内采样的 before 是未落定的陈旧几何（cursorCoords 滞后），
+      // 延迟到 operation 末用已落定的 after 相减 → 虚假 delta（实测 24px）把视口滚偏、
+      // 点击落点错位。HEAD 同步路径「前后同一套陈旧几何」相减≈0 才侥幸无事。
+      const hadPrev = prev >= 0;
+      if (hadPrev) {
         // 旧块刚被编辑过，缓存 html 过期，需重渲
         const b = this._wysiwygBlocks && this._wysiwygBlocks[prev];
         if (b && b.html !== undefined) { b.html = this.renderWysiwygBlockHtml(b.start, b.end); b.src = this._wysiwygBlockSource(b); }
         this.maskWysiwygBlock(prev);
       }
-      this.unmaskWysiwygBlock(idx);
+      const hadIdx = idx >= 0;
+      if (hadIdx) this.unmaskWysiwygBlock(idx);
       this._wysiwygActiveIdx = idx;
-      this._restoreWysiwygAnchor();
+      if (hadPrev || hadIdx) this._restoreWysiwygAnchor();
+      else this._wysiwygAnchorY = null; // 幻影切换：丢弃陈旧采样，不做补偿
       // 活动块源文态装饰（Typora 式：标题#/列表符号/代码围栏）：清旧 + 按新活动块重挂
       // （普通段落等无装饰块为纯清理，no-op）
       this._wysiwygApplyActiveDecor(idx);
@@ -2627,12 +2654,20 @@
     // 增量刷新）。**已挂遮罩的块不得「激活」**：光标可能正被 reCheckSelection 钳在
     // 某遮罩块内（格编辑期间被钳到旧活动块末行），现算激活它会解罩回源码态
     // （2026-10-14 用户截图「点表格后下面一行还是源代码状态」的重犯路径之一）。
-    _wysiwygActiveIdxFromCursor() {
+    _wysiwygActiveIdxFromCursor(oldBlocks) {
       const cm = this.cm;
       if (!cm) return -1;
-      const bi = this.wysiwygBlockIndexAt(cm.getCursor().line);
-      if (bi >= 0 && this._wysiwygMarks && this._wysiwygMarks.has(bi)) return -1;
-      return bi;
+      const line = cm.getCursor().line;
+      // ⚠️ 「钳光标在遮罩块内」判定必须用**与 this._wysiwygMarks 同键的块表**（刷新路径传
+      // oldBlocks = 旧表 + 旧 marks 配套）。旧实现拿新表索引查旧 marks：新旧表形状不同
+      // 时，光标行的**新**索引会与**另一**旧遮罩块的旧索引撞车 → 正在编辑的块（如空行上
+      // 新切出的标题块）被误判「已挂遮罩」→ -1 → 活动块被重遮成渲染态、字号跳变
+      // （2026-10-19 用户反馈 #2「输入标题字号先缩后胀」的成因之一，空行标题场景实测复现）。
+      if (oldBlocks && this._wysiwygMarks) {
+        const obi = this.wysiwygBlockIndexAt(line, oldBlocks);
+        if (obi >= 0 && this._wysiwygMarks.has(obi)) return -1;
+      }
+      return this.wysiwygBlockIndexAt(line);
     },
 
     // ---------------- 跨块选区视觉（2026-10-16 用户反馈「全选/选中只看到当前块」） ----------------
@@ -2734,12 +2769,16 @@
       this.setWysiwygActiveBlock(activeIdx);
     },
 
-    // ---------------- 抖动补偿（同步） ----------------
+    // ---------------- 抖动补偿（同步 / operation 内延迟） ----------------
 
     // 块在「渲染态 ↔ 源码态」切换时高度会变，锚点行上方/下方内容随之位移。
-    // 做法：**同步**测量光标前后视口 y 的差值并回滚滚动。
-    // ⚠️ 不用 rAF：异步补偿本身就是一次可见跳动（曾经错误的写法）。
-    // cm.refresh() 同步完成重排后立即测量，本帧内即修正，肉眼无跳。
+    // 做法：测量光标**切换前后**的 document 空间 y（'local'，滚动无关）差值并回滚滚动。
+    // ⚠️ 用 'local' 而非 'window'：差值必须是**纯结构位移**——window 坐标会把 CM 自己
+    //    operation 末的原生滚动（scrollIntoView 保光标可见）混进差值 → 双重补偿。
+    // ⚠️ CM operation 进行中（cursorActivity 同步触发，cm.curOp 在）：refresh+测量+滚动
+    //    整体延迟到下一 tick（operation 已收尾、DOM 落定）执行——见 _restoreWysiwygAnchor
+    //    注释（2026-10-18 真机「空列表项按回车页面跳顶」根因：operation 内 refresh 使
+    //    行高计算错乱、测得垃圾几何）。operation 外仍同步执行（本帧内修正，肉眼无跳）。
     //
     // ⚠️ 点击场景不能用本机制（2026-10-07 真机反馈「点击屏幕乱跳」）：
     //    点击时 setCursor 落进**被遮罩块内部的隐藏行**，capture 在隐藏行上取
@@ -2750,7 +2789,7 @@
       this._wysiwygAnchorY = null;
       if (!cm || this._wysiwygClickAnchor) return; // 点击场景走点击锚定
       try {
-        const c = cm.cursorCoords(null, 'window');
+        const c = cm.cursorCoords(null, 'local');
         if (c && typeof c.top === 'number' && isFinite(c.top)) this._wysiwygAnchorY = c.top;
       } catch (_) { /* 量不到就不补偿 */ }
     },
@@ -2801,18 +2840,39 @@
       const before = this._wysiwygAnchorY;
       this._wysiwygAnchorY = null;
       if (before == null || !cm) return;
-      try {
-        cm.refresh();
-        const after = cm.cursorCoords(null, 'window').top;
-        const delta = after - before;
-        if (!delta || !isFinite(delta)) return;
-        // 差值过大说明发生了结构级变化，此时补偿反而更糟，放弃
-        const wrapper = cm.getWrapperElement && cm.getWrapperElement();
-        const vh = wrapper ? wrapper.clientHeight : 0;
-        if (vh && Math.abs(delta) > vh) return;
-        const info = cm.getScrollInfo();
-        cm.scrollTo(info.left, info.top + delta);
-      } catch (_) { /* 已销毁等，忽略 */ }
+      // 补偿本体（两路径共用）：refresh 落定重排 → 测光标 document 空间 y → 差值=纯结构位移 → 回滚。
+      const self = this;
+      const doRestore = function () {
+        try {
+          cm.refresh();
+          const after = cm.cursorCoords(null, 'local').top;
+          const delta = after - before;
+          if (!delta || !isFinite(delta)) return;
+          // 差值过大说明发生了结构级变化，此时补偿反而更糟，放弃
+          const wrapper = cm.getWrapperElement && cm.getWrapperElement();
+          const vh = wrapper ? wrapper.clientHeight : 0;
+          if (vh && Math.abs(delta) > vh) return;
+          const info = cm.getScrollInfo();
+          cm.scrollTo(info.left, info.top + delta);
+        } catch (_) { /* 已销毁等，忽略 */ }
+      };
+      if (cm.curOp) {
+        // ⚠️⚠️ CM operation 进行中（cursorActivity 同步调起）：必须延迟到下一 tick 执行
+        //（2026-10-18 真机「末行空任务项再按一次回车，整页跳到文档顶部」根因）：
+        // operation 内 cm.refresh() 会让 CM 行高计算错乱——刚挂的遮罩 widget 高度尚未
+        // 应用，实测前缀几何塌缩（块顶 local 544→159、光标 590→189）→ 测得垃圾 delta
+        //（-400px 量级）却过视口守卫（<676）→ scrollTo 负值被 operation 末钳到 0=跳顶。
+        // 且 operation 内的 scrollTo 只记 pending、operation 末才按**已变化布局**应用，
+        // 本就被 CM 原生滚动（保新行可见）冲撞。operation 收尾后 CM 的 updateDisplay +
+        // 高度重测已落定布局，此时测量才可信；延迟至多一帧，远优于垃圾值跳顶。
+        // 合并守卫：同一 tick 多次块切换（如回车退出块 + 防抖重切）只留最早基准——
+        // 延迟时测的是**净**位移，一次滚到位；重复入队会二次补偿。
+        if (this._wysiwygAnchorPending) return;
+        this._wysiwygAnchorPending = true;
+        setTimeout(function () { self._wysiwygAnchorPending = false; doRestore(); }, 0);
+      } else {
+        doRestore();
+      }
     },
 
     // ---------------- 整体重建 / 清理 ----------------
@@ -2902,6 +2962,79 @@
       } catch (e) { console.error('[wysiwyg] 全量遮罩挂载失败:', e); }
     },
 
+    // ---------------- IME 组合期标题字号（2026-10-19 用户反馈 #2「输入标题字号闪」） ----------------
+    // 根因（探针实测时间线）：① 组合期浏览器把组合文本以裸文本节点插进输入域 DOM——它落在
+    // wysiwyg-heading-text span **之外**（span 只覆盖模型已有文本），按 pre 基准字号渲染
+    // （16px）；② compositionend 后 CM5 的 readFromDOMSoon **80ms 定时器**才读 DOM 进模型
+    // → change → 装饰 span 重挂，这 80ms 空窗里已确认文本仍是基准字号。两者叠加 =
+    // H1「32px→16px（组合中）→32px（确认后+80ms）」先缩后胀、H6「14.4px→16px→14.4px」先胀后缩。
+    // 修法：compositionstart 给标题行 pre 挂 wysiwyg-ime-heading-{级}（基准字号抬到标题尺寸、
+    // 行内 span 反比缩放，见 styles.css）；compositionend 摘类 + 立即读一次 DOM（跳过 80ms
+    // 空窗，span 同任务内重挂）。由 editor-core 输入域原生事件接线（CM 5.65.18 不触发用户级
+    // composition 编辑器事件，cm.on 是死代码——与 _wysiwygComposing 同一教训）。
+    _wysiwygImeCompositionStart() {
+      const cm = this.cm;
+      if (!cm || this.viewMode !== 'wysiwyg' || this._wysiwygCellEditing) return;
+      this._wysiwygImeHeadingLine = null;
+      try {
+        const line = cm.getCursor().line;
+        const m = /^\s{0,3}(#{1,6})(?=\s|$)/.exec(cm.getLine(line) || '');
+        if (!m) return;
+        const node = this._wysiwygLinePreOf(line);
+        if (!node || !node.classList) return;
+        const cls = 'wysiwyg-ime-heading-' + m[1].length;
+        node.classList.add(cls);
+        this._wysiwygImeHeadingLine = { node, cls };
+      } catch (_) { /* 挂不上就不挂，不影响输入 */ }
+    },
+
+    // 当前已物化视口行取 pre.CodeMirror-line（CM5：无 lineInfo，视口行 .node 可能是
+    // wrapper div，取行内 pre；行号按 LineObject 恒等匹配，防视口重建后行号漂移误配）
+    _wysiwygLinePreOf(lineNo) {
+      const cm = this.cm;
+      try {
+        const view = cm.display && cm.display.view;
+        if (!view) return null;
+        const handle = cm.getLineHandle(lineNo);
+        for (const lv of view) {
+          if (lv && lv.line === handle) return this._wysiwygGapPreOf(lv.node);
+        }
+      } catch (_) { /* 视口结构异常 */ }
+      return null;
+    },
+
+    _wysiwygImeCompositionEnd() {
+      const h = this._wysiwygImeHeadingLine;
+      this._wysiwygImeHeadingLine = null;
+      if (h && h.node && h.node.classList) {
+        try { h.node.classList.remove(h.cls); } catch (_) { /* 节点已随重排销毁 */ }
+      }
+    },
+
+    // 立即读输入域 DOM（见 _wysiwygImeCompositionStart 注释②）：组合确认文本 80ms 后才进
+    // 模型 → 空窗期标题行无装饰 span、基准字号闪烁。立即读后 change→装饰钩子同任务内重挂；
+    // 80ms 定时器随后照旧触发但 DOM 已同步 = no-op（不产生重复 change）。
+    // ⚠️ CM5 的 input 实例挂在 display 上（Display 构造 L4389 this.input=input）：
+    // cm.input 不存在（cm6 习惯写法，调用即静默 no-op）。
+    // 装饰重挂不依赖 change 事件单通道：组合中途被提前提交时（CM5 onFocus 的 webkit 20ms
+    // 延迟 reset → forceCompositionEnd，codemirror.js L3353-3356/9165-9171；或组合期
+    // mousedown/键位绑定走 ensurePolled），change 钩子会被 _wysiwygComposing 守卫顺延、
+    // 真正的 compositionend 时 flush 又查无 diff → span 无人重挂直到 250ms 防抖。
+    // 故 flush 后对活动块直接幂等重挂一次（clear+remark 单行，开销可忽略；正常路径与
+    // change 钩子同任务内重复执行，浏览器任务末统一重绘，无可见闪烁）。
+    _wysiwygImeFlushDOM() {
+      const cm = this.cm;
+      if (!cm || this.viewMode !== 'wysiwyg') return;
+      try {
+        const input = cm.display && cm.display.input;
+        if (input && typeof input.updateFromDOM === 'function') input.updateFromDOM();
+      } catch (_) { /* 读失败交给 80ms 定时器兜底 */ }
+      const idx = this._wysiwygActiveIdx;
+      if (idx == null || idx < 0) return;
+      if (!this._wysiwygBlocks || !this._wysiwygBlocks[idx]) return;
+      try { this._wysiwygApplyActiveDecor(idx); } catch (_) { /* 重挂失败由 250ms 防抖兜底 */ }
+    },
+
     // 输入停止后补齐：重算块划分并对非活动块刷新渲染结果。
     // 输入期间只更新行索引缓存（极廉价），把昂贵的渲染推迟到这里。
     refreshWysiwygBlocks() {
@@ -2925,8 +3058,9 @@
         // 块重划分（含解析）推迟到此处统一做；索引会位移，活动块按光标行现算。
         // 格编辑中例外：光标被钳在旧活动块末行，现算会把已遮罩的旧块重新判活动
         // （解罩回源码态）；格编辑期恒 -1 = 全部遮罩（2026-10-14 同批修复）。
+        const oldBlocks = self._wysiwygBlocks;
         self._wysiwygBlocks = self.computeWysiwygBlocks();
-        self._wysiwygActiveIdx = self._wysiwygCellEditing ? -1 : self._wysiwygActiveIdxFromCursor();
+        self._wysiwygActiveIdx = self._wysiwygCellEditing ? -1 : self._wysiwygActiveIdxFromCursor(oldBlocks);
         self._wysiwygVirtual = !!(self._wysiwygBlocks[0] && self._wysiwygBlocks[0].skipped);
         self._ensureWysiwygScrollHook();
         // 全部撤掉再按视口重挂（非虚拟模式窗口=全文，等效于全量重挂）
@@ -2980,9 +3114,9 @@
       // 未匹配旧遮罩撤除（源文变化/分裂/合并/删除）
       const keptSet = new Set(nextMarks.values());
       this._wysiwygBlocks = newBlocks;
-      // 格编辑中例外（同 refreshWysiwygBlocks 注释）；_wysiwygActiveIdxFromCursor
-      // 在此以旧 marks 判定（swap 在下方 operation 内），被钳光标落在旧遮罩块 → -1
-      this._wysiwygActiveIdx = this._wysiwygCellEditing ? -1 : this._wysiwygActiveIdxFromCursor();
+      // 格编辑中例外（同 refreshWysiwygBlocks 注释）；「钳光标在遮罩块」判定传旧表
+      // （与此刻仍有效的旧 marks 配套；swap 在下方 operation 内，见 _wysiwygActiveIdxFromCursor）
+      this._wysiwygActiveIdx = this._wysiwygCellEditing ? -1 : this._wysiwygActiveIdxFromCursor(oldBlocks);
       try {
         cm.operation(() => {
           for (const mark of Array.from(this._wysiwygMarks.values())) {

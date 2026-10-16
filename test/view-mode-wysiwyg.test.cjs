@@ -259,7 +259,8 @@ test('增量更新：change 不得全量重建遮罩（否则每次按键都卡�
   // 昂贵的渲染必须防抖
   assert.match(wsrc, /_wysiwygMaskTimer = setTimeout\(/, '缺少防抖补齐定时器');
   // 跨块只处理受影响的两个块（旧块恢复遮罩 + 新块撤遮罩）
-  assert.match(wsrc, /if \(prev >= 0\) \{[\s\S]{0,300}?this\.maskWysiwygBlock\(prev\);/, '未恢复旧块遮罩');
+  // hadPrev/hadIdx 标志同时是锚点补偿的条件（2026-10-18：幻影切换不做补偿，见专项测试）
+  assert.match(wsrc, /const hadPrev = prev >= 0;[\s\S]{0,120}?if \(hadPrev\) \{[\s\S]{0,300}?this\.maskWysiwygBlock\(prev\);/, '未恢复旧块遮罩');
   // 旧块在活动期间被编辑过，缓存 html 已过期，恢复遮罩前必须重渲染
   assert.match(wsrc, /b\.html = this\.renderWysiwygBlockHtml\(b\.start, b\.end\);/,
     '旧块恢复遮罩前未按最新源码重渲染（会把编辑前的旧内容盖回去）');
@@ -270,9 +271,11 @@ test('增量更新：change 不得全量重建遮罩（否则每次按键都卡�
     'setWysiwygActiveBlock 内部不得全量重建（每次跨块都会整篇重排）');
 });
 
-test('块高抖动补偿必须同步完成（不得用 rAF，异步补偿本身就是可见跳动）', () => {
+test('块高抖动补偿：document 空间差值回滚（禁 rAF；operation 内延迟至 operation 末）', () => {
   const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
-  assert.match(wsrc, /cm\.cursorCoords\(null, 'window'\)/, '未用 cursorCoords 取光标视口坐标');
+  // document 空间（'local'，滚动无关）测量：前后差值 = 纯结构位移；window 坐标会把 CM 自己
+  // operation 末的原生滚动混进差值 → 双重补偿
+  assert.match(wsrc, /cm\.cursorCoords\(null, 'local'\)/, '光标锚点未用 document 空间测量（window 坐标基准随滚动漂移）');
   assert.match(wsrc, /cm\.scrollTo\(info\.left, info\.top \+ delta\)/, '未按差值回滚滚动');
   assert.doesNotMatch(wsrc, /requestAnimationFrame/, '仍在用 rAF 做异步补偿（本身就会看到跳动）');
   assert.doesNotMatch(wsrc, /info\.clientHeight/, '误用 info.clientHeight（CM5 scrollInfo 无此字段）');
@@ -510,6 +513,52 @@ test('锚定须在 setSelection 返回后执行（operation 内滚动会被 pend
   assert.ok(!/cm\.scrollIntoView\(pos,/.test(ablk), '点击锚定仍在用 scrollIntoView margin 机制（margin 带内不补偿 + 坐标基准错位）');
 });
 
+test('光标锚点补偿：document 空间测量 + operation 内延迟（2026-10-18 真机：空列表项按回车整页跳顶）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  // ① 采样与测量都必须在 document 空间（'local'）：window 坐标会把 CM 自己 operation 末的
+  //    原生滚动混进差值 → 双重补偿
+  const cIdx = wsrc.indexOf('    _captureWysiwygAnchor() {');
+  assert.ok(cIdx > 0, '缺 _captureWysiwygAnchor');
+  assert.match(wsrc.slice(cIdx, cIdx + 600), /cm\.cursorCoords\(null, 'local'\)/, '锚点采样未用 document 空间（window 坐标基准随滚动漂移）');
+  // ② operation 进行中（cm.curOp 在）必须延迟到下一 tick：operation 内 refresh 使行高计算
+  //    错乱（新挂遮罩 widget 高度未应用 → 测得几何塌缩），垃圾 delta 过视口守卫后 scrollTo
+  //    负值被 operation 末钳到 0 = 整页跳到文档顶（2026-10-18 真机：末行空任务项再按回车）
+  const rIdx = wsrc.indexOf('    _restoreWysiwygAnchor() {');
+  assert.ok(rIdx > 0, '缺 _restoreWysiwygAnchor');
+  const rblk = wsrc.slice(rIdx, rIdx + 2400);
+  assert.match(rblk, /cm\.cursorCoords\(null, 'local'\)/, '锚点补偿测量未用 document 空间');
+  assert.match(rblk, /if \(cm\.curOp\)/, 'operation 内未延迟补偿（operation 内 refresh 行高错乱 → 垃圾 delta 跳顶）');
+  assert.match(rblk, /_wysiwygAnchorPending/, '延迟补偿缺合并守卫（同 tick 多次块切换会二次补偿）');
+  assert.match(rblk, /setTimeout\(function \(\) \{ self\._wysiwygAnchorPending = false; doRestore\(\); \}, 0\)/, '延迟补偿未清合并标志（一次性标志永久挂起后补偿全失）');
+});
+
+test('点击锚点必须先于撤遮罩设置（2026-10-18 套件回归 S43：延迟补偿冲掉点击锚定）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const md = mousedownBlock(wsrc);
+  const aIdx = md.search(/self\._wysiwygClickAnchor = \{ y: downY, line \};/);
+  const sIdx = md.search(/setWysiwygActiveBlock\(self\._wysiwygBlockIndexAtFresh\(line\)\);/);
+  assert.ok(aIdx >= 0 && sIdx >= 0, '缺点击锚点设置 / 普通块切换语句');
+  assert.ok(aIdx < sIdx,
+    '点击锚点在 setWysiwygActiveBlock 之后才设：该调用内部的 _capture/_restoreWysiwygAnchor 未受锚点守卫，' +
+    '与点击锚点双补偿——operation 内延迟补偿在 _applyWysiwygClickAnchor 之后执行，把点击锚定滚掉（S43 段落 Δ104px）');
+});
+
+test('幻影块切换（两端皆无挂/撤遮罩工作）不做锚点补偿（2026-10-18 套件回归 S54B）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const sIdx = wsrc.indexOf('    setWysiwygActiveBlock(idx) {');
+  assert.ok(sIdx > 0, '缺 setWysiwygActiveBlock');
+  const sblk = wsrc.slice(sIdx, sIdx + 2400);
+  // 幻影切换（如新实例首个 cursorActivity：prev=undefined、idx=-1，两端 no-op）结构未变，
+  // 而 operation 内采样的 before 是未落定的陈旧几何；延迟到 operation 末用已落定的 after
+  // 相减 = 虚假 delta（实测 24px）滚偏视口 → 点击落点错位。补偿必须条件于真实挂/撤工作。
+  assert.match(sblk, /const hadPrev = prev >= 0;/, '缺「旧块有效」守卫标志');
+  assert.match(sblk, /const hadIdx = idx >= 0;/, '缺「新块有效」守卫标志');
+  assert.match(sblk, /if \(hadPrev \|\| hadIdx\) this\._restoreWysiwygAnchor\(\);/,
+    '锚点补偿未条件于真实挂/撤遮罩工作（幻影切换也补偿 = 虚假 delta 滚偏视口）');
+  assert.match(sblk, /else this\._wysiwygAnchorY = null;/,
+    '幻影切换的陈旧采样未丢弃（下次切换会拿陈旧 before 做差值）');
+});
+
 test('点击遮罩块须先撤遮罩再落光标（CM5 会钳制标记区间内的 setSelection 位置）', () => {
   const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   const md = mousedownBlock(wsrc);
@@ -557,12 +606,13 @@ test('进格编辑重遮罩旧活动块：重遮 + 无活动块 + 被钳光标�
   assert.match(syncBlk, /if \(this\._wysiwygCellEditing\) \{ this\._restoreWysiwygAnchor\(\); return; \}/,
     'syncWysiwygActiveBlock 缺格编辑守卫（被钳 cursorActivity 会重解罩旧块）');
   // ③ 结构刷新现算：已挂遮罩的块不得「激活」（被钳光标落在遮罩块内 → -1）；
-  //    拖拽提交/增行增列、防抖重算、全量增量三处统一走同一助手
-  const aifcIdx = wsrc.indexOf('_wysiwygActiveIdxFromCursor() {');
+  //    拖拽提交/增行增列、防抖重算、全量增量三处统一走同一助手（传旧表与旧 marks 配套，
+  //    新表索引 + 旧 marks 会索引撞车 → 空行标题误遮，2026-10-19 见专项测试）
+  const aifcIdx = wsrc.indexOf('_wysiwygActiveIdxFromCursor(oldBlocks) {');
   assert.ok(aifcIdx > 0, '缺 _wysiwygActiveIdxFromCursor');
-  const aifcBlk = wsrc.slice(aifcIdx, aifcIdx + 500);
-  assert.match(aifcBlk, /this\._wysiwygMarks\.has\(bi\)\) return -1;/, '遮罩块可被判活动块（会解罩回源码态）');
-  const uses = (wsrc.match(/_wysiwygActiveIdxFromCursor\(\);/g) || []).length;
+  const aifcBlk = wsrc.slice(aifcIdx, aifcIdx + 1200);
+  assert.match(aifcBlk, /this\._wysiwygMarks\.has\(obi\)\) return -1;/, '遮罩块可被判活动块（会解罩回源码态）');
+  const uses = (wsrc.match(/_wysiwygActiveIdxFromCursor\(oldBlocks\);/g) || []).length;
   assert.ok(uses >= 3, '结构刷新路径未统一走 _wysiwygActiveIdxFromCursor（拖拽提交/防抖/全量增量 3 处），实际 ' + uses);
 });
 
@@ -1115,10 +1165,21 @@ test('块「编辑」按钮：非列表块挂载 + 列表块豁免（点行即�
   const mkIdx = wsrc.indexOf('maskWysiwygBlock(idx) {');
   const mkblk = wsrc.slice(mkIdx, mkIdx + 4000);
   assert.match(mkblk, /_wysiwygBlockIsList\(b\)\) node\.classList\.add\('wysiwyg-mask-no-btn'\);/, '列表块遮罩未挂 no-btn 类（ul 成 last-child 后 14px 边距被清零、遮罩矮 14px）');
-  assert.match(mkblk, /else this\._addWysiwygEditButton\(node\);/, 'maskWysiwygBlock 未在非列表块挂载编辑按钮');
+  // 标题块豁免（2026-10-19 用户反馈 #1：点标题行即编辑，按钮多余）：单行 ATX 标题判据 +
+  // no-btn-heading 类（与列表 no-btn 同一机制，补回 12px 底边距 = 预览 h1–h6 统一 margin-bottom）
+  assert.match(wsrc, /_wysiwygBlockIsHeading\(b\) \{/, '缺少 _wysiwygBlockIsHeading（标题块判据）');
+  const hIdx = wsrc.indexOf('_wysiwygBlockIsHeading(b) {');
+  const hblk = wsrc.slice(hIdx, hIdx + 500);
+  assert.match(hblk, /b\.end - b\.start !== 1/, '标题判据未限定单行块');
+  assert.match(hblk, /\^\\s\{0,3\}#\{1,6\}\(\\s\|\$\)/, '标题判据未用 ATX（≤3 空格 + 1–6 个 #，后随空格/行尾）口径');
+  assert.match(mkblk, /_wysiwygBlockIsHeading\(b\)\) node\.classList\.add\('wysiwyg-mask-no-btn-heading'\);/,
+    '标题块遮罩未挂 no-btn-heading 类（标题成 last-child 后 12px 边距被清零、遮罩矮 12px）');
+  assert.match(mkblk, /else this\._addWysiwygEditButton\(node\);/, 'maskWysiwygBlock 未在非列表/非标题块挂载编辑按钮');
   // CSS：no-btn 遮罩补回内容元素 14px 底边距（特异性须压过 last-child 清零规则）
   const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
   assert.match(css, /wysiwyg-mask-no-btn > \*:last-child \{ margin-bottom: 14px; \}/, 'no-btn 遮罩未补回 14px 底边距（渲染↔源码切换块下内容跳动）');
+  assert.match(css, /wysiwyg-mask-no-btn-heading > \*:last-child \{ margin-bottom: 12px; \}/,
+    'no-btn-heading 遮罩未补回 12px 底边距（预览 h1–h6 margin-bottom 统一 12px）');
   // 点击：先 mark.find() 取块区间（撤罩后区间失效），再解罩 + 光标落块首
   const mIdx = wsrc.indexOf('button.block-edit-btn');
   assert.ok(mIdx > 0, '缺 block-edit-btn 的 mousedown 处理');
@@ -1143,6 +1204,78 @@ test('块「编辑」按钮：非列表块挂载 + 列表块豁免（点行即�
   assert.match(css, /\.block-edit-btn \{/, '缺 .block-edit-btn 基础样式');
   assert.match(css, /\.wysiwyg-block-mask:hover \.block-edit-btn \{ opacity: 1/, '编辑按钮未在 hover 时显现');
   assert.match(css, /right: 76px/, '代码块块内编辑按钮未让位复制按钮');
+});
+
+test('IME 组合期标题字号恒定：compositionstart 挂类 + compositionend 立即读 DOM（2026-10-19 用户反馈 #2：输入标题字号闪）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const csrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'editor-core.js'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  // ① 接线必须挂在输入域**原生 DOM** composition 事件（CM 5.65.18 不触发用户级编辑器事件，
+  //    cm.on('compositionend') 是死代码——与 _wysiwygComposing 同一教训）
+  const startIdx = csrc.indexOf("inputField.addEventListener('compositionstart'");
+  const endIdx = csrc.indexOf("inputField.addEventListener('compositionend'");
+  assert.ok(startIdx > 0 && endIdx > 0, '缺输入域原生 composition 监听');
+  assert.match(csrc.slice(startIdx, startIdx + 700), /_wysiwygImeCompositionStart\(\)/,
+    'compositionstart 未调 _wysiwygImeCompositionStart（组合文本按基准字号渲染）');
+  assert.match(csrc.slice(endIdx, endIdx + 900), /_wysiwygImeCompositionEnd\(\)/,
+    'compositionend 未摘组合期标题类');
+  assert.match(csrc.slice(endIdx, endIdx + 900), /_wysiwygImeFlushDOM\(\)/,
+    'compositionend 未立即读 DOM（CM5 readFromDOMSoon 80ms 空窗 = 字号闪烁窗口）');
+  // ② 立即读 DOM = display.input.updateFromDOM（CM5 的 input 实例挂在 display 上，
+  //    cm.input 是 CM6 习惯写法、在 5.65.18 上不存在 → 调用即静默 no-op）
+  const fIdx = wsrc.indexOf('    _wysiwygImeFlushDOM() {');
+  assert.ok(fIdx > 0, '缺 _wysiwygImeFlushDOM');
+  assert.match(wsrc.slice(fIdx, fIdx + 900), /cm\.display && cm\.display\.input/, '立即读 DOM 未走 CM5 的 display.input');
+  assert.match(wsrc.slice(fIdx, fIdx + 900), /input\.updateFromDOM\(\)/, '立即读 DOM 未调 updateFromDOM');
+  // ②b flush 后对活动块直接幂等重挂装饰（2026-10-19 浏览器 suite 实测根因）：组合中途被
+  //     CM5 提前提交（onFocus 的 webkit 20ms 延迟 reset → forceCompositionEnd，
+  //     codemirror.js L3353-3356/9165-9171；或组合期 mousedown/键位绑定走 ensurePolled）时，
+  //     change 钩子被 _wysiwygComposing 守卫顺延、compositionend 的 flush 又查无 diff →
+  //     span 无人重挂直到 250ms 防抖；且提前提交插在旧 mark 边界处时 CM 不拉伸 mark →
+  //     新文本落在 span 外、基准字号闪。change 事件只是重挂通道之一，flush 须兜底重挂
+  assert.match(wsrc.slice(fIdx, fIdx + 900), /this\._wysiwygActiveIdx/, 'flush 未取活动块索引（直接重挂缺判定）');
+  assert.match(wsrc.slice(fIdx, fIdx + 900), /this\._wysiwygApplyActiveDecor\(idx\);/,
+    'flush 未对活动块直接重挂装饰（提前提交后 span 悬空到 250ms 防抖 = 上屏后仍闪烁）');
+  // ③ 组合期挂类：仅标题行（ATX 口径）+ 非格编辑；类名 wysiwyg-ime-heading-{级}
+  const sIdx = wsrc.indexOf('    _wysiwygImeCompositionStart() {');
+  assert.ok(sIdx > 0, '缺 _wysiwygImeCompositionStart');
+  const sblk = wsrc.slice(sIdx, sIdx + 1200);
+  assert.match(sblk, /this\.viewMode !== 'wysiwyg' \|\| this\._wysiwygCellEditing/, '组合期挂类缺 模式/格编辑 守卫');
+  assert.match(sblk, /wysiwyg-ime-heading-' \+ m\[1\]\.length/, '挂类未按标题级别生成 wysiwyg-ime-heading-{1..6}');
+  // CM5 无 lineInfo（CM6 API，5.65.18 上调用即抛错被吞 = 类永不挂）：必须走视口行取 pre
+  assert.match(sblk, /_wysiwygLinePreOf\(line\)/, '未用 CM5 视口取行 pre 挂类（lineInfo 是 CM6 API）');
+  const lpIdx = wsrc.indexOf('    _wysiwygLinePreOf(lineNo) {');
+  assert.ok(lpIdx > 0, '缺 _wysiwygLinePreOf（CM5 视口取行 pre 辅助）');
+  assert.match(wsrc.slice(lpIdx, lpIdx + 700), /cm\.display && cm\.display\.view/, '取行 pre 未走 CM5 视口（display.view）');
+  assert.match(wsrc.slice(lpIdx, lpIdx + 700), /lv\.line === handle/, '视口行未按 LineObject 恒等匹配（行号漂移误配）');
+  // ④ CSS：基准字号抬到标题尺寸 + 行内 span 反比缩放（组合文本/正文/# 前缀三级同尺寸）
+  assert.match(css, /pre\.wysiwyg-ime-heading-1 \{ font-size: calc\(var\(--wysiwyg-text-size, 16px\) \* 2\);/,
+    '组合期 h1 行基准字号未抬到 2×基准（组合文本仍按 16px 渲染 = H1 先缩后胀）');
+  assert.match(css, /pre\.wysiwyg-ime-heading-6 \{ font-size: calc\(var\(--wysiwyg-text-size, 16px\) \* 0\.9\);/,
+    '组合期 h6 行基准字号未抬到 0.9×基准');
+  assert.match(css, /pre\.wysiwyg-ime-heading-1 \.wysiwyg-heading-hash,/,
+    '组合期 # 前缀未反比缩放（pre 抬字号后 0.8em 会放大成 25.6px）');
+  assert.match(css, /pre\.wysiwyg-ime-heading-6 \.wysiwyg-heading-text,?[\s\S]{0,400}font-size: 1em;/,
+    '组合期正文 span 未反比缩放（pre 抬字号后 2em 会放大成 64px）');
+});
+
+test('活动块按光标行现算时「钳光标在遮罩块」判定须用与 marks 同键的块表（2026-10-19 空行标题被误遮、字号跳变）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  // ① 方法签名带 oldBlocks 参数：刷新路径的旧表 + 旧 marks 是配套键空间
+  const idx = wsrc.indexOf('    _wysiwygActiveIdxFromCursor(oldBlocks) {');
+  assert.ok(idx > 0, '_wysiwygActiveIdxFromCursor 缺 oldBlocks 参数');
+  const blk = wsrc.slice(idx, idx + 1200);
+  assert.match(blk, /this\.wysiwygBlockIndexAt\(line, oldBlocks\)/,
+    '「钳光标」判定未用旧表查（新表索引 + 旧 marks = 索引撞车，空行新切出的标题块被误判已遮罩 → 重遮字号跳）');
+  assert.match(blk, /this\._wysiwygMarks\.has\(obi\)/, '「钳光标」判定未查 marks');
+  assert.match(blk, /return this\.wysiwygBlockIndexAt\(line\);/, '返回值未用新表（活动块索引必须是新表键）');
+  // ② wysiwygBlockIndexAt 支持显式块表
+  const bIdx = wsrc.indexOf('    wysiwygBlockIndexAt(line, blocks) {');
+  assert.ok(bIdx > 0, 'wysiwygBlockIndexAt 缺 blocks 参数');
+  // ③ 三处「重切块表后现算活动块」的调用点都传旧表（表格结构提交 / 防抖刷新 / 全量增量）
+  const callSites = wsrc.match(/_wysiwygActiveIdxFromCursor\(oldBlocks\);/g) || [];
+  assert.strictEqual(callSites.length, 3,
+    `重切块表路径应传旧表现算活动块（表格提交/防抖刷新/全量增量各一处），实得 ${callSites.length} 处`);
 });
 
 test('活动块背景高亮：cm-wysiwyg-active-block 行类 + 统一挂/撤 + CSS', () => {
@@ -1928,7 +2061,7 @@ test('IME 前缀修复接线：原生 compositionstart/end 调用 format.js 的�
   const harness = fs.readFileSync(path.join(ROOT, '_wysiwyg_compare.html'), 'utf8');
   const idx = core.indexOf("addEventListener('compositionstart'");
   assert.ok(idx > 0, 'editor-core 缺输入域原生 compositionstart 接线');
-  const block = core.slice(idx, idx + 600);
+  const block = core.slice(idx, idx + 1200);
   assert.match(block, /_recordBareListMarkerForIme\(\)/,
     'compositionstart 未记录组合前的纯标记行（修复拿不到「该不该修」的依据）');
   assert.match(block, /_repairImeDamagedListPrefix\(\)/,
