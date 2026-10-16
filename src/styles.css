@@ -2150,6 +2150,33 @@ body.is-resizing .side-btn {
 .preview-content li { margin-bottom: 4px; }
 .preview-content li > p { margin-bottom: 4px; }
 
+/* 普通 ul：弃用原生 disc，改固定 6px 画圆（2026-10-20 用户截图三问 #1/#2：WebView2+DPI
+   缩放下原生 marker 由引擎字体度量摆放，相对固定画圆右漂约 2px——混合列表 S48 圆与
+   WYSIWYG 活动态 .wysiwyg-list-bullet 圆都是纯 CSS 定位，原生 disc 不是 → 进编辑态
+   「黑点往左移动一点」，且顶部无序列表与任务混合列表的黑点不在同一竖线上；字号 ≠16px
+   时原生 disc 随字号缩放而画圆不缩放，两态又对不上）。
+   改为与 S48 / WYSIWYG 同位同锚的圆：li 左缘 = ul.x+24（padding-left:24），left:-18px
+   → 圆落 ul.x+6（32px 行基线 = 38–44px，与 .wysiwyg-list-bullet 的 span-7px 同位）；
+   纵向同一锚点 top:calc(0.938em - 3px)（S45 像素校准式）；锚定 li、嵌套无级差
+   （WYSIWYG 活动态各级缩进的黑点本就是同一 6px 圆）。排除项：任务列表 ul
+   （contains-task-list / 内含复选框）走下方 S48 规则（ul padding:0、li.x=ul.x、
+   left:6px，同落 ul.x+6）；[TOC] 目录（.toc 内 ul，lib.rs 生成、本就不是列表
+   语义、自有 toc-list 样式）不得挂点。有序列表的数字标记不受影响。 */
+.preview-content ul:not(.contains-task-list):not(:has(input[type="checkbox"])):not(.toc ul) > li {
+  list-style: none;
+  position: relative;
+}
+.preview-content ul:not(.contains-task-list):not(:has(input[type="checkbox"])):not(.toc ul) > li::before {
+  content: '';
+  position: absolute;
+  left: -18px;
+  top: calc(0.938em - 3px);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 /* 显式多级 list-style-type，确保跨浏览器一致；用 :where() 零特异性，绝不覆盖下方任务列表去 marker 规则 */
 :where(.preview-content) ul { list-style-type: disc; }
 :where(.preview-content) ul ul { list-style-type: circle; }
@@ -3106,7 +3133,8 @@ body.is-resizing .side-btn {
    补法：块的边缘行（JS 挂 wysiwyg-block-edge-top/bottom 行类——非容器块上
    cm-wysiwyg-active-first/last 只挂光标行 lo=hi，不能用）给「14px 边距族」
    （ul/ol/task 列表行 + 段落行）末行加 底距 4px→14px。
-   仅覆盖 14px 边距族；标题（margin 24/12）/引用块参数不同，不在此列。 */
+   仅覆盖 14px 边距族；标题（margin 24/12）/引用块参数不同，不在此列
+    （引用族 2026-10-20 独立补齐：渲染盒 padding-top 12px → 活动态首行 +12px，见下）。 */
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-list-line.wysiwyg-block-edge-bottom,
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-para-line.wysiwyg-block-edge-bottom {
   padding-bottom: 14px;
@@ -3251,24 +3279,74 @@ body.is-resizing .side-btn {
   color: var(--text-secondary);
 }
 
-/* WYSIWYG 引用活动行装饰（2026-10-14 用户要求，Typora 式）：活动引用块是源文态，
-   > 前缀灰显（编辑语义：删掉 > 即退出引用），最外层 > 用 ::before 画左竖条（对齐
-   预览 blockquote 左侧 accent-color 竖条），正文预览字族 + 次级色（对齐预览灰字）。 */
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-quote-prefix {
-  color: var(--text-secondary);
+/* WYSIWYG 引用活动态（2026-10-14 初版，2026-10-20 用户要求：样式与渲染态完全一致、
+   > 标志只在光标行显示）：渲染 blockquote = 淡色背景盒（accent-subtle）+ 连续 4px
+   accent-color 左竖条 + 每层 24px 缩进（border 4 + padding 20）+ 次级色正文
+   （见 .preview-content blockquote）。活动态逐行复现（2026-10-20 实测口径）：
+   · 每层 ">" 连同其后空格 → 固定 24px 槽（.wysiwyg-quote-slot；口径同 ol 序号槽：
+     inline-block + 高 1.7em + vertical-align:top，槽顶=行盒顶）→ 正文左缘 = 行基准
+     + 24px×层级，与渲染内容缘逐像素一致。空格随 > 进槽（不得零宽单独成 span：行尾
+     caret 锚定会把 contenteditable DOM 差分写乱、源空格被挤到行尾，2026-10-20 实测）；
+   · 左竖条 = 槽 ::before（4px、top:0/height:100% → 行间无缝 = 连续竖条；位置 = 槽左缘，
+     一层 32px / 二层 56px，与渲染外/内 border 同位）；
+   · 淡色背景盒 = pre 背景（pre 水平域 32→668 = 遮罩内容盒 = 渲染盒域；首/末行右侧
+     圆角对齐渲染 0 6px 6px 0）；
+   · 首行 +12px（渲染盒 padding-top）/ 末行 +28px（盒 padding-bottom 12 + 盒自身
+     margin-bottom 16——遮罩 BFC 把该 16px 收进遮罩高度（实测：引用遮罩节点高 =
+     盒高 + 16；有「编辑」按钮占 last-child 位，> *:last-child 清零不命中盒），
+     活动态不补会矮 16px、进编辑态块下内容上跳）；嵌套行再 ±12px（嵌套盒 padding，
+     边缘行组合规则相加 → 嵌套末行 40px）；
+   · > 字符默认透明（源字符留在 DOM，光标测量/编辑语义不变），仅光标行可见
+     （行类 wysiwyg-quote-cursor-line，cursorActivity 管理进出，与块内空行
+     _wysiwygBlankCurLine 同一机制）。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line {
+  background: var(--accent-subtle) no-repeat;
+  background-size: calc(100% - 2 * var(--wysiwyg-line-inset, 32px)) 100%;
+  background-position: var(--wysiwyg-line-inset, 32px) 0;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-block-edge-top {
+  padding-top: 12px;
+  border-top-right-radius: 6px;
+}
+/* 末行 28px = 盒 padding-bottom 12 + 盒 margin-bottom 16（BFC 收进遮罩高的部分，
+   见上方口径注释）；淡色背景盒铺满 padding 域，圆角仍对齐渲染 0 6px 6px 0 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-block-edge-bottom {
+  padding-bottom: 28px;
+  border-bottom-right-radius: 6px;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+/* 嵌套行同时是块边缘行：各段 padding 相加（同级特异性，后规则整体覆盖，必须显式写和） */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested.wysiwyg-block-edge-top {
+  padding-top: 24px;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested.wysiwyg-block-edge-bottom {
+  padding-bottom: 40px;
+}
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-quote-slot {
+  color: transparent;
   font-family: var(--font-preview);
-}
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-quote-bar {
   position: relative;
+  display: inline-block;
+  width: 24px;
+  height: 1.7em;
+  vertical-align: top;
+  box-sizing: border-box;
+  /* 槽内 "> " 右对齐：> 字符右缘贴正文缘前 1 空格宽（≈4px，随预览字号微变；
+     渲染态该处为空，位置为编辑提示专用）。⚠️ 空格不得零宽单独成 span（行尾 caret
+     锚定会写乱 DOM 差分，见 JS 注释），必须随 > 进本槽。 */
+  text-align: right;
+  padding-right: 0;
 }
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-quote-bar::before {
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-quote-slot::before {
   content: '';
   position: absolute;
-  left: -0.55em;
-  top: 12%;
-  height: 76%;
-  width: 3px;
-  border-radius: 2px;
+  left: 0;
+  top: 0;
+  width: 4px;
+  height: 100%;
   background: var(--accent-color);
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-quote-text {
@@ -3276,11 +3354,22 @@ body.is-resizing .side-btn {
   color: var(--text-secondary);
 }
 
-/* WYSIWYG 行内语法活动态（2026-10-14 用户要求，Typora 式行内）：标记字符透明
-   （保留真实宽度，光标测量精准——列表符号 width:0 会裁掉 ::before 的教训），
+/* WYSIWYG 行内语法活动态（2026-10-14 用户要求，Typora 式行内）：标记字符透明 +
+   零宽（2026-10-20 用户截图 demo.md：渲染态与编辑态差异巨大——旧「透明保留宽度」
+   每对 ** 留 14.6px 空隙、密集 token 的行甚至被撑多折一行；改零宽后活动态可见宽度
+   与渲染态逐字一致）。零宽口径同 .wysiwyg-ol-space / .wysiwyg-task-box-zero：
+   inline-block + width:0 + nowrap（多字符 width:0 盒不 nowrap 会逐字折行撑高行盒；
+   不用 font-size:0——可能扰动行盒基线测量，见 ol-space 注释）。字符仍在 DOM，光标
+   测量/编辑语义不变。⚠️ 列表符号（.wysiwyg-list-bullet，::before 画圆）与任务前缀
+   （.wysiwyg-task-prefix 24px 槽）各有专槽，不走本规则，不受影响。
    文本段用与 preview-content 对应元素对齐的渲染样式；行内代码/高亮用紧凑底色
    （不加 padding，不干扰光标 x 测量）。 */
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-inline-marker { color: transparent; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-inline-marker {
+  color: transparent;
+  display: inline-block;
+  width: 0;
+  white-space: nowrap;
+}
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-bold { font-weight: var(--preview-bold-weight, 700); }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-italic { font-style: italic; }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-strike { text-decoration: line-through; color: var(--text-secondary); }
@@ -3342,8 +3431,15 @@ body.is-resizing .side-btn {
    渲染符号）。此处用 (0,5,1) 同前缀 + 类属性重申这些颜色（规则序在中和之后，稳赢）。
    只重申「有渲染色设计」的类；无颜色规则的渲染化类（heading-text/list-text 等）维持
    中和继承，token 色照旧被压。 */
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-quote-text"],
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-quote-prefix"] {
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-quote-text"] {
+  color: var(--text-secondary);
+}
+/* 引用 > 槽：同身（cm-quote + wysiwyg-quote-slot）时压过 token 中和规则 → 默认透明
+   （2026-10-20：> 只在光标行显示）；光标行由下方 (0,6,1) 规则重新显色。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-quote-slot"] {
+  color: transparent;
+}
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text.wysiwyg-quote-cursor-line span[class*="wysiwyg-quote-slot"] {
   color: var(--text-secondary);
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-heading-hash"] {
@@ -3368,6 +3464,23 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-task-prefix"],
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-task-box-zero"] {
   color: transparent;
+}
+/* WYSIWYG 光标行显示源码（2026-10-21 用户要求：基础文本格式编辑时，光标所在行其中
+   行内格式要显示源码）：光标行上的行内语法标记字符（** / * / _ / ` / ~~ / == /
+   <u></u> / [ ] (url)）从「零宽透明（渲染化外观）」恢复为「真宽 + 次级色」，呈现
+   源码形态；非光标行维持零宽（渲染化外观，S58 口径）。载体 = active-line addon
+   （index.html L518 加载 + editor-core L172 styleActiveLine:true）挂在光标行
+   wrap 作用域的 CodeMirror-activeline 类，CM 原生随选区增删，零 JS 状态管理。
+   ⚠️ 选择器实测口径（2026-10-21 harness 实测）：wrap 作用域的包裹 div 只有挂 wrap
+   类时才创建，且类名单独就是 CodeMirror-activeline（**不带** CodeMirror-line 基类，
+   与 pre.CodeMirror-line 不同元素）；非活动行无包裹 div、pre 直挂 .CodeMirror-code。
+   颜色与光标行 > 槽 / # 哈希同源（--text-secondary）。
+   (0,6,2) 特异性稳压基础规则 (0,3,0) 与同身重申规则 (0,5,1)。
+   ⚠️ 固有代价（如实声明）：光标行因标记占真宽而比渲染态宽，贴近折行处的行会多折
+   一行（+27.2px 行高）——光标进出该行时下方内容随之位移，Typora 同款行为。 */
+.editor-container.wysiwyg-mode .CodeMirror .CodeMirror-activeline > pre.wysiwyg-plain-text span[class*="wysiwyg-inline-marker"] {
+  width: auto;
+  color: var(--text-secondary);
 }
 
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask table td.wysiwyg-cell-editing,

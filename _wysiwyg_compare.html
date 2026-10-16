@@ -27,6 +27,10 @@
   </div>
 </div>
 <script src="src/lib/codemirror/codemirror.js"></script>
+<!-- active-line addon（与 index.html L518 一致）：styleActiveLine 是 addon 实现的，
+     不加载则 option 静默无效 →「光标行显示源码」（styles.css
+     .CodeMirror-activeline 规则）在 harness 测不出来 -->
+<script src="src/lib/codemirror/addon/selection/active-line.js"></script>
 <!-- gfm 模式必须加载（与 index.html L499-510 一致，overlay.js 是 gfm 的依赖）：
      markdown 模式给标题/列表/引用行发 cm-header/cm-variable-2/cm-quote 等 token span
      （默认主题蓝/海军蓝/绿），不加载则 CM 静默回落 null mode，
@@ -194,6 +198,9 @@
       // gitHubSpice:false 与真实 app 一致（editor-core mode 配置）：关 GitHub SHA/issue
       // 高亮——渲染器不把这些认成链接，token 下划线会在编辑态漏出（2026-10-15 用户截图）
       value: doc, mode: { name: 'gfm', gitHubSpice: false }, lineWrapping: true, lineNumbers: true,
+      // styleActiveLine 与真实 app 一致（editor-core L172）：光标行挂 CodeMirror-activeline
+      //（wrap 作用域）——「光标行显示源码」（行内标记恢复真宽+次级色）的 CSS 载体
+      styleActiveLine: true,
       inputStyle: 'contenteditable',
       extraKeys: {
         // 与真实 app 同一处理体（editor-core L170-171）：非表格行 → 列表续行；
@@ -2011,16 +2018,20 @@
         grid: l3.slice(2).map(lineCells),
       };
 
-      // 4) 列拖拽：表头首格（甲）→ 拖过第二列（乙）中点 → 甲/乙 两列换位
+      // 4) 列拖拽：从顶部列轨（pill）按甲列中点 x → 拖过第二列（乙）中点 → 甲/乙 换位。
+      // 2026-10-20 用户要求：表头格不再是列拖把手，列拖只从顶部/行拖只从左侧把手发起。
       const thA = tableEl().querySelector('thead th');
       const thB = tableEl().querySelectorAll('thead th')[1];
       const hA = thA.getBoundingClientRect();
       const hB = thB.getBoundingClientRect();
-      pDown(thA, hA.left + hA.width / 2, hA.top + hA.height / 2);
+      const pillEl = wrapEl().querySelector('.wysiwyg-table-col-pill');
+      const pillR = pillEl.getBoundingClientRect();
+      const pillY = pillR.top + pillR.height / 2;
+      pDown(pillEl, hA.left + hA.width / 2, pillY);
       await sleep(30);
-      pMove(hB.left + hB.width / 2, hA.top + hA.height / 2); // 到乙中点 → 甲列插到乙之前
+      pMove(hB.left + hB.width / 2, pillY); // 到乙中点 → 甲列插到乙之前
       await sleep(30);
-      pUp(hB.left + hB.width / 2, hA.top + hA.height / 2);
+      pUp(hB.left + hB.width / 2, pillY);
       await sleep(200);
       const l4 = tableLines();
       // 注意：行拖拽后数据行序 = [r2, r1, r3, 空行]
@@ -2633,8 +2644,22 @@
         const h = cm.getLineHandle(lineNo);
         return !!(h && h.bgClass && h.bgClass.indexOf('cm-wysiwyg-active-block') >= 0);
       };
-      // 定位某行的 pre.CodeMirror-line 元素（DOM 顺序≠行号，charCoords + elementFromPoint）
+      // 定位某行的 pre.CodeMirror-line 元素。优先 LineObject 恒等（cm.display.view，
+      // 同产品 _wysiwygLinePreOf 口径）——0px 塌缩行（2026-10-20 块内列表空行取 0 后）
+      // 无可见面积，charCoords+elementFromPoint 会命中邻行，恒等匹配不受行高影响；
+      // 未物化行才退回 elementFromPoint。
       window.__s35lineEl = function (lineNo) {
+        const h = cm.getLineHandle(lineNo);
+        for (const lv of cm.display.view) {
+          if (lv && lv.line === h) {
+            const el = lv.node;
+            if (el && el.tagName === 'PRE') return el;
+            if (el && el.querySelector) {
+              const pre = el.querySelector('pre.CodeMirror-line');
+              if (pre) return pre;
+            }
+          }
+        }
         const coords = cm.charCoords({ line: lineNo, ch: 0 }, 'page');
         if (!coords) return null;
         const xv = coords.left - window.scrollX + 2;
@@ -3843,6 +3868,129 @@
       return { x: r.left + 30, y: r.top + r.height / 2 };
     }
     return null;
+  };
+
+  // ---------- S57：用户三问文档（2026-10-20 真机截图：黑点进编辑态左移 / 渲染态 vs 阅读
+  //  样式不一致 / 任务列表+下方 ul 编辑态多一空行）。doc = 真机原样 21 行：
+  //  ul(3) / ol(4) / 任务(5)+ul(4)——CommonMark 合并块 [9,19)。
+  //  初始光标落块间空行（行 3）→ 无活动块、三块全遮罩；驱动依次点顶部 ul、合并块 ul 段。
+  const S57_DOC = ['- asdfasdfdsad', '- asdfasdf sa', '- asdf asd', '',
+    '1. asdasf', '2. asdf asdsdf', '3. asdf asd', '4. asdf as', '',
+    '- [ ] asdfsasad', '- [ ] asdfasadf', '- [ ] asdf', '- [ ] asdf', '- [x] asdf', '',
+    '- asdfasfsdf asdf', '- asdfas asd', '- sdasfasf', '- asdfasdfd', '', ''].join('\n');
+  window.__s57setup = function () {
+    const out = { err: null };
+    try {
+      const A = makeEditor(S57_DOC);
+      window.__s57ed = A.ed;
+      window.__s57cm = A.cm;
+      // 光标落块间空行（行 3）→ 无活动块、全部遮罩（同 S54-A 口径）
+      A.cm.setCursor({ line: 3, ch: 0 });
+      A.ed.renderWysiwygMasks();
+      // 整篇物化（CM5 只物化视口附近；全量视图驻留同款直接写 options + refresh）
+      A.cm.options.viewportMargin = 100000;
+      A.cm.refresh();
+      // 阅读参照（须趁后续点击切换前量好 li 间距）
+      const reading = document.getElementById('reading');
+      reading.style.fontSize = '16px';
+      reading.style.lineHeight = '1.7';
+      reading.innerHTML = window.UnifiedRenderer.renderMarkdown(S57_DOC, A.ed.settings);
+      out.blocks = A.ed._wysiwygBlocks.map((b) => [b.start, b.end]);
+      out.lists = Array.from(reading.querySelectorAll(':scope > ul, :scope > ol')).map((ul) => {
+        const lis = Array.from(ul.querySelectorAll(':scope > li'));
+        const t = (i) => lis[i] ? lis[i].getBoundingClientRect().top : null;
+        return {
+          cls: ul.className,
+          liLineGap: t(0) != null && t(1) != null ? t(1) - t(0) : null,
+          li4to5: t(4) != null && t(5) != null ? t(5) - t(4) : null,
+        };
+      });
+    } catch (e) { out.err = String(e && e.message || e); }
+    return out;
+  };
+  // 某 li 的黑点布局左缘/宽（li 边框盒 + ::before 计算值；纯 DOM 无截图，
+  // 无布局漂移竞态——像素级绘制由 S45/S48 场景负责，这里量四态「同位」对齐）。
+  // ::before 不存在（无规则命中）→ null。
+  window.__s57dotOfLi = function (li) {
+    if (!li) return null;
+    const cs = getComputedStyle(li, '::before');
+    const left = parseFloat(cs.left);
+    const w = parseFloat(cs.width);
+    if (isNaN(left) || isNaN(w) || !cs.width) return null;
+    const r = li.getBoundingClientRect();
+    return { left: r.x + left, w: w };
+  };
+  // 遮罩列表第 (o.li) 个 li 的黑点（kind='ul'/'ol'；o.task 缺省=任一、true=任务合并块）
+  window.__s57maskDot = function (kind, opt) {
+    const ed = window.__s57ed;
+    if (!ed) return null;
+    const o = opt || {};
+    const uls = [];
+    ed._wysiwygMarks.forEach((mark) => {
+      const node = mark && mark.replacedWith;
+      if (!node) return;
+      const list = node.querySelector(':scope > ' + kind);
+      if (!list) return;
+      const isTask = !!node.querySelector('input[type="checkbox"]');
+      if (o.task == null || o.task === isTask) uls.push(list);
+    });
+    const li = uls[0] && uls[0].querySelectorAll(':scope > li')[o.li || 0];
+    return window.__s57dotOfLi(li);
+  };
+  // 阅读模式某 li 的黑点（'top'=首个 ul 第 1 项 / 'merged'=混合块第 6 项 li[5]）
+  window.__s57readDot = function (which) {
+    const reading = document.getElementById('reading');
+    const uls = Array.from(reading.querySelectorAll(':scope > ul'));
+    let li = null;
+    if (which === 'top') li = uls[0] && uls[0].querySelectorAll(':scope > li')[0];
+    else {
+      const m = uls.find((u) => (u.className || '').indexOf('contains-task-list') !== -1);
+      li = m && m.querySelectorAll(':scope > li')[5];
+    }
+    return window.__s57dotOfLi(li);
+  };
+  // 活动态某源码行的画圆黑点（.wysiwyg-list-bullet span 的 ::before；LineObject 恒等匹配）
+  window.__s57activeDot = function (lineNo) {
+    const cm = window.__s57cm;
+    if (!cm) return null;
+    const handle = cm.getLineHandle(lineNo);
+    for (const lv of cm.display.view) {
+      if (lv && lv.line === handle) {
+        const el = lv.node;
+        const pre = el && el.tagName === 'PRE' ? el : (el && el.querySelector ? el.querySelector('pre.CodeMirror-line') : null);
+        if (!pre) return null;
+        const span = pre.querySelector('.wysiwyg-list-bullet');
+        if (!span) return null;
+        const cs = getComputedStyle(span, '::before');
+        const left = parseFloat(cs.left);
+        const w = parseFloat(cs.width);
+        if (isNaN(left) || isNaN(w) || !cs.width) return null;
+        const r = span.getBoundingClientRect();
+        return { left: r.x + left, w: w };
+      }
+    }
+    return null;
+  };
+  // 合并块任务末行(13)→ul 首行(15)的源码行距（活动态；heightAtLine 含 0px 空行实测高）
+  window.__s57gaps = function () {
+    const cm = window.__s57cm;
+    if (!cm) return null;
+    const y = (n) => cm.heightAtLine(n);
+    return { gap13to15: y(15) - y(13), line14h: y(15) - y(14) };
+  };
+  // 遮罩态合并块 li4→li5 间距（渲染态口径）
+  window.__s57mergedMaskGap = function () {
+    const ed = window.__s57ed;
+    if (!ed) return null;
+    let list = null;
+    ed._wysiwygMarks.forEach((mark) => {
+      const node = mark && mark.replacedWith;
+      if (node && node.querySelector(':scope > ul.contains-task-list')) list = node.querySelector(':scope > ul.contains-task-list');
+    });
+    if (!list) return null;
+    const lis = list.querySelectorAll(':scope > li');
+    if (!lis[4] || !lis[5]) return null;
+    return lis[5].getBoundingClientRect().top - lis[4].getBoundingClientRect().top;
   };
 })();
 </script>

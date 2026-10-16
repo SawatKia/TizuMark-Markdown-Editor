@@ -585,8 +585,12 @@
       // styles.css 的 `> *:last-child { margin-bottom: 0 }` 会把其底边距清零、遮罩矮一截
       // （渲染↔源码切换跳动）→ 挂 no-btn 类把底边距补回（列表 14px / 标题 12px，各对应该
       // 渲染值），遮罩高度与有按钮时逐像素一致。
+      // TOC 判定在挂遮罩时刻取（闭包用）：文档后续编辑使行号位移时，块表刷新会丢弃
+      // 本遮罩重建新遮罩，掩码生命周期内该判定不会变（[TOC] 行被改即不再是 TOC 块）。
+      const isTocBlock = this._wysiwygBlockIsToc(b);
       if (this._wysiwygBlockIsList(b)) node.classList.add('wysiwyg-mask-no-btn');
       else if (this._wysiwygBlockIsHeading(b)) node.classList.add('wysiwyg-mask-no-btn-heading');
+      else if (isTocBlock) this._addWysiwygTocDeleteButton(node);
       else this._addWysiwygEditButton(node);
       this._addWysiwygTableTools(node);
 
@@ -596,20 +600,41 @@
       // marker.find() 拿的是 CM 维护的实时位置（编辑后自动跟shift），故块划分变化也不会错位。
       node.addEventListener('mousedown', (ev) => {
         ev.stopPropagation();
-        // 表格拖拽进行中（pointerdown 先启动：行/列把手轨道、首格左缘区、表头格）：
-        // mousedown 是同一次按下的伴随事件，必须吞掉——落到下方「按点击纵比映射源码行」
-        // 会撤罩表格块 + 挪光标，拖拽半途表格变源码（2026-10-13 轨道常驻后 gutter 按下
-        // 的目标是轨道 span，非单元格，单元格分支的守卫罩不住它）。
-        // 例外（2026-10-13 反馈 #2：表头也要可以编辑）：从表头格自身启动的列拖态放行
-        // 到下方单元格分支进格编辑；指针真超阈值移动时 _wysiwygTableDragMove 阈值块
-        // 只取消「本次按下才触发」的格编辑（按下前已存在的合法编辑保留到释放时提交，
-        // 见 _wysiwygBeginTableDrag 的 cellEditAtDown 与 _wysiwygTableDragUp）。
-        if (self._wysiwygTableDrag) {
-          const cEl = ev.target && ev.target.closest ? ev.target.closest('td,th') : null;
-          const stNow = self._wysiwygTableDrag;
-          const ownHeader = cEl && stNow && stNow.kind === 'col' && stNow.trs && stNow.trs[0] &&
-            cEl === stNow.trs[0].children[stNow.idx];
-          if (!ownHeader) { ev.preventDefault(); return; }
+        // 表格拖拽进行中（pointerdown 先启动：左侧行轨/首格左缘区、顶部列轨；
+        // 2026-10-20 起表头格不再是拖拽入口，无例外）：mousedown 是同一次按下的
+        // 伴随事件，必须吞掉——落到下方「按点击纵比映射源码行」会撤罩表格块 + 挪光标，
+        // 拖拽半途表格变源码（2026-10-13 轨道常驻后 gutter 按下的目标是轨道 span，
+        // 非单元格，单元格分支的守卫罩不住它）。
+        if (self._wysiwygTableDrag) { ev.preventDefault(); return; }
+        // [TOC] 块（2026-10-21 用户要求：目录不允许编辑、点击无反应）：遮罩内任何点击
+        // （含目录链接/遮罩空白）一律无反应——不映射源码行、不进编辑、不跳转。保留与通用
+        // 路径一致的「先提交在编表格格」，避免点 TOC 把进行中的格编辑悬空；仅右上「删除」
+        // 按钮有效（删除 [TOC] 源行，见下）。
+        if (isTocBlock) {
+          if (self._wysiwygCellEditing) self._wysiwygEndCellEdit(true, false);
+          const tocDel = ev.target && ev.target.closest ? ev.target.closest('button[data-toc-delete]') : null;
+          ev.preventDefault();
+          if (!tocDel) return;
+          try {
+            const r = mark && mark.find ? mark.find() : null;
+            if (r) {
+              const s = r.from.line;
+              const e = r.to.line;
+              const last = cm.lineCount() - 1;
+              let from = { line: s, ch: 0 };
+              // 连行尾换行一起删（避免留空行）；末行则删到行尾
+              let to = (e < last) ? { line: e + 1, ch: 0 }
+                : { line: e, ch: (cm.getLine(e) || '').length };
+              // 块前后各有一个空行时改删前导换行，避免留下连续两个空行
+              if (e < last && s > 0 &&
+                  (cm.getLine(s - 1) || '').trim() === '' && (cm.getLine(e + 1) || '').trim() === '') {
+                from = { line: s - 1, ch: (cm.getLine(s - 1) || '').length };
+              }
+              cm.operation(() => { cm.replaceRange('', from, to); });
+              cm.focus();
+            }
+          } catch (_) { /* 标记已失效则忽略本次点击 */ }
+          return;
         }
         // 正在编辑的本格：mousedown 交给浏览器原生文本选择（2026-10-14 用户要求：单元格
         // 文字也要支持选中）。必须在 preventDefault 之前 return——preventDefault 会杀死
@@ -679,18 +704,10 @@
           // 格内链接 + Ctrl/Cmd = 跟随链接（落到下方链接分支）；其余点格一律进单元格编辑。
           const cellEl = ev.target && ev.target.closest ? ev.target.closest('td,th') : null;
           if (cellEl && !(cellEl.closest('a') && (ev.ctrlKey || ev.metaKey))) {
-            // 行拖拽 / 顶 gutter 列拖拽已在 pointerdown（先于 mousedown）启动：不启动格编辑。
-            // 例外（2026-10-13 反馈 #2：表头也要可以编辑）：表头格是列拖拽把手，但普通
-            // 点击（不动）仍应进格编辑——从本表头格自身启动的列拖态放行；指针真超阈值
-            // 移动时 _wysiwygTableDragMove 阈值块会先 _wysiwygEndCellEdit(false) 取消
-            // 「本次按下才触发」的格编辑再进入拖拽；按下前已存在的格编辑保留（释放时提交，
-            // 2026-10-14 用户反馈：改完格内容立即拖行/列不得丢内容）。
+            // 行拖拽 / 顶 gutter 列拖拽已在 pointerdown（先于 mousedown）启动：不启动格编辑
+            //（2026-10-20 起表头格不再是列拖把手，按下即普通格编辑，无例外）。
             const dragSt = self._wysiwygTableDrag;
-            if (dragSt) {
-              const isOwnHeaderDrag = dragSt.kind === 'col' && dragSt.trs && dragSt.trs[0] &&
-                cellEl === dragSt.trs[0].children[dragSt.idx];
-              if (!isOwnHeaderDrag) return;
-            }
+            if (dragSt) return;
             const trNow = cellEl.closest('tr');
             const tableNow = cellEl.closest('table');
             const trsNow = tableNow ? Array.from(tableNow.querySelectorAll('tr')) : [];
@@ -833,9 +850,10 @@
         } catch (_) { /* 标记已失效则忽略本次点击 */ }
       });
 
-      // 表格行/列拖拽换位（2026-10-13 用户要求，Typora 式）：pointerdown 先于 mousedown，
-      // 行拖拽从首格左侧 16px 把手区启动（直接 preventDefault，不触发格编辑）；
-      // 列拖拽从表头格按下启动、移动超 4px 阈值才真正进入拖拽（不动 = 普通格编辑）。
+      // 表格行/列拖拽换位（2026-10-13 用户要求，Typora 式）：pointerdown 先于 mousedown。
+      // 拖拽入口只有两处（2026-10-20 用户要求：表头不允许拖动）：
+      // ① 左侧行轨（含首格左缘 16px 把手区，直接 preventDefault，不触发格编辑）；
+      // ② 顶部列轨（pill）。表头格按下 = 普通格编辑，不再启动列拖拽。
       node.addEventListener('pointerdown', (ev) => {
         const grabbed = self._wysiwygTableDragStart(ev);
         if (grabbed) ev.preventDefault();
@@ -892,6 +910,17 @@
       return /^\s{0,3}#{1,6}(\s|$)/.test(line);
     },
 
+    // 块是否为 [TOC]：单行块 + 内容恰为 [TOC]（与 _wysiwygReplaceToc 的 <p> 匹配口径一致，
+    // 判为 TOC ⇔ 遮罩会被替换成渲染目录）。TOC 由整篇标题生成、内容本身无编辑意义 →
+    // 不挂「编辑」按钮、遮罩内任何点击（含目录链接）无反应，右上改挂「删除」按钮
+    //（2026-10-21 用户要求：目录不允许编辑、点击无反应、编辑按钮改删除）。
+    _wysiwygBlockIsToc(b) {
+      const cm = this.cm;
+      if (!cm || !b || b.end - b.start !== 1) return false;
+      const line = (b.start < cm.lineCount()) ? cm.getLine(b.start) : '';
+      return /^\[TOC\]$/i.test((line || '').trim());
+    },
+
     // 块右上「编辑」按钮（hover 显示，样式对齐代码块复制按钮，2026-10-11 用户反馈 #4）：
     // 大块内容的显式编辑入口，点击撤遮罩并定位块首行（见 mousedown 接管）。
     // 放在遮罩节点上而非 RenderPost：属所见即所得专属 chrome，阅读模式无「编辑块」概念。
@@ -903,6 +932,20 @@
       btn.type = 'button';
       btn.className = 'block-edit-btn';
       btn.textContent = this.t ? this.t('editBlock') : '编辑';
+      btn.title = btn.textContent;
+      node.appendChild(btn);
+    },
+
+    // [TOC] 块遮罩的「删除」按钮（2026-10-21 用户要求：目录不允许编辑、点击无反应，
+    // 右上「编辑」改为「删除」）：复用编辑按钮的位置/hover 样式，点击删除 [TOC] 源行
+    //（见遮罩 mousedown 接管；可 Ctrl+Z 撤销）。
+    _addWysiwygTocDeleteButton(node) {
+      if (!node || node.querySelector('button.block-edit-btn')) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'block-edit-btn';
+      btn.setAttribute('data-toc-delete', '1');
+      btn.textContent = this.t ? this.t('deleteToc') : '删除';
       btn.title = btn.textContent;
       node.appendChild(btn);
     },
@@ -1622,7 +1665,8 @@
     },
 
     // ---------------- 表格行/列操作（2026-10-13 用户要求，Typora 式） ----------------
-    // hover 表 → 右缘「＋」增列、下缘「＋」增行；行左缘/表头格出拖拽把手换位行列。
+    // hover 表 → 右缘「＋」增列、下缘「＋」增行；表左缘/顶部出拖拽把手换位行列
+    // （2026-10-20 用户要求：表头格不可发起拖拽，只有顶部/左侧把手可拖）。
     // 结构变更（行数可能变）整块回写：纯函数重建 → 整块 replaceRange → 立即重算块表
     // + 重挂变化块（_wysiwygCommitTableBlock，不能走单元格单行提交路径）。表格 DOM 被
     // 包进 wysiwyg-table-wrap 锚（div/button 不在 S1 结构标签集，同构判据不受影响；
@@ -1944,13 +1988,8 @@
         });
         return true;
       }
-      if (isHeader && cIdx >= 0) {
-        this._wysiwygBeginTableDrag({
-          kind: 'col', wrap: wrap, tableEl: tableEl, trs: trs, idx: cIdx,
-          startX: ev.clientX, startY: ev.clientY, moved: false,
-        });
-        return false;
-      }
+      // 表头格不再是列拖把手（2026-10-20 用户要求：表头不允许拖动，只有顶部/左侧
+      // 把手可发起拖拽）——表头格按下落到格编辑；列拖只从顶部列轨（pill）启动。
       return false;
     },
 
@@ -2343,6 +2382,9 @@
               cm.removeLineClass(h, 'text', 'wysiwyg-para-line');
               cm.removeLineClass(h, 'text', 'wysiwyg-block-edge-top');
               cm.removeLineClass(h, 'text', 'wysiwyg-block-edge-bottom');
+              // 引用行类（2026-10-20）：行改写成非引用（删掉 >）后须撤掉背景盒/竖条槽
+              cm.removeLineClass(h, 'text', 'wysiwyg-quote-line');
+              cm.removeLineClass(h, 'text', 'wysiwyg-quote-nested');
             }
           } catch (_) { /* 行已销毁（安全 no-op） */ }
         }
@@ -2465,16 +2507,37 @@
           add(lineNo, textStart, line.length, 'wysiwyg-list-text');
         }
       } else if (RE.quote.test(first.trimStart())) {
-        // —— 引用：> 前缀灰显 + 最外层 > 左竖条 + 正文预览字体（逐行，含嵌套 >）——
+        // —— 引用（2026-10-20 用户要求：样式与渲染态完全一致，> 标志只在光标行显示）——
+        // 逐行复现渲染 blockquote 几何（见 styles.css 同名规则注释）：每层 ">" **连同其后
+        // 空格** → 固定 24px 槽（渲染缩进 = border 4 + padding 20；左竖条画在槽 ::before
+        // 上、逐行顶满 → 连续竖条）。空格必须进槽、不能单独零宽：零宽 span 位于行尾时
+        // Chromium 的 caret 锚定会把 DOM 差分写乱（2026-10-20 实测："> " 续行键入 CJK，
+        // 源空格被挤到行尾、模型变 ">继续内容 "，与空列表项 IME 上屏同源，但走普通
+        // insertText 通道也复现）；槽是 24px 真宽盒，行尾 caret 锚定稳定。
+        // 正文 → 预览字体 + 次级色。行类 wysiwyg-quote-line/nested 管淡色背景盒与
+        // 边缘/嵌套 padding；> 字符默认透明，仅光标行可见（wysiwyg-quote-cursor-line，
+        // cursorActivity 管理，_wysiwygQuoteCurLine）。
         for (let lineNo = b.start; lineNo < b.end && lineNo < cm.lineCount(); lineNo++) {
           const line = cm.getLine(lineNo);
           if (!line || line.trim() === '') continue; // callout 内空行不装饰
           const qm = /^(\s*(?:>[ \t]?)+)/.exec(line);
           if (!qm) continue;
-          add(lineNo, 0, qm[1].length, 'wysiwyg-quote-prefix');
-          const gtAt = line.indexOf('>');
-          if (gtAt >= 0) add(lineNo, gtAt, gtAt + 1, 'wysiwyg-quote-bar');
+          let level = 0, pos = 0;
+          while (pos < qm[1].length) {
+            const gt = line.indexOf('>', pos);
+            if (gt < 0 || gt >= qm[1].length) break;
+            level++;
+            let end = gt + 1;
+            if (line[end] === ' ' || line[end] === '\t') end++; // 空格进槽（caret 锚定，见上）
+            add(lineNo, gt, end, 'wysiwyg-quote-slot');
+            pos = end;
+          }
           add(lineNo, qm[1].length, line.length, 'wysiwyg-quote-text');
+          const h = cm.getLineHandle(lineNo);
+          if (h) {
+            cm.addLineClass(h, 'text', 'wysiwyg-quote-line');
+            if (level >= 2) cm.addLineClass(h, 'text', 'wysiwyg-quote-nested');
+          }
         }
       }
       // —— 行内语法（2026-10-14 用户要求，Typora 式）：围栏/表格/frontmatter 之外的块，
@@ -2744,10 +2807,22 @@
       if (prevCur != null && prevCur !== line) {
         const blanks = this._wysiwygBlankLines;
         this._setWysiwygBlankClass(prevCur, !!(blanks && blanks.has(prevCur)));
+        // 间隙表 inline 高度随光标离开恢复（2026-10-20）：光标在块内空行上时该行的
+        // inline 高度被清除（恢复全高）；离开时按间隙表恢复（块内列表 0px / 块间 Xpx）
+        //——间隙表只在输入防抖重算，纯光标移动必须在此落地（渲染行已物化，恒等匹配取 pre）
+        const m = this._wysiwygBlankGap;
+        if (m) {
+          let ph = null;
+          try { ph = this.cm.getLineHandle(prevCur); } catch (_) { /* 行已销毁 */ }
+          this._applyWysiwygBlankGapEl(this._wysiwygLinePreOf(prevCur), ph ? m.get(ph) : undefined);
+        }
       }
       const lineBlockIdx = this.wysiwygBlockIndexAt(line);
       if (this._isWysiwygBlankLine(line) && lineBlockIdx >= 0) {
         this._setWysiwygBlankClass(line, false);
+        // 进入即清除 inline 高度：此刻间隙表仍是旧值（光标行在表内可能残留 0px 条目，
+        // 下次输入防抖重算才会按光标例外摘除）→ 不摘 inline 光标会落在 0px 行里不可见
+        this._applyWysiwygBlankGapEl(this._wysiwygLinePreOf(line), null);
         this._wysiwygBlankCurLine = line;
       } else {
         this._wysiwygBlankCurLine = null;
@@ -2766,7 +2841,51 @@
         const pb = this._wysiwygActiveIdx >= 0 ? this._wysiwygBlocks[this._wysiwygActiveIdx] : null;
         if (pb && line === pb.end) activeIdx = this._wysiwygBlockIndexAtFresh(line);
       }
+      // —— 引用块：> 标志只在光标行显示（2026-10-20 用户要求）。行类挂在行对象上，
+      //    装饰重算（输入防抖）不丢；纯光标移动也必须在此落地（与块内空行
+      //    _wysiwygBlankCurLine 同一机制）。光标行非引用行（含离开引用块）→ 撤类。
+      const prevQuote = this._wysiwygQuoteCurLine;
+      const ab = activeIdx >= 0 ? this._wysiwygBlocks[activeIdx] : null;
+      const inQuote = !!(ab && line >= ab.start && line < ab.end
+        && RE.quote.test(((this.cm.getLine(line) || '').trimStart())));
+      const nextQuote = inQuote ? line : null;
+      if (prevQuote != null && prevQuote !== nextQuote) this._setWysiwygQuoteCurClass(prevQuote, false);
+      if (nextQuote != null && nextQuote !== prevQuote) this._setWysiwygQuoteCurClass(nextQuote, true);
+      this._wysiwygQuoteCurLine = nextQuote;
       this.setWysiwygActiveBlock(activeIdx);
+      // active-line addon 失步守卫（2026-10-21，光标行显示源码的 CSS 载体）：光标落进
+      // **被遮罩块**（collapsed replacedWith）时，addon 用的 getLineHandleVisualStart 按
+      // 「视觉行」解析 = 遮罩起始行的 Line 对象 → CodeMirror-activeline 被挂到遮罩起始行，
+      // 且解罩后不自愈（sameArray 比 handle 恒等，无新选区变化就不重解析）。复现路径：
+      // 跳转行号/程序化 setCursor 落进遮罩（点击路径是「先解罩后落选区」，天然不受影响）。
+      // 对策：校验 addon 存储 handle 的行号 == 光标行，不符则重放一次当前选区（identical
+      // 选区 → setSelectionInner 立即返回、不重复 cursorActivity；addSelectionToHistory
+      // 按 equals 去重，不新增撤销步），让 addon 按解罩后的文档重解析。
+      // ⚠️ 本函数无局部 cm（全程 this.cm）——裸用 cm 会 ReferenceError 被下方 catch 静默吞
+      try {
+        const cm2 = this.cm;
+        const al = cm2.state && cm2.state.activeLines;
+        if (al && al.length) {
+          const h0 = al[0];
+          const storedNo = (h0 && typeof h0.lineNo == 'function') ? h0.lineNo() : null;
+          if (storedNo !== cm2.getCursor().line) {
+            const rng = cm2.listSelections()[0];
+            if (rng) cm2.operation(() => { cm2.setSelection(rng.anchor, rng.head, { scroll: false }); });
+          }
+        }
+      } catch (_) { /* addon 状态异常不阻断同步 */ }
+    },
+
+    // 引用光标行类（2026-10-20）：'text' 域 = pre 元素（CSS pre.wysiwyg-quote-cursor-line
+    // 控制该行 > 槽字符可见）。行已销毁时 no-op；行号越界不操作。
+    _setWysiwygQuoteCurClass(n, on) {
+      const cm = this.cm;
+      if (!cm || n == null || n < 0 || n >= cm.lineCount()) return;
+      try {
+        const h = cm.getLineHandle(n);
+        if (on) cm.addLineClass(h, 'text', 'wysiwyg-quote-cursor-line');
+        else cm.removeLineClass(h, 'text', 'wysiwyg-quote-cursor-line');
+      } catch (_) { /* 行已销毁（安全 no-op） */ }
     },
 
     // ---------------- 抖动补偿（同步 / operation 内延迟） ----------------
@@ -3539,13 +3658,10 @@
       } catch (_) { /* 行已销毁 */ }
     },
 
-    // 块的 margin-top/margin-bottom（与阅读模式 .preview-content 逐一对齐，
-    // 2026-10-17 块间间隙对齐用）：p/ul/ol = 0/14（styles.css p{mb:14}、
-    // ul,ol{mb:14}，全局 * reset 后 mt=0）；h1-h6 = 24/12；blockquote = 0/16；
-    // pre = 16/16；table = 12/12；hr = 32/32。分类：优先取块渲染 html 的首标签，
-    // 无 html（parseOnly 增量刷新）时按块首行源码形态判。
-    _wysiwygBlockMargins(b) {
-      if (!b) return [0, 14];
+    // 块渲染 html 的首标签（公共口径：margin 对齐 / 块内空行高度共用）：
+    // 优先取块渲染 html 的首标签，无 html（parseOnly 增量刷新）时按块首行源码形态判。
+    _wysiwygBlockTag(b) {
+      if (!b) return '';
       let tag = '';
       if (b.html) {
         const m = /^<(?:div[^>]*>\s*)?([a-zA-Z][a-zA-Z0-9]*)/.exec(b.html);
@@ -3561,6 +3677,16 @@
         else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) tag = 'hr';
         else tag = 'p';
       }
+      return tag;
+    },
+
+    // 块的 margin-top/margin-bottom（与阅读模式 .preview-content 逐一对齐，
+    // 2026-10-17 块间间隙对齐用）：p/ul/ol = 0/14（styles.css p{mb:14}、
+    // ul,ol{mb:14}，全局 * reset 后 mt=0）；h1-h6 = 24/12；blockquote = 0/16；
+    // pre = 16/16；table = 12/12；hr = 32/32。
+    _wysiwygBlockMargins(b) {
+      if (!b) return [0, 14];
+      const tag = this._wysiwygBlockTag(b);
       if (tag === 'ul' || tag === 'ol') return [0, 14];
       if (/^h[1-6]$/.test(tag)) return [24, 12];
       if (tag === 'pre' || tag === 'code') return [16, 16];
@@ -3578,7 +3704,10 @@
     // 即补齐剩余差（列表/段落族 = 0，标题相邻 = 24 − 上块 mb …）。
     // 连续多条空行：仅「紧贴下一块」的那条取 X，其余 0（markdown 语义上多空行
     // 等同一个分隔）。尾随空行（下方无块）= 0（上块 mb 已在遮罩底缘内）。
-    // 块内空行不进表（走类默认 12px）。
+    // 块内空行：列表块（ul/ol，含任务混合块）进表取 0——渲染态该空行本身不占高度
+    //（松散列表 li 间距已含在项距里，列表行 4px padding-bottom 与阅读 li 间距同值）
+    //→ 活动态取 0 才与渲染态逐像素一致（2026-10-20 用户截图：任务列表+下方无序列表
+    // 合并块激活时 ul 段上方多一行 12px 空白）；其余块型块内空行走类默认 12px。
     // 落地：行 handle（Line 对象，同一性键）→ X 的 Map；renderLine 钩子在每次
     // 行（重新）物化时写 inline line-height 覆盖类默认，另对当前视口行立即应用
     //（renderLine 只在重渲染时触发）。
@@ -3587,12 +3716,25 @@
       const map = new Map();
       const blocks = this._wysiwygBlocks;
       if (blocks && blocks.length && this._wysiwygBlankLines) {
-        for (const i of this._wysiwygBlankLines) {
-          let inside = false;
+        const lines = new Set(this._wysiwygBlankLines);
+        // 光标所在块内空行不在类集合（光标例外摘类恢复全高，2026-10-17）但必须留在
+        // 间隙表（2026-10-20）：否则光标离开时无表项可依恢复列表块内空行的 0px。
+        // 应用侧由 _wysiwygBlankCurLine 守卫跳过该行（光标行 inline 由 cursorActivity 管）。
+        if (this._wysiwygBlankCurLine != null) lines.add(this._wysiwygBlankCurLine);
+        for (const i of lines) {
+          let inner = null;
           for (const b of blocks) {
-            if (i >= b.start && i < b.end) { inside = true; break; }
+            if (i >= b.start && i < b.end) { inner = b; break; }
           }
-          if (inside) continue;
+          if (inner) {
+            // 块内空行：列表块取 0（渲染态该空行不占高度，见上注释）；
+            // 其余块型保持类默认 12px（不进表 = 无 inline 覆盖）
+            const tag = this._wysiwygBlockTag(inner);
+            if (tag === 'ul' || tag === 'ol') {
+              try { map.set(cm.getLineHandle(i), 0); } catch (_) { /* 行已销毁 */ }
+            }
+            continue;
+          }
           let nextMt = null;
           let prevMb = 0;
           for (const b of blocks) {
@@ -3604,11 +3746,22 @@
         }
       }
       this._wysiwygBlankGap = map;
+      // 光标所在块内空行的行内高度由 cursorActivity 同步管理（进=清、离=恢复）：
+      // 此处跳过该行，防重渲染把旧表项（如 0px）覆回光标行（光标落进 0px 行不可见）。
+      // handler 只创建一次 → 守卫必须每次调用现读 _wysiwygBlankCurLine（闭包捕获会恒旧）
+      const isCursorGapLine = (c, lineObj) => {
+        const curL = this._wysiwygBlankCurLine;
+        if (curL == null) return false;
+        let curH = null;
+        try { curH = c.getLineHandle(curL); } catch (_) { return false; } /* 行已销毁 */
+        return lineObj === curH;
+      };
       if (!this._wysiwygBlankGapBound) {
         this._wysiwygBlankGapBound = true;
         this._wysiwygBlankGapHandler = (c, lineObj, preEl) => {
           const m = this._wysiwygBlankGap;
           if (!m || !preEl) return;
+          if (isCursorGapLine(c, lineObj)) return;
           this._applyWysiwygBlankGapEl(preEl, m.get(lineObj));
         };
         try { cm.on('renderLine', this._wysiwygBlankGapHandler); } catch (_) { this._wysiwygBlankGapBound = false; }
@@ -3621,6 +3774,7 @@
             const lineObj = lv && lv.line;
             const el = lv && lv.node;
             if (!lineObj || !el) continue;
+            if (isCursorGapLine(cm, lineObj)) continue;
             this._applyWysiwygBlankGapEl(this._wysiwygGapPreOf(el), map.get(lineObj));
           }
         }
@@ -3739,10 +3893,19 @@
           if (this._wysiwygPlainLines) {
             for (const h of this._wysiwygPlainLines) {
               try {
-                if (h) cm.removeLineClass(h, 'text', 'wysiwyg-plain-text');
+                if (h) {
+                  cm.removeLineClass(h, 'text', 'wysiwyg-plain-text');
+                  cm.removeLineClass(h, 'text', 'wysiwyg-quote-line');
+                  cm.removeLineClass(h, 'text', 'wysiwyg-quote-nested');
+                }
               } catch (_) { /* 行已销毁（安全 no-op） */ }
             }
           }
+          // ⚠️ 引用光标行类（wysiwyg-quote-cursor-line）不在这里撤（2026-10-20 实测）：
+          // 本方法由 renderWysiwygMasks（含 250ms 输入防抖刷新）调起，撤掉后无 cursorActivity
+          // 跟随 → 光标行的 > 标志会在每次输入防抖后消失。行类挂在行对象上，防抖重渲后
+          // pre 按行对象重建自动带回；进出由 syncWysiwygActiveBlock 的 cursorActivity
+          // 现算（_wysiwygQuoteCurLine 状态同样保留，行号失效时挂/撤均为 no-op）。
           // 列表块级排版行类同批撤（2026-10-15：缩进/项间距）
           if (this._wysiwygListLines) {
             for (const h of this._wysiwygListLines) {
@@ -3767,6 +3930,9 @@
       this._wysiwygBlankLines = null;
       this._wysiwygBlankCurLine = null;
       this._wysiwygBlankGap = null;
+      // ⚠️ _wysiwygQuoteCurLine 不在此重置（2026-10-20）：引用光标行类不随防抖重渲
+      // 清除（见上方 ⚠️ 注释），状态保留才能让 syncWysiwygActiveBlock 的 prev/next
+      // 差分在光标移动时正确换行；行号失效时挂/撤类均为 no-op。
       // renderLine 钩子解绑（重进模式时 _updateWysiwygBlankGap 会重新绑定）
       if (this._wysiwygBlankGapBound && this.cm) {
         try { this.cm.off('renderLine', this._wysiwygBlankGapHandler); } catch (_) { /* 忽略 */ }
