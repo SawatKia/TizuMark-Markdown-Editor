@@ -24,7 +24,11 @@
   // 光标所在空行例外（要显示光标与占位提示），见 syncWysiwygActiveBlock。
   const BLANK_CLASS = 'cm-wysiwyg-blank';
   // 活动块（光标所在块、源码态）行高亮类：与渲染态块明显区分（2026-10-11 用户反馈 #5）。
-  // 行号制跟踪（_wysiwygActiveLines）：编辑会使行号位移，输入防抖刷新重算块表后重新附着。
+  // 行「对象」制跟踪（_wysiwygActiveLines / _wysiwygPlainLines / _wysiwygListLines 存
+  // getLineHandle 的 CM LineObject，而非行号）：编辑分行/插行使行号位移后，按旧行号
+  // getLineHandle 拿到的是该位置的新行对象，撤类打空、旧类残留在位移行上——活动块灰底
+  // 残在文末空行即「灰色条」（2026-10-17 用户截图）。对已销毁行对象调 removeLineClass
+  // 是安全 no-op（changeLine 内 lineNo==null 直接返回，不抛错、不动 DOM）。
   const ACTIVE_CLASS = 'cm-wysiwyg-active-block';
   // 活动块「整块一体」观感（2026-10-13 用户反馈 #2：逐行小圆角不好看，要像一整块编辑区）：
   // 底色只挂 ACTIVE_CLASS（每行一条、连续无角），首/末行各额外挂一个类，CSS 只在首行上缘、
@@ -2238,15 +2242,16 @@
       const cm = this.cm;
       if (!cm) return;
       if (this._wysiwygActiveLines) {
-        for (const n of this._wysiwygActiveLines) {
+        // 直接对行对象撤类（不按行号取句柄）：分行/插行后行号位移，按旧行号撤会打空、
+        // 灰底残留成「文末灰色条」（2026-10-17 用户截图，根因即此处）。
+        for (const h of this._wysiwygActiveLines) {
           try {
-            const h = cm.getLineHandle(n);
             if (h) {
               cm.removeLineClass(h, 'background', ACTIVE_CLASS);
               cm.removeLineClass(h, 'background', ACTIVE_FIRST_CLASS);
               cm.removeLineClass(h, 'background', ACTIVE_LAST_CLASS);
             }
-          } catch (_) { /* 行已不存在 */ }
+          } catch (_) { /* 行已销毁（安全 no-op） */ }
         }
       }
       this._wysiwygActiveLines = null;
@@ -2267,10 +2272,10 @@
       }
       this._wysiwygActiveLines = [];
       for (let n = lo; n <= hi; n++) {
-        this._wysiwygActiveLines.push(n);
         try {
           const h = cm.getLineHandle(n);
           if (!h) continue;
+          this._wysiwygActiveLines.push(h); // 记行对象（撤除处靠它跟住行位移）
           cm.addLineClass(h, 'background', ACTIVE_CLASS);
           // 单行：同一行挂三个类 = 四角全圆；容器整块：首行仅上角、末行仅下角
           if (n === lo) cm.addLineClass(h, 'background', ACTIVE_FIRST_CLASS);
@@ -2310,32 +2315,31 @@
         this._wysiwygActiveDecor = null;
       }
       if (!cm || !this._wysiwygBlocks) return;
-      // 正文排版行类同样先清后挂（行号可能已位移）
+      // 正文排版行类同样先清后挂（直接对行对象撤，不受行号位移影响，2026-10-17）
       if (this._wysiwygPlainLines) {
-        for (const n of this._wysiwygPlainLines) {
+        for (const h of this._wysiwygPlainLines) {
           try {
-            const h = cm.getLineHandle(n);
             if (h) {
               cm.removeLineClass(h, 'text', 'wysiwyg-plain-text');
               cm.removeLineClass(h, 'text', 'wysiwyg-para-line');
               cm.removeLineClass(h, 'text', 'wysiwyg-block-edge-top');
               cm.removeLineClass(h, 'text', 'wysiwyg-block-edge-bottom');
             }
-          } catch (_) { /* 行已不存在 */ }
+          } catch (_) { /* 行已销毁（安全 no-op） */ }
         }
         this._wysiwygPlainLines = null;
       }
-      // 列表块级排版行类（缩进/项间距）同样先清后挂（2026-10-15 编辑态对齐渲染态）
+      // 列表块级排版行类（缩进/项间距）同样先清后挂（2026-10-15 编辑态对齐渲染态；
+      // 2026-10-17 改行对象制，同上）
       if (this._wysiwygListLines) {
-        for (const n of this._wysiwygListLines) {
+        for (const h of this._wysiwygListLines) {
           try {
-            const h = cm.getLineHandle(n);
             if (h) {
               cm.removeLineClass(h, 'text', 'wysiwyg-list-line');
               cm.removeLineClass(h, 'text', 'wysiwyg-list-indent-ul');
               cm.removeLineClass(h, 'text', 'wysiwyg-list-indent-ol');
             }
-          } catch (_) { /* 行已不存在 */ }
+          } catch (_) { /* 行已销毁（安全 no-op） */ }
         }
         this._wysiwygListLines = null;
       }
@@ -2400,7 +2404,7 @@
                 // 续行：按块型跟随（渲染态续行正文在 li 内容缘，同缩进近似）
                 cm.addLineClass(lh, 'text', indentOlBlock ? 'wysiwyg-list-indent-ol' : 'wysiwyg-list-indent-ul');
               }
-              (this._wysiwygListLines = this._wysiwygListLines || []).push(lineNo);
+              (this._wysiwygListLines = this._wysiwygListLines || []).push(lh);
             } catch (_) { /* 忽略单行失败 */ }
           }
           let textStart = line.length;
@@ -2483,7 +2487,7 @@
             const h = cm.getLineHandle(lineNo);
             if (h) {
               cm.addLineClass(h, 'text', 'wysiwyg-plain-text');
-              this._wysiwygPlainLines.push(lineNo);
+              this._wysiwygPlainLines.push(h);
               // 块边缘行类（S43 块高补齐用）：首/末行挂标记，CSS 给「14px 边距族」
               // （列表行/段落行）的边缘行加顶/底距，使活动块与遮罩逐像素等高。
               // 不用 cm-wysiwyg-active-first/last——那对非容器块只挂光标行（lo=hi），
@@ -2499,10 +2503,12 @@
               // +17px（底）补齐，活动块与遮罩逐像素等高。标题（24/12 边距）/引用块
               // 参数不同，不在本次范围。
               const content = cm.getLine(lineNo) || '';
-              // 列表行判定用 _wysiwygListLines（列表分支刚挂好、含续行）——CM5 行类存
-              // handle.textCls/bgCls 等属性、无 lineClasses 字段，读它会 undefined 抛错
-              // 被外层 try/catch 静默吞掉（2026-10-15 实测：para-line 全漏挂）。
-              const isListLine = (this._wysiwygListLines || []).indexOf(lineNo) !== -1;
+              // 列表行判定直接读 CM5 行对象真实属性（line.textClass，见 codemirror.js
+              // addLineClass/changeLine）：上方列表分支刚挂的 wysiwyg-list-line（含续行）
+              // 就在本行对象上。旧按行号查 _wysiwygListLines 在分行/位移后失配（2026-10-17
+              // 灰色条修复同步把跟踪改为行对象）；读不存在的 lineClasses 字段会 undefined
+              // 抛错被吞（2026-10-15 实测：para-line 全漏挂）。
+              const isListLine = (h.textClass || '').indexOf('wysiwyg-list-line') !== -1;
               if (!isListLine
                   && !RE.heading.test(content)
                   && !RE.quote.test(content.trimStart())
@@ -3452,39 +3458,37 @@
             for (const i of this._wysiwygBlankLines) this._setWysiwygBlankClass(i, false);
           }
           if (this._wysiwygBlankCurLine != null) this._setWysiwygBlankClass(this._wysiwygBlankCurLine, false);
-          // 活动块高亮同批撤掉（离开模式/换文档后旧行号一律作废；首/末行角类一并撤）
+          // 活动块高亮同批撤掉（离开模式/换文档后旧行对象一律作废；首/末行角类一并撤；
+          // 行对象制见文件头 ACTIVE_CLASS 注释，2026-10-17）
           if (this._wysiwygActiveLines) {
-            for (const n of this._wysiwygActiveLines) {
+            for (const h of this._wysiwygActiveLines) {
               try {
-                const h = cm.getLineHandle(n);
                 if (h) {
                   cm.removeLineClass(h, 'background', ACTIVE_CLASS);
                   cm.removeLineClass(h, 'background', ACTIVE_FIRST_CLASS);
                   cm.removeLineClass(h, 'background', ACTIVE_LAST_CLASS);
                 }
-              } catch (_) { /* 行已不存在 */ }
+              } catch (_) { /* 行已销毁（安全 no-op） */ }
             }
           }
           // 正文排版行类同批撤（2026-10-14：编辑态=渲染态的字号/字族/行高/颜色）
           if (this._wysiwygPlainLines) {
-            for (const n of this._wysiwygPlainLines) {
+            for (const h of this._wysiwygPlainLines) {
               try {
-                const h = cm.getLineHandle(n);
                 if (h) cm.removeLineClass(h, 'text', 'wysiwyg-plain-text');
-              } catch (_) { /* 行已不存在 */ }
+              } catch (_) { /* 行已销毁（安全 no-op） */ }
             }
           }
           // 列表块级排版行类同批撤（2026-10-15：缩进/项间距）
           if (this._wysiwygListLines) {
-            for (const n of this._wysiwygListLines) {
+            for (const h of this._wysiwygListLines) {
               try {
-                const h = cm.getLineHandle(n);
                 if (h) {
                   cm.removeLineClass(h, 'text', 'wysiwyg-list-line');
                   cm.removeLineClass(h, 'text', 'wysiwyg-list-indent-ul');
                   cm.removeLineClass(h, 'text', 'wysiwyg-list-indent-ol');
                 }
-              } catch (_) { /* 行已不存在 */ }
+              } catch (_) { /* 行已销毁（安全 no-op） */ }
             }
             this._wysiwygListLines = null;
           }
