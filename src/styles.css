@@ -2835,9 +2835,15 @@ body.is-resizing .side-btn {
 .CodeMirror .wysiwyg-block-mask.preview-content {
   position: relative; /* 块右上「编辑」按钮的绝对定位锚 */
   flex: none;
-  display: block;
+  display: flow-root; /* BFC（2026-10-17）：内容元素自身的 margin-bottom（14px 边距族）
+                       不得穿越遮罩底缘外溢——遮罩底缘 = 内容底缘 + mb，块间可见间隙
+                       才 = 空行高 + mb，与阅读模式的 margin 折叠值完全一致（用户要求
+                       实时预览与源码预览样式完全一致，含行间距）。其余盒行为与 block 等价。 */
   width: 100%;
-  padding: 1px 0 2px 0;
+  /* 2026-10-17：旧 padding 1px 0 2px 0 + border-bottom 1px（合计 4px 结构补偿）归零——
+     那 4px 使块间间隙恒比阅读模式大 4px（17+12+1=30 vs 14，2026-10-17 用户截图）。
+     归零后 S43 等高改由「遮罩 mb 14px（BFC 内收）↔ 块边缘行底距 14px」直接对等。 */
+  padding: 0;
   margin: 0;
   min-height: 0;
   max-width: none;
@@ -2845,7 +2851,7 @@ body.is-resizing .side-btn {
   /* 与阅读模式完全一致：无块级底色（早期的淡色块标识会让整页呈「灰条」观感，
      与阅读模式肉眼可辨，2026-10-08 按用户要求去除） */
   background: transparent;
-  border-bottom: 1px solid transparent;
+  /* 2026-10-17：原 border-bottom（1px 透明线）已移除（4px 结构补偿归零，见上） */
   transition: none;
   color: var(--text-primary);
   line-height: 1.7;
@@ -3047,25 +3053,21 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ol {
   padding-left: calc(var(--wysiwyg-line-inset, 32px) + 8px);
 }
-/* 点块进编辑的块高补齐（2026-10-15 用户截图：「点击编辑后内容会向上动一下」）：
-   遮罩高度 = 1px（padding-top）+ 渲染内容 + 14px（ul/ol/p 自身 margin-bottom——
-   > *:last-child 清零规则被 block-edit-btn 占了 last-child 位而失效）+ 2px
-   （padding-bottom）+ 1px（border-bottom，透明）；编辑态行盒没有这些 → 活动块比
-   遮罩矮 17px、首行还高 1px（遮罩 padding-top）→ 点入后块内行上移 1px、块下方
-   整体上跳 17px。
+/* 点块进编辑的块高补齐（2026-10-15 用户截图：「点击编辑后内容会向上动一下」；
+   2026-10-17 随遮罩盒模型归零重标定）：遮罩高度 = 渲染内容 + 14px（ul/ol/p 自身
+   margin-bottom——BFC（display:flow-root）把它内收进遮罩底缘，> *:last-child 清零
+   规则被 block-edit-btn 占了 last-child 位而失效；列表块由 wysiwyg-mask-no-btn
+   规则恢复 14px）。旧 1px padding-top / 2px padding-bottom / 1px border-bottom 的
+   4px 结构补偿已于 2026-10-17 归零（它是块间间隙比阅读模式恒大 4px 的元凶）→
+   现在遮罩底缘 = 内容底缘 + 14px，活动块只需末行补 14px 底距即逐像素等高
+   （首行不再补顶距：遮罩顶缘 = 内容顶缘，> *:first-child margin-top:0）。
    补法：块的边缘行（JS 挂 wysiwyg-block-edge-top/bottom 行类——非容器块上
    cm-wysiwyg-active-first/last 只挂光标行 lo=hi，不能用）给「14px 边距族」
-   （ul/ol/task 列表行 + 段落行）加 顶距 1px / 底距 4px→17px，活动块与遮罩
-   逐像素等高（16px 字号 3 项列表实测：遮罩 107.609 = 31.2×3+14，活动 32.2+
-   31.2+44.2 同高，行顶 25/56.20/87.40 与 li 顶完全重合）。
+   （ul/ol/task 列表行 + 段落行）末行加 底距 4px→14px。
    仅覆盖 14px 边距族；标题（margin 24/12）/引用块参数不同，不在此列。 */
-.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-list-line.wysiwyg-block-edge-top,
-.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-para-line.wysiwyg-block-edge-top {
-  padding-top: 1px;
-}
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-list-line.wysiwyg-block-edge-bottom,
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-para-line.wysiwyg-block-edge-bottom {
-  padding-bottom: 17px;
+  padding-bottom: 14px;
 }
 /* 源字符保持真实宽度（光标测量精准），仅透明化；渲染符号由 ::before 绝对定位覆盖。
    ⚠️ 不可用 width:0 + overflow:hidden——会连 ::before 符号一起裁掉（2026-10-14 截图实测）。 */
@@ -3557,7 +3559,15 @@ body.wysiwyg-table-dragging * { cursor: grabbing !important; user-select: none !
 
 /* 块间空行塌缩（类由 wysiwyg.js updateWysiwygBlankLines 管理）。
    空行按全高渲染会让块与块之间隔出整行空白（真机反馈「间隔了很多空行」）；
-   塌缩为小间距即 Typora 式段落间隔。光标所在空行由 JS 临时摘掉该类恢复全高。 */
+   塌缩为小间距即 Typora 式段落间隔。
+   2026-10-17：12px 降为兜底——块间（独立）空行的实际间隙高度由 JS 逐行 inline
+   line-height 覆盖（_wysiwygBlankGap，经 renderLine 落到行 DOM）：高度 =
+   max(0, 下块 margin-top − 上块 margin-bottom)，使「块底 + 空行 + 块顶」总间隙
+   与阅读模式的 margin 折叠值逐像素一致（用户要求：实时预览与源码预览样式完全
+   一致含行间距）。12px 仍作用于：块内空行（松散列表项间等）与未映射的兜底态。
+   光标所在空行：块内空行由 JS 临时摘类恢复全高（提示需要可见）；块间独立空行
+   保持塌缩不展开、不显示「输入 / 可插入内容…」提示（2026-10-17 用户要求：
+   点击行与行之间的缝隙不允许出现新行，回车才出新行）。 */
 .CodeMirror .cm-wysiwyg-blank .CodeMirror-line { line-height: 12px; }
 
 /* 遮罩所在行：行盒 strut（行自身的行高盒）会额外撑出一行高度。

@@ -274,8 +274,187 @@
   // 通用建编辑器入口（供驱动侧按任意文档建实例 + 初始遮罩，S40 等场景复用）
   window.__makeWysiwygEditor = function (doc) {
     const { cm, ed } = makeEditor(doc);
+    const out = { cm, ed };
     ed.renderWysiwygMasks();
-    return { cm, ed };
+    return out;
+  };
+
+  // ---------- S54：块间间隙 = 阅读模式 + 点击行缝不出现新行（2026-10-17 用户两项要求） ----------
+  // 文档 A = 用户真机文档（5 个列表块、块间单空行）；文档 B = 段落 + 空行 + 标题
+  //（空行间隙 X = 24−14 = 10px，点击可落在空行本身上，验证不展开/无提示）。
+  // 间隙口径 = 「上块文本末行底缘 → 下块文本首行顶缘」（两态同一元素类型：li 对 li、
+  // p 对 p、h1 对 h1），与用户肉眼看到的行距一致。
+  const S54_DOC_A = ['', '- [ ] sadfs a df', '- [ ] asdfsadf', '', '1. sadfasdfs', '2. asdfasdf', '3. asdfasdf',
+    '', '- [ ] asdfasdfsa', '- [ ] asdfasdf', '- [ ] asdfsadf', '', '- sdfsadfsaf', '- sadfsad f',
+    '- asdfs a d', '', '1. sdfsadfsaf sadf as', '2. asdf asd', '3. asdf as', '', '- [ ] sdfsadfs a',
+    '- [ ] sdf asd', '- [ ] sadf as'].join('\n');
+  const S54_DOC_B = '段落文字。\n\n# 标题';
+
+  // 取块的「文本容器」列表：ul/ol → 其 li 集合；其余（p/h1..6/pre/blockquote/table）→ 元素本身。
+  // 入参兼容两种形态：遮罩 div（firstElementChild = 渲染块）与阅读模式顶层块元素本身。
+  function s54TextBoxes(el) {
+    if (!el) return null;
+    const list = (el.tagName === 'UL' || el.tagName === 'OL') ? el : el.firstElementChild;
+    if (list && (list.tagName === 'UL' || list.tagName === 'OL')) {
+      const lis = Array.from(list.children).filter((c) => c.tagName === 'LI');
+      return lis.length ? lis : null;
+    }
+    const first = el.firstElementChild || el;
+    return first ? [first] : null;
+  }
+
+  // ⚠️ 驱动顺序必须是 A 全程完成（建/量/点/量）后再建 B：makeEditor 复用同一 host，
+  // 建 B 会清掉 A 的 CM DOM（A 的点击坐标/遮罩随之失效，2026-10-17 实测踩坑）。
+
+  // 文档 A 建编辑器 + 量间隙 + 定位行缝点击点
+  window.__gapClickA2026 = function () {
+    const out = { err: null };
+    try {
+      const A = makeEditor(S54_DOC_A);
+      window.__gapEdA = { cm: A.cm, ed: A.ed };
+      // 光标移到首行空行（块外）→ 无活动块、全部块挂遮罩（初始光标在文档尾会让末块解罩）
+      A.cm.setCursor({ line: 0, ch: 0 });
+      A.ed.renderWysiwygMasks();
+      // 整篇物化（CM5 只物化视口附近；全量视图驻留同款直接写 options + refresh）
+      A.cm.options.viewportMargin = 100000;
+      A.cm.refresh();
+      const blocksA = A.ed._wysiwygBlocks;
+      const masksA = [];
+      for (let i = 0; i < blocksA.length; i++) {
+        const mk = A.ed._wysiwygMarks && A.ed._wysiwygMarks.get(i);
+        masksA.push(mk && mk.replacedWith ? mk.replacedWith : null);
+      }
+      const wysGapsA = [];
+      const clickA = { x: null, y: null };
+      let maskBottom1 = null;
+      for (let i = 0; i + 1 < masksA.length; i++) {
+        const ba = s54TextBoxes(masksA[i]);
+        const bb = s54TextBoxes(masksA[i + 1]);
+        if (!ba || !bb) { wysGapsA.push(null); continue; }
+        const gap = bb[0].getBoundingClientRect().top - ba[ba.length - 1].getBoundingClientRect().bottom;
+        wysGapsA.push(Math.round(gap * 100) / 100);
+        if (i === 1) {
+          maskBottom1 = masksA[1].getBoundingClientRect().bottom;
+          // 间隙中点（列表对：14px mb 区，落在上遮罩盒内 → 遮罩点击接管）
+          clickA.x = 200;
+          clickA.y = ba[ba.length - 1].getBoundingClientRect().bottom + gap / 2;
+        }
+      }
+      // 阅读模式同文档：顶层块 rects（必须趁 B 未建之前量）
+      const reading = document.getElementById('reading');
+      reading.innerHTML = window.UnifiedRenderer.renderMarkdown(S54_DOC_A, A.ed.settings);
+      const rblocks = Array.from(reading.children);
+      const readGapsA = [];
+      for (let i = 0; i + 1 < rblocks.length; i++) {
+        const boxA = s54TextBoxes(rblocks[i]);
+        const boxB = s54TextBoxes(rblocks[i + 1]);
+        if (!boxA || !boxB) { readGapsA.push(null); continue; }
+        readGapsA.push(Math.round((boxB[0].getBoundingClientRect().top - boxA[boxA.length - 1].getBoundingClientRect().bottom) * 100) / 100);
+      }
+      out.lineCount = A.cm.lineCount();
+      out.value = A.cm.getValue();
+      out.blocks = blocksA.map((b) => [b.start, b.end]);
+      out.wysGaps = wysGapsA;
+      out.readGaps = readGapsA;
+      out.click = clickA;
+      out.maskBottom1 = maskBottom1;
+      return out;
+    } catch (e) {
+      out.err = String(e && e.message || e);
+      return out;
+    }
+  };
+
+  // 文档 A 点击后测量（光标落位/行数不变/无提示/活动块底=遮罩底）
+  window.__gapClickA2026After = function () {
+    const out = { err: null };
+    try {
+      const A = window.__gapEdA;
+      const cmx = A.cm, edx = A.ed;
+      out.cursor = cmx.getCursor();
+      out.lineCount = cmx.lineCount();
+      out.valueChanged = cmx.getValue() !== window.__gapClickAValue;
+      out.hints = cmx.getWrapperElement().querySelectorAll('.cm-empty-placeholder').length;
+      out.activeIdx = edx._wysiwygActiveIdx;
+      // 活动块底（源码态末行 pre 底缘）vs 点击前遮罩底
+      const wrap = cmx.getWrapperElement();
+      const edges = Array.from(wrap.querySelectorAll('pre.CodeMirror-line'))
+        .filter((l) => (l.className || '').indexOf('wysiwyg-block-edge-bottom') !== -1);
+      out.activeBottom = edges.length ? edges[edges.length - 1].getBoundingClientRect().bottom : null;
+      return out;
+    } catch (e) {
+      out.err = String(e && e.message || e);
+      return out;
+    }
+  };
+
+  // 文档 B（段落→标题，空行 X=10px 可点击）建编辑器 + 量间隙 + 定位空行点击点
+  window.__gapClickB2026 = function () {
+    const out = { err: null };
+    try {
+      const B = makeEditor(S54_DOC_B);
+      window.__gapEdB = { cm: B.cm, ed: B.ed };
+      // 光标落块间空行（行1，两块之外）→ 无活动块、两块全遮罩
+      B.cm.setCursor({ line: 1, ch: 0 });
+      B.ed.renderWysiwygMasks();
+      B.cm.options.viewportMargin = 100000;
+      B.cm.refresh();
+      const mB = [];
+      for (let i = 0; i < B.ed._wysiwygBlocks.length; i++) {
+        const mk = B.ed._wysiwygMarks && B.ed._wysiwygMarks.get(i);
+        mB.push(mk && mk.replacedWith ? mk.replacedWith : null);
+      }
+      const boxP = s54TextBoxes(mB[0]);
+      const boxH = s54TextBoxes(mB[1]);
+      const wysGapB = boxP && boxH ? Math.round((boxH[0].getBoundingClientRect().top - boxP[boxP.length - 1].getBoundingClientRect().bottom) * 100) / 100 : null;
+      const reading = document.getElementById('reading');
+      reading.innerHTML = window.UnifiedRenderer.renderMarkdown(S54_DOC_B, B.ed.settings);
+      const rB = Array.from(reading.children);
+      const readGapB = rB.length === 2 ? Math.round((rB[1].getBoundingClientRect().top - rB[0].getBoundingClientRect().bottom) * 100) / 100 : null;
+      const lineH = (n) => {
+        const h = B.cm.getLineHandle(n);
+        for (const lv of B.cm.display.view || []) {
+          if (lv && lv.line === h && lv.node) return lv.node.getBoundingClientRect().height;
+        }
+        return null;
+      };
+      out.lineCount = B.cm.lineCount();
+      out.value = B.cm.getValue();
+      out.wysGap = wysGapB;
+      out.readGap = readGapB;
+      out.blankHBefore = lineH(1);
+      // 空行本体中点（p 遮罩底缘 + 5px；X=10px 区）
+      out.click = { x: 200, y: mB[0].getBoundingClientRect().bottom + 5 };
+      return out;
+    } catch (e) {
+      out.err = String(e && e.message || e);
+      return out;
+    }
+  };
+
+  // 文档 B 点击后测量（空行不展开/无提示/光标落空行/行数值不变）
+  window.__gapClickB2026After = function () {
+    const out = { err: null };
+    try {
+      const B = window.__gapEdB;
+      const cmx = B.cm;
+      const lineH = (n) => {
+        const h = cmx.getLineHandle(n);
+        for (const lv of cmx.display.view || []) {
+          if (lv && lv.line === h && lv.node) return lv.node.getBoundingClientRect().height;
+        }
+        return null;
+      };
+      out.cursor = cmx.getCursor();
+      out.lineCount = cmx.lineCount();
+      out.valueChanged = cmx.getValue() !== window.__gapClickBValue;
+      out.hints = cmx.getWrapperElement().querySelectorAll('.cm-empty-placeholder').length;
+      out.blankHAfter = lineH(1);
+      return out;
+    } catch (e) {
+      out.err = String(e && e.message || e);
+      return out;
+    }
   };
 
   const tagsOf = (h) => (h.match(/<(h\d|p|ol|ul|li|blockquote|table|thead|tbody|tr|pre|code|input)[^>]*>/g) || [])
@@ -339,18 +518,40 @@
     // 5) 空行塌缩
     const blankCollapsed = host.querySelectorAll('.cm-wysiwyg-blank').length;
 
-    // 6) 空行提示：光标落空行 → wrap 类挂上 + ::after 内容 = 提示文案
-    let hintClass = false, hintText = null;
+    // 6) 空行提示（2026-10-17 两级语义）：
+    //    a) 块间独立空行（行1，h1 与段落之间）：光标落其上不显示提示（点击行缝
+    //       不允许出现「新行」观感）；
+    //    b) 块内空行（临时在文末追加松散列表构造）：照常显示提示 + 文案。
+    //       检查后恢复原文档（后续点击锚定步骤会重跑 renderWysiwygMasks 自愈遮罩）。
+    let hintIndependentSuppressed = false, hintInBlockShown = false, hintText = null;
     try {
-      cm.setCursor({ line: 1, ch: 0 }); // 空行
+      cm.setCursor({ line: 1, ch: 0 }); // 块间独立空行
+      ed.updateEmptyLineHint();
+      hintIndependentSuppressed = host.querySelectorAll('.cm-empty-placeholder').length === 0;
+      const before = cm.getValue();
+      const n = cm.lineCount();
+      // ⚠️ 开头双 \n：DOC 末行是 </details>（HTML 块），CommonMark 类型 6 HTML 块
+      // 终止于空行——若直接贴列表项，首项会被吸进 HTML 块，构造不出松散列表
+      cm.replaceRange('\n\n- 提示探测项一\n\n- 提示探测项二', { line: n - 1, ch: cm.getLine(n - 1).length });
+      ed.renderWysiwygMasks();
+      const nl = cm.lineCount();
+      // ⚠️ 必须先解罩松散列表再落光标：CM5 对落在 replacedWith 标记区间内部的
+      // setCursor 会钳制到标记边界（光标会落到块末行而非块内空行）——真实用户走
+      // 遮罩点击（先 setWysiwygActiveBlock 解罩、后 setSelection），此处同序模拟。
+      const probeBlk = ed.wysiwygBlockIndexAt(nl - 2);
+      if (probeBlk >= 0) ed.setWysiwygActiveBlock(probeBlk);
+      cm.setCursor({ line: nl - 2, ch: 0 }); // 松散列表项间空行（块内）
       ed.updateEmptyLineHint();
       const wrappers = host.querySelectorAll('.cm-empty-placeholder');
-      hintClass = wrappers.length > 0;
-      if (hintClass) {
+      hintInBlockShown = wrappers.length > 0;
+      if (hintInBlockShown) {
         const lineEl = wrappers[0].querySelector('.CodeMirror-line');
         hintText = getComputedStyle(lineEl, '::after').content;
       }
-    } catch (e) { hintClass = false; }
+      cm.setValue(before);
+      ed.renderWysiwygMasks();
+      cm.setCursor({ line: 0, ch: 0 });
+    } catch (e) { hintIndependentSuppressed = false; hintInBlockShown = false; }
 
     // 7) 点击锚定：点击遮罩中部，被点中的源码行顶边应回到点击时的屏幕 y（±8px）。
     //    判据用「行顶边」而非光标像素：光标落行尾，长行换行时光标自然不在行首，那是行内偏移不是视口跳动。
@@ -479,7 +680,7 @@
       blockCount: ed._wysiwygBlocks.length,
       activeIdx,
       ws, structureEqual, listInlineGap, emptyLi, blankCollapsed,
-      hintClass, hintText,
+      hintIndependentSuppressed, hintInBlockShown, hintText,
       clickAnchorGap, clickDiag, tableCellEdit, checkboxToggled,
       mathRendered, codeHighlighted, checkboxEnabled,
       gutterHidden, fontSizeParity, lineHeightParity, fontFamilyParity,

@@ -2699,20 +2699,25 @@
       if (this._wysiwygCellEditing) { this._restoreWysiwygAnchor(); return; }
       if (!this._wysiwygBlocks) this._wysiwygBlocks = this.computeWysiwygBlocks();
       const line = this.cm.getCursor().line;
-      // 光标落在空行：该行临时恢复全高（光标与「输入 / 可插入内容…」提示需要可见），
-      // 离开后由下一次 cursorActivity / 防抖刷新收回塌缩态
+      // 光标落在空行（2026-10-17 两级语义）：
+      //  · 块内空行（活动块内部，如松散列表项间）：临时恢复全高（光标与「输入 /
+      //    可插入内容…」提示需要可见），离开后由下一次 cursorActivity / 防抖刷新
+      //    收回塌缩态；
+      //  · 块间独立空行：保持塌缩（不展开、无提示）——点击行与行之间的缝隙不允许
+      //    出现「新行」观感，回车才出新行（2026-10-17 用户要求）。
       const prevCur = this._wysiwygBlankCurLine;
       if (prevCur != null && prevCur !== line) {
         const blanks = this._wysiwygBlankLines;
         this._setWysiwygBlankClass(prevCur, !!(blanks && blanks.has(prevCur)));
       }
-      if (this._isWysiwygBlankLine(line)) {
+      const lineBlockIdx = this.wysiwygBlockIndexAt(line);
+      if (this._isWysiwygBlankLine(line) && lineBlockIdx >= 0) {
         this._setWysiwygBlankClass(line, false);
         this._wysiwygBlankCurLine = line;
       } else {
         this._wysiwygBlankCurLine = null;
       }
-      let activeIdx = this.wysiwygBlockIndexAt(line);
+      let activeIdx = lineBlockIdx;
       if (activeIdx < 0) {
         // 块表滞后输入 250ms（防抖刷新未跑）：Enter 续行后的新行 = 活动块 end 的紧邻下一行，
         // 旧表里没有它 → 朴素现算 -1 会把**当前正在编辑的块**立即重遮成渲染态，且防抖刷新的
@@ -3400,16 +3405,128 @@
       } catch (_) { /* 行已销毁 */ }
     },
 
+    // 块的 margin-top/margin-bottom（与阅读模式 .preview-content 逐一对齐，
+    // 2026-10-17 块间间隙对齐用）：p/ul/ol = 0/14（styles.css p{mb:14}、
+    // ul,ol{mb:14}，全局 * reset 后 mt=0）；h1-h6 = 24/12；blockquote = 0/16；
+    // pre = 16/16；table = 12/12；hr = 32/32。分类：优先取块渲染 html 的首标签，
+    // 无 html（parseOnly 增量刷新）时按块首行源码形态判。
+    _wysiwygBlockMargins(b) {
+      if (!b) return [0, 14];
+      let tag = '';
+      if (b.html) {
+        const m = /^<(?:div[^>]*>\s*)?([a-zA-Z][a-zA-Z0-9]*)/.exec(b.html);
+        tag = m ? m[1].toLowerCase() : '';
+      }
+      if (!tag) {
+        const line = this.cm.getLine(b.start) || '';
+        if (/^#{1,6}\s/.test(line)) tag = 'h1';
+        else if (/^(`{3,}|~{3,})/.test(line)) tag = 'pre';
+        else if (/^\s*>/.test(line)) tag = 'blockquote';
+        else if (/^\s*\|/.test(line)) tag = 'table';
+        else if (/^\s*([-*+])\s/.test(line) || /^\s*\d+[.)]\s/.test(line)) tag = 'ul';
+        else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) tag = 'hr';
+        else tag = 'p';
+      }
+      if (tag === 'ul' || tag === 'ol') return [0, 14];
+      if (/^h[1-6]$/.test(tag)) return [24, 12];
+      if (tag === 'pre' || tag === 'code') return [16, 16];
+      if (tag === 'blockquote') return [0, 16];
+      if (tag === 'table') return [12, 12];
+      if (tag === 'hr') return [32, 32];
+      if (tag === 'img') return [0, 0];
+      return [0, 14];
+    },
+
+    // 块间（独立）空行的逐行间隙高度（2026-10-17 用户要求：实时预览与源码预览
+    // 样式完全一致含行间距）：阅读模式的块间间隙 = margin 折叠值
+    // max(上块 mb, 下块 mt)。WYSIWYG 侧上块 mb 已随 BFC 内收进遮罩底缘、下块
+    // mt 被遮罩 > *:first-child 清零 → 空行高度 X = max(0, 下块 mt − 上块 mb)
+    // 即补齐剩余差（列表/段落族 = 0，标题相邻 = 24 − 上块 mb …）。
+    // 连续多条空行：仅「紧贴下一块」的那条取 X，其余 0（markdown 语义上多空行
+    // 等同一个分隔）。尾随空行（下方无块）= 0（上块 mb 已在遮罩底缘内）。
+    // 块内空行不进表（走类默认 12px）。
+    // 落地：行 handle（Line 对象，同一性键）→ X 的 Map；renderLine 钩子在每次
+    // 行（重新）物化时写 inline line-height 覆盖类默认，另对当前视口行立即应用
+    //（renderLine 只在重渲染时触发）。
+    _updateWysiwygBlankGap() {
+      const cm = this.cm;
+      const map = new Map();
+      const blocks = this._wysiwygBlocks;
+      if (blocks && blocks.length && this._wysiwygBlankLines) {
+        for (const i of this._wysiwygBlankLines) {
+          let inside = false;
+          for (const b of blocks) {
+            if (i >= b.start && i < b.end) { inside = true; break; }
+          }
+          if (inside) continue;
+          let nextMt = null;
+          let prevMb = 0;
+          for (const b of blocks) {
+            if (b.start === i + 1) nextMt = this._wysiwygBlockMargins(b)[0];
+            else if (b.end === i) prevMb = this._wysiwygBlockMargins(b)[1];
+          }
+          const x = nextMt == null ? 0 : Math.max(0, nextMt - prevMb);
+          try { map.set(cm.getLineHandle(i), x); } catch (_) { /* 行已销毁 */ }
+        }
+      }
+      this._wysiwygBlankGap = map;
+      if (!this._wysiwygBlankGapBound) {
+        this._wysiwygBlankGapBound = true;
+        this._wysiwygBlankGapHandler = (c, lineObj, preEl) => {
+          const m = this._wysiwygBlankGap;
+          if (!m || !preEl) return;
+          this._applyWysiwygBlankGapEl(preEl, m.get(lineObj));
+        };
+        try { cm.on('renderLine', this._wysiwygBlankGapHandler); } catch (_) { this._wysiwygBlankGapBound = false; }
+      }
+      // 当前已物化视口行立即应用（renderLine 只对重渲染行触发）
+      try {
+        const view = cm.display && cm.display.view;
+        if (view) {
+          for (const lv of view) {
+            const lineObj = lv && lv.line;
+            const el = lv && lv.node;
+            if (!lineObj || !el) continue;
+            this._applyWysiwygBlankGapEl(this._wysiwygGapPreOf(el), map.get(lineObj));
+          }
+        }
+      } catch (_) { /* 视口结构异常，忽略 */ }
+    },
+
+    // 行 DOM 上取 pre.CodeMirror-line（wrap 类在行 wrapper div 上，line-height
+    // 规则作用于 pre；lv.node 可能是 wrapper）
+    _wysiwygGapPreOf(el) {
+      if (!el) return null;
+      if (el.tagName && el.tagName === 'PRE') return el;
+      return el.querySelector ? el.querySelector('pre.CodeMirror-line') : null;
+    },
+
+    _applyWysiwygBlankGapEl(preEl, x) {
+      if (!preEl) return;
+      if (x != null) {
+        if (preEl.style.lineHeight !== x + 'px') preEl.style.lineHeight = x + 'px';
+      } else if (preEl.style.lineHeight) {
+        preEl.style.lineHeight = '';
+      }
+    },
+
     // 全量重算空行塌缩集合（diff 增量挂类，避免整篇 addLineClass 重刷）。
-    // 调用时机：进入模式的全量重建 + 输入后的防抖补齐。光标所在空行不塌缩。
+    // 调用时机：进入模式的全量重建 + 输入后的防抖补齐。
+    // 光标所在空行（2026-10-17 两级语义）：块内空行（活动块内部，如松散列表项间）
+    // 临时恢复全高（光标与「输入 / 可插入内容…」提示需要可见）；块间独立空行
+    // 保持塌缩不展开、不显示提示（用户要求：点击行与行之间的缝隙不允许出现新行，
+    // 回车才出新行）。
     updateWysiwygBlankLines() {
       const cm = this.cm;
       if (this.viewMode !== 'wysiwyg' || !cm) return;
       const curLine = cm.getCursor().line;
+      const curInBlock = this.wysiwygBlockIndexAt(curLine) >= 0;
       const next = new Set();
       const total = cm.lineCount();
       for (let i = 0; i < total; i++) {
-        if (i !== curLine && cm.getLine(i).trim() === '') next.add(i);
+        if (cm.getLine(i).trim() !== '') continue;
+        if (i === curLine && curInBlock) continue; // 光标所在块内空行：例外，恢复全高
+        next.add(i);
       }
       const prev = this._wysiwygBlankLines;
       // 单 operation 批量挂/摘类：全量模式下空行可达数千，逐行独立操作 =
@@ -3423,7 +3540,8 @@
         }
       });
       this._wysiwygBlankLines = next;
-      this._wysiwygBlankCurLine = this._isWysiwygBlankLine(curLine) ? curLine : null;
+      this._wysiwygBlankCurLine = (this._isWysiwygBlankLine(curLine) && curInBlock) ? curLine : null;
+      this._updateWysiwygBlankGap();
     },
 
     clearWysiwygMasks() {
@@ -3458,6 +3576,18 @@
             for (const i of this._wysiwygBlankLines) this._setWysiwygBlankClass(i, false);
           }
           if (this._wysiwygBlankCurLine != null) this._setWysiwygBlankClass(this._wysiwygBlankCurLine, false);
+          // 块间空行逐行间隙高度（inline line-height 覆盖）同批撤（2026-10-17）
+          if (this._wysiwygBlankGap) {
+            const view = cm.display && cm.display.view;
+            if (view) {
+              for (const lv of view) {
+                const el = lv && lv.node;
+                if (!el) continue;
+                const pre = this._wysiwygGapPreOf(el);
+                if (pre && pre.style.lineHeight) pre.style.lineHeight = '';
+              }
+            }
+          }
           // 活动块高亮同批撤掉（离开模式/换文档后旧行对象一律作废；首/末行角类一并撤；
           // 行对象制见文件头 ACTIVE_CLASS 注释，2026-10-17）
           if (this._wysiwygActiveLines) {
@@ -3502,6 +3632,13 @@
       }
       this._wysiwygBlankLines = null;
       this._wysiwygBlankCurLine = null;
+      this._wysiwygBlankGap = null;
+      // renderLine 钩子解绑（重进模式时 _updateWysiwygBlankGap 会重新绑定）
+      if (this._wysiwygBlankGapBound && this.cm) {
+        try { this.cm.off('renderLine', this._wysiwygBlankGapHandler); } catch (_) { /* 忽略 */ }
+      }
+      this._wysiwygBlankGapBound = false;
+      this._wysiwygBlankGapHandler = null;
       this._wysiwygActiveLines = null;
       this._wysiwygPlainLines = null;
       this._wysiwygClickAnchor = null;

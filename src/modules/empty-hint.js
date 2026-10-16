@@ -50,6 +50,19 @@
       const showable = line.trim() === '' && !isInsideFence(cm, cur.line);
       if (!showable) return this.clearEmptyLineHint();
 
+      // 所见即所得的块间独立空行保持塌缩（WYSIWYG 2026-10-17 用户要求：点击行与行
+      // 之间的缝隙不允许出现「新行」观感）：该类空行不显示提示、不展开；块内空行
+      // （活动块内部，如松散列表项间）照常显示。
+      // ⚠️ 判据 = 光标行的块归属（现查），**不是** _wysiwygBlankLines 集合成员——
+      // 集合只在 updateWysiwygBlankLines（change 防抖 250ms / 全量重建）时刷新，
+      // 光标刚移入块内空行时 syncWysiwygActiveBlock 只摘行类不摘集合，成员判定
+      // 会把块内空行的提示误抑制（S1 场景实测复现）。
+      if (this.viewMode === 'wysiwyg' &&
+          typeof this.wysiwygBlockIndexAt === 'function' &&
+          this.wysiwygBlockIndexAt(cur.line) < 0) {
+        return this.clearEmptyLineHint();
+      }
+
       // 已绘制且行号未变：避免重复 addLineClass 抖动
       if (this._emptyHintLine === cur.line && this._emptyHintHandle) return;
       this.clearEmptyLineHint();

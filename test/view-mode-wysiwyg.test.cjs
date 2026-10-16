@@ -116,6 +116,14 @@ test('空行占位提示：仅独立空行显示，排除代码围栏内', () =>
   assert.match(bundle, /\/\^`\{3,\}\|\^~\{3,\}\//, '围栏判定正则缺失');
   // 阅读模式无光标，不应显示提示
   assert.match(bundle, /if \(this\.viewMode === 'preview'\) return this\.clearEmptyLineHint\(\);/, '阅读模式不应显示空行提示');
+  // 所见即所得块间独立空行保持塌缩（2026-10-17）：不显示提示，
+  // 否则点击行缝会出现「输入 / 可插入内容…」提示行 = 用户看到的「新行」。
+  // 判据 = 光标行块归属现查（-1 = 块外独立空行），不得用 _wysiwygBlankLines 集合成员
+  //（集合随 250ms 防抖刷新，光标刚移入块内空行时成员判定会误抑制提示）
+  assert.match(bundle, /this\.wysiwygBlockIndexAt\(cur\.line\) < 0\)/,
+    'WYSIWYG 块间空行未抑制空行提示（点击行缝会「出现新行」）');
+  assert.doesNotMatch(bundle, /this\._wysiwygBlankLines\s*&&\s*\n?\s*this\._wysiwygBlankLines\.has\(cur\.line\)/,
+    '空行提示守卫不得用 _wysiwygBlankLines 集合成员判定（滞后于光标同步，误抑制块内空行提示）');
 });
 
 test('空行占位提示：样式与 i18n 文案齐备（三语言）', () => {
@@ -194,12 +202,12 @@ test('遮罩必须带 preview-content 类，否则标题/表格/列表全无排�
   const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
   assert.match(css, /\.CodeMirror \.wysiwyg-block-mask\.preview-content \{/,
     '缺少 .CodeMirror .wysiwyg-block-mask.preview-content 覆盖规则');
-  for (const prop of ['overflow: visible', 'display: block', 'white-space: normal']) {
+  for (const prop of ['overflow: visible', 'display: flow-root', 'white-space: normal']) {
     assert.ok(css.indexOf(prop) >= 0, '覆盖规则缺少 ' + prop);
   }
   // ⚠️ white-space:normal 是关键：CM 行是 pre，遮罩继承会把渲染 HTML 里标签间的
   //    换行符全显示为真实换行（列表序号单独成行、块内大空隙）——2026-10-07 真机定位
-  assert.match(css, /wysiwyg-block-mask\.preview-content[\s\S]{0,900}white-space: normal;/,
+  assert.match(css, /wysiwyg-block-mask\.preview-content[\s\S]{0,1400}white-space: normal;/,
     '遮罩未恢复 white-space:normal（渲染 HTML 的标签间换行会变成真实换行）');
   // 与阅读模式完全一致（2026-10-08 用户要求）：早期「淡色块标识」灰底（color-mix --bg-secondary）
   // 让整页呈灰条观感、与阅读模式肉眼可辨，已改为透明底；渲染态与源码态靠字体差异区分
@@ -341,25 +349,37 @@ test('空行占位提示：wrap 类 + CSS 变量文案（data-hint 方案已被�
 
 // ---------- 9. 块间空行塌缩（2026-10-07 真机反馈「间隔了很多空行」） ----------
 
-test('空行塌缩：updateWysiwygBlankLines 存在且增量挂类，光标所在空行例外', () => {
+test('空行塌缩：updateWysiwygBlankLines 存在且增量挂类；光标空行两级语义（2026-10-17）', () => {
   const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
-  for (const m of ['updateWysiwygBlankLines', '_setWysiwygBlankClass', '_isWysiwygBlankLine']) {
+  for (const m of ['updateWysiwygBlankLines', '_setWysiwygBlankClass', '_isWysiwygBlankLine',
+    '_updateWysiwygBlankGap', '_wysiwygBlockMargins']) {
     assert.match(wsrc, new RegExp(m + '\\s*\\('), '缺少方法 ' + m);
   }
   // 必须走 diff 增量（prev/next 集合比对），不得每次全量 addLineClass
   assert.match(wsrc, /const prev = this\._wysiwygBlankLines;/, '未做增量 diff');
   assert.match(wsrc, /if \(!next\.has\(i\)\) this\._setWysiwygBlankClass\(i, false\);/, '未摘除失效行');
   assert.match(wsrc, /if \(!prev\.has\(i\)\) this\._setWysiwygBlankClass\(i, true\);/, '未挂新增行');
-  // 光标所在空行不塌缩（需要光标与占位提示可见）
-  assert.match(wsrc, /i !== curLine && cm\.getLine\(i\)\.trim\(\) === ''/,
-    '未排除光标所在行（光标会被压扁）');
-  // cursorActivity 时临时摘掉光标行塌缩类，离开后恢复
-  assert.match(wsrc, /_setWysiwygBlankClass\(line, false\)/, '光标进入空行未恢复全高');
-  // 生命周期：清理时须撤掉全部塌缩类（窗口含开头的标题装饰清理块，2026-10-14）
+  // 两级语义：仅「光标所在块内空行」（活动块内部）例外恢复全高（光标与提示需可见）；
+  // 块间独立空行在光标处也保持塌缩——点击行缝不允许出现「新行」，回车才出新行
+  assert.match(wsrc, /const curInBlock = this\.wysiwygBlockIndexAt\(curLine\) >= 0;/, '缺光标行块归属判定');
+  assert.match(wsrc, /if \(i === curLine && curInBlock\) continue;/, '未排除光标所在块内空行');
+  assert.match(wsrc, /const lineBlockIdx = this\.wysiwygBlockIndexAt\(line\);/, 'cursorActivity 缺光标行块归属判定');
+  assert.match(wsrc, /if \(this\._isWysiwygBlankLine\(line\) && lineBlockIdx >= 0\) \{/, '块内光标空行应恢复全高（块间独立空行不得展开）');
+  assert.match(wsrc, /_setWysiwygBlankClass\(line, false\)/, '光标进入块内空行未恢复全高');
+  // 块间间隙高度对齐阅读模式：X = max(0, 下块 mt − 上块 mb)，逐行经 renderLine 落
+  // inline line-height（覆盖 12px 类默认），margin 值与 .preview-content 一致
+  assert.match(wsrc, /Math\.max\(0, nextMt - prevMb\)/, '间隙高度未取 margin 折叠差（与阅读模式不一致）');
+  assert.match(wsrc, /cm\.on\('renderLine', this\._wysiwygBlankGapHandler\)/, '间隙高度未走 renderLine 落到行 DOM');
+  assert.match(wsrc, /if \(tag === 'ul' \|\| tag === 'ol'\) return \[0, 14\];/, '列表 margin 未与阅读模式对齐');
+  assert.match(wsrc, /if \(\/\^h\[1-6\]\$\/\.test\(tag\)\) return \[24, 12\];/, '标题 margin 未与阅读模式对齐');
+  // 生命周期：清理时须撤掉全部塌缩类（窗口含开头的标题装饰清理块，2026-10-14）；
+  // 块间空行间隙 inline 样式同批撤（2026-10-17）
   const cIdx = wsrc.indexOf('clearWysiwygMasks() {');
-  const blk = wsrc.slice(cIdx, cIdx + 1700);
+  const blk = wsrc.slice(cIdx, cIdx + 2400);
   assert.match(blk, /for \(const i of this\._wysiwygBlankLines\) this\._setWysiwygBlankClass\(i, false\);/,
     '清理未撤空行塌缩类（离开模式后空行仍是塌缩态）');
+  assert.match(blk, /this\._wysiwygBlankGap\)/, '清理未撤块间空行间隙高度');
+  assert.match(wsrc, /cm\.off\('renderLine', this\._wysiwygBlankGapHandler\)/, '离开模式未解绑 renderLine 钩子');
   // 两处调用：全量重建后 + 防抖补齐后
   // 全量重建收尾：refresh 后必须先冲刷异步 pass（TOC/图片/图表首帧就绪），再更新空行塌缩
   //（缩进不定：renderWysiwygMasks 主体包在 try 内，行首空格数随重构变化）
@@ -710,18 +730,25 @@ test('列表/代码块活动行渲染化 CSS：源符号透明化 + ::before 渲
     'cm- token span 未中和 text-decoration（gitHubSpice 关后 URL 的 cm-link 下划线仍会漏出，与渲染态 <a> 口径不符）');
   assert.doesNotMatch(css, /wysiwyg-inline-link \{\s*color: var\(--accent-color\);\s*text-decoration: underline;/,
     '独立 wysiwyg-inline-link 规则不应带 underline（渲染态链接无下划线）');
-  // S43（2026-10-15 用户截图：「点击编辑后内容会向上动一下」）：遮罩高度含渲染元素
-  // 自身 margin-bottom（ul/ol/p = 14px；> *:last-child 清零被 block-edit-btn 占了
-  // last-child 位而失效）+ 遮罩 padding 1+2 + border-bottom 1 → 活动块须用块边缘行
-  // （wysiwyg-block-edge-top/bottom，非 cm-wysiwyg-active-first/last——那对非容器块
-  // 只挂光标行 lo=hi）给 14px 边距族补 顶距 1px / 底距 17px 才逐像素等高。
-  assert.match(wsrc2, /wysiwyg-block-edge-top/, '缺块边缘行类（wysiwyg-block-edge-top）——活动块无法补齐遮罩 margin/padding 差');
+  // S43（2026-10-15 用户截图：「点击编辑后内容会向上动一下」；2026-10-17 随遮罩
+  // 盒模型归零重标定）：遮罩高度 = 渲染内容 + 14px 自身 margin-bottom（BFC 内收；
+  // > *:last-child 清零被 block-edit-btn 占了 last-child 位而失效）。旧 1px
+  // padding-top / 2px padding-bottom / 1px border-bottom 的 4px 结构补偿已于
+  // 2026-10-17 移除（它是块间间隙恒比阅读模式大 4px 的元凶）→ 活动块只需块边缘
+  // 行（wysiwyg-block-edge-bottom，非 cm-wysiwyg-active-first/last——那对非容器块
+  // 只挂光标行 lo=hi）给 14px 边距族末行补 底距 14px 即逐像素等高；首行不再补
+  // 顶距（遮罩顶缘 = 内容顶缘，> *:first-child margin-top:0）。
+  assert.match(wsrc2, /wysiwyg-block-edge-top/, '缺块边缘行类（wysiwyg-block-edge-top）');
   assert.match(wsrc2, /wysiwyg-block-edge-bottom/, '缺块边缘行类（wysiwyg-block-edge-bottom）');
   assert.match(wsrc2, /wysiwyg-para-line/, '缺段落行类（wysiwyg-para-line）——段落块（p 的 14px 边距族）无法参与块高补齐');
-  assert.match(css, /wysiwyg-list-line\.wysiwyg-block-edge-top,\s*\n[^}]*wysiwyg-para-line\.wysiwyg-block-edge-top \{[\s\S]{0,60}padding-top: 1px;/,
-    '块边缘首行未补 1px 顶距（对齐遮罩 padding-top）');
-  assert.match(css, /wysiwyg-list-line\.wysiwyg-block-edge-bottom,\s*\n[^}]*wysiwyg-para-line\.wysiwyg-block-edge-bottom \{[\s\S]{0,60}padding-bottom: 17px;/,
-    '块边缘末行未补 17px 底距（14px margin + 2px 遮罩 padding-bottom + 1px border-bottom）');
+  assert.match(css, /wysiwyg-list-line\.wysiwyg-block-edge-bottom,\s*\n[^}]*wysiwyg-para-line\.wysiwyg-block-edge-bottom \{[\s\S]{0,60}padding-bottom: 14px;/,
+    '块边缘末行未补 14px 底距（= 遮罩内收的 14px margin-bottom）');
+  assert.doesNotMatch(css, /wysiwyg-block-edge-top[\s\S]{0,120}padding-top:/,
+    '块边缘首行不应再补顶距（遮罩 padding-top 已归零，补了会破坏 S43 等高）');
+  // 遮罩盒模型：padding 0 + flow-root（BFC 内收 mb）+ 无 border-bottom
+  assert.match(css, /wysiwyg-block-mask\.preview-content \{[\s\S]{0,400}display: flow-root;/, '遮罩未改 BFC（mb 会外溢，块间间隙无法对齐阅读模式）');
+  assert.match(css, /wysiwyg-block-mask\.preview-content \{[\s\S]{0,700}padding: 0;/, '遮罩 padding 未归零（4px 结构补偿会复活）');
+  assert.doesNotMatch(css, /wysiwyg-block-mask\.preview-content \{[\s\S]{0,700}border-bottom: 1px/, '遮罩 border-bottom 未移除（4px 结构补偿会复活）');
   // 代码围栏：灰显（语法标志）
   assert.match(css, /wysiwyg-code-fence \{[\s\S]{0,100}var\(--text-secondary\)/, '围栏未灰显');
 });
@@ -839,10 +866,10 @@ test('全量视图驻留：直接写 cm.options 扩视口（避开 setOption 的
   const eIdx = wsrc.indexOf('_enterWysiwygFullView() {');
   const eblk = wsrc.slice(eIdx, eIdx + 800);
   assert.match(eblk, /cm\.operation\(\(\) => \{/, '全量挂遮罩未用单 operation 批量（逐块=数千次 display 更新）');
-  // 离开所见即所得恢复默认视口余量（窗口 3200：函数内含批量撤遮罩 + 活动块高亮撤行类 +
-  // 正文排版行类撤除，函数体变长）
+  // 离开所见即所得恢复默认视口余量（窗口 5200：函数内含批量撤遮罩 + 活动块高亮撤行类 +
+  // 正文排版行类撤除 + 块间空行间隙清理（2026-10-17），函数体变长）
   const cIdx = wsrc.indexOf('clearWysiwygMasks() {');
-  const cblk = wsrc.slice(cIdx, cIdx + 4200);
+  const cblk = wsrc.slice(cIdx, cIdx + 5200);
   assert.match(cblk, /setOption\('viewportMargin', 10\)/, '离开全量模式未恢复默认视口余量');
   assert.match(cblk, /this\._wysiwygFull = false;/, '离开未复位全量标志');
 });
@@ -1699,9 +1726,10 @@ test('块内回车续行保持活动块：光标行紧邻活动块末端时同�
   const src = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   const sIdx = src.indexOf('syncWysiwygActiveBlock() {');
   assert.ok(sIdx > 0, '缺 syncWysiwygActiveBlock（cursorActivity 活动块同步）');
-  const sblk = src.slice(sIdx, sIdx + 2600);
-  // 旧表未命中（-1）时不再直接按 -1 处理
-  assert.match(sblk, /let activeIdx = this\.wysiwygBlockIndexAt\(line\);/,
+  const sblk = src.slice(sIdx, sIdx + 3200);
+  // 旧表未命中（-1）时不再直接按 -1 处理（2026-10-17 起块归属判定提前到空行两级
+  // 语义共用，现算值存 lineBlockIdx 再赋给 activeIdx）
+  assert.match(sblk, /const lineBlockIdx = this\.wysiwygBlockIndexAt\(line\);/,
     '活动块现算未走可纠正路径（旧块表滞后 250ms，Enter 续行新行不在旧表里）');
   // 紧邻活动块末端 → 同步轻切块（parseOnly）按最新表再查：续行仍在块内 → 保持活动；
   // 真在块外 → 照旧 -1（防抖刷新的 marks 守卫会把重遮固化，错过这个时机活动块回不来）

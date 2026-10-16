@@ -93,8 +93,12 @@ try {
     [`列表序号与内容同行（li↔p 顶部差 ${r.listInlineGap}px，应 < 8）`, r.listInlineGap != null && r.listInlineGap < 8],
     [`无空列表项（「只剩序号的空行」）: ${r.emptyLi} 个`, r.emptyLi === 0],
     [`空行塌缩生效: ${r.blankCollapsed} 行`, r.blankCollapsed > 0],
-    [`空行提示类已挂: ${r.hintClass}`, r.hintClass],
-    [`空行提示文案 = ${r.hintText}（应为 "emptyLineHint"）`, typeof r.hintText === 'string' && r.hintText.includes('emptyLineHint')],
+    // 2026-10-17 两级语义：块间独立空行光标落其上不显示提示（点击行缝不出现「新行」）；
+    // 块内空行（松散列表项间）照常显示
+    [`块间独立空行：光标落其上不显示提示（点击行缝不出现「新行」）: ${r.hintIndependentSuppressed}`,
+      r.hintIndependentSuppressed === true],
+    [`块内空行：提示照常显示 + 文案 = ${r.hintText}（应为 "emptyLineHint"）: shown=${r.hintInBlockShown}`,
+      r.hintInBlockShown === true && typeof r.hintText === 'string' && r.hintText.includes('emptyLineHint')],
     // 短文档遮罩后不足一屏，scrollTop 恒为 0，锚定被浏览器钳制 → 此处只做「不产生结构性跳动」宽松判定；
     // 严格锚定验证放场景 3（长文档，顶部/底部都有滚动余量）。
     [`点击不产生结构性跳动（短文档钳制偏差 ${r.clickAnchorGap}px，应 < 视口 600）${r.clickDiag ? ' ' + JSON.stringify(r.clickDiag) : ''}`,
@@ -2117,7 +2121,7 @@ try {
         a.rows[0] && r.textX != null ? 'textX=' + a.rows[0].textX + ' vs ' + r.textX : '');
       s41Push('[ol] 编辑态项距 = 渲染态（27.2+4≈31.2，不再密集）', a.pitch != null && r.pitch != null && Math.abs(a.pitch - r.pitch) <= 1.5, 'pitch=' + a.pitch + ' vs ' + r.pitch);
       s41Push('[ol] 编辑态行 padding-bottom 4px（计入行盒高，滚动测量不失真）', a.rows[0] && px(a.rows[0].padBottom) === 4);
-      s41Push('[ol] 编辑态首行 padding-top 1px（S43 块高补齐：对齐遮罩 padding-top）', a.rows[0] && px(a.rows[0].padTop) === 1, 'padTop=' + (a.rows[0] && a.rows[0].padTop));
+      s41Push('[ol] 编辑态首行 padding-top 0（S43 新口径 2026-10-17：遮罩 padding-top 已归零，首行不补顶距）', a.rows[0] && px(a.rows[0].padTop) === 0, 'padTop=' + (a.rows[0] && a.rows[0].padTop));
     }
     const UL = await runS41('ul');
     if (UL) {
@@ -2196,8 +2200,10 @@ try {
   // 根因：遮罩高度含渲染元素自身 margin-bottom（ul/ol/p = 14px；> *:last-child 清零
   // 被 block-edit-btn 占了 last-child 位而失效）+ 遮罩 padding 1+2 + border-bottom 1；
   // 编辑态行盒没有这些 → 活动块比遮罩矮 17px、首行高 1px → 点入后下方整体上跳。
-  // 修复 = 块边缘行（wysiwyg-block-edge-top/bottom）给 14px 边距族补 顶距 1px/底距
-  // 17px。断言：活动块底 vs 遮罩底、块下段落行顶（遮罩态 vs 活动态）两处差 <0.5px。
+  // 修复 = 块边缘行（wysiwyg-block-edge-bottom）给 14px 边距族末行补 底距 14px
+  // （2026-10-17 新口径：遮罩盒模型归零后，遮罩底缘 = 内容 + 14px mb（BFC 内收），
+  // 首行不再补顶距）。断言：活动块底 vs 遮罩底、块下段落行顶（遮罩态 vs 活动态）
+  // 两处差 <0.5px。
   console.log('\n=== S43：点块进编辑块下方内容不跳（块高逐像素等高） ===');
   {
     const s43Push = (label, ok, extra) => {
@@ -2222,14 +2228,14 @@ try {
       const m = init.maskState;
       const dBottom = a.listBottom != null ? Math.abs(a.listBottom - m.maskBottom) : null;
       const dPara = (a.paraTop != null && m.paraTop != null) ? Math.abs(a.paraTop - m.paraTop) : null;
-      s43Push('[列表] 活动块底 = 遮罩底（差 <0.5px，14px margin + 3px 遮罩余量已补齐）',
+      s43Push('[列表] 活动块底 = 遮罩底（差 <0.5px，14px margin 由块边缘行底距补齐）',
         dBottom != null && dBottom < 0.5, '遮罩底=' + m.maskBottom + ' 活动底=' + a.listBottom + ' Δ=' + (dBottom == null ? '?' : dBottom.toFixed(3)));
       s43Push('[列表] 块下段落行顶不跳（遮罩态 vs 活动态，差 <0.5px）',
         dPara != null && dPara < 0.5, '遮罩态=' + m.paraTop + ' 活动态=' + a.paraTop + ' Δ=' + (dPara == null ? '?' : dPara.toFixed(3)));
       const topEdge = a.edges.find((e) => e.edge === 'top');
       const botEdge = a.edges.find((e) => e.edge === 'bottom');
-      s43Push('[列表] 边缘行类挂上且补齐生效（首行 padTop 1px / 末行 padBottom 17px）',
-        !!topEdge && !!botEdge && parseFloat(topEdge.padTop) === 1 && parseFloat(botEdge.padBottom) === 17,
+      s43Push('[列表] 边缘行类挂上且补齐生效（2026-10-17 新口径：首行 padTop 0 / 末行 padBottom 14px）',
+        !!topEdge && !!botEdge && parseFloat(topEdge.padTop) === 0 && parseFloat(botEdge.padBottom) === 14,
         JSON.stringify(a.edges));
       // [S44] 圆点垂直居中锚定行盒（2026-10-15 用户截图「点入编辑黑点往上移一点点」）：
       // 真机 WebView2 里内联 span 字体盒按基线放置，与渲染 disc（行盒中心）差 1px；
@@ -2279,8 +2285,8 @@ try {
         const dP = p.paraBottom != null ? Math.abs(p.paraBottom - paraInit.maskBottom) : null;
         s43Push('[段落] 活动段底 = 遮罩底（差 <0.5px）',
           dP != null && dP < 0.5, '遮罩底=' + paraInit.maskBottom + ' 活动底=' + p.paraBottom + ' Δ=' + (dP == null ? '?' : dP.toFixed(3)));
-        s43Push('[段落] 边缘行补齐生效（末行 padBottom 17px）',
-          p.edges.length > 0 && p.edges.every((v) => parseFloat(v) === 17), JSON.stringify(p.edges));
+        s43Push('[段落] 边缘行补齐生效（2026-10-17 新口径：末行 padBottom 14px）',
+          p.edges.length > 0 && p.edges.every((v) => parseFloat(v) === 14), JSON.stringify(p.edges));
       }
     }
   }
@@ -3350,6 +3356,79 @@ try {
       s53Push('普通段落不被误改', v4 === '中国', JSON.stringify(v4));
     } catch (e) {
       s53Push('S53 场景执行', false, String(e && e.message || e).slice(0, 120));
+    }
+  }
+
+  // ---------- S54：块间间隙 = 阅读模式 + 点击行缝不出现新行（2026-10-17 用户两项要求） ----------
+  {
+    console.log('\n=== S54：WYSIWYG 块间间隙 ≡ 阅读模式 + 点击行缝不出现新行 ===');
+    const s54Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    // ⚠️ 驱动顺序：A 全程（建/量/点/量）完成后再建 B——makeEditor 复用同一 host，
+    // 建 B 会清掉 A 的 CM DOM（A 的点击坐标/遮罩随之失效）。
+    const setupA = await page.evaluate(() => window.__gapClickA2026());
+    if (setupA.err) {
+      s54Push('S54 文档A 初始化', false, setupA.err);
+    } else {
+      // ① 间隙对齐（列表对 = 14px）
+      const wA = setupA.wysGaps, rA = setupA.readGaps;
+      const gapPairsA = wA.filter((g) => g != null);
+      const gapPairsRA = rA.filter((g) => g != null);
+      s54Push('文档A：WYSIWYG 块间间隙全部 = 14px（= 阅读模式 ul/ol margin 折叠值）',
+        gapPairsA.length >= 4 && gapPairsA.every((g) => Math.abs(g - 14) <= 1), JSON.stringify(wA));
+      s54Push('文档A：阅读模式同文档间隙全部 = 14px（对照口径）',
+        gapPairsRA.length >= 4 && gapPairsRA.every((g) => Math.abs(g - 14) <= 1), JSON.stringify(rA));
+      s54Push('文档A：WYSIWYG 间隙 ≡ 阅读模式间隙（逐对 Δ≤1px）',
+        wA.length === rA.length && wA.every((g, i) => g == null || rA[i] == null || Math.abs(g - rA[i]) <= 1),
+        'wys=' + JSON.stringify(wA) + ' read=' + JSON.stringify(rA));
+      // ② 点击行缝（文档A，14px mb 区）：不产生新行、不展开、无提示；光标落上一块
+      if (setupA.click && setupA.click.x != null) {
+        await page.evaluate((v) => { window.__gapClickAValue = v; }, setupA.value);
+        await page.mouse.click(setupA.click.x, setupA.click.y);
+        await page.waitForTimeout(300);
+        const a = await page.evaluate(() => window.__gapClickA2026After());
+        s54Push('文档A：点击行缝不产生新行（行数不变）且文档值不变',
+          a.err == null && a.lineCount === setupA.lineCount && a.valueChanged === false,
+          `lines=${setupA.lineCount}→${a.lineCount} ${a.err || ''}`);
+        s54Push('文档A：点击行缝无「输入 / 可插入内容…」提示出现', a.err == null && (a.hints || 0) === 0, 'hints=' + a.hints);
+        s54Push('文档A：点击行缝光标落上一列表块内（遮罩接管，非空行）',
+          a.err == null && a.cursor && a.cursor.line >= 4 && a.cursor.line <= 6, JSON.stringify(a.cursor));
+        s54Push('文档A：S43 新口径——点击后活动块底 = 原遮罩底（Δ<0.5px，块下内容不跳）',
+          a.err == null && a.activeBottom != null && setupA.maskBottom1 != null &&
+          Math.abs(a.activeBottom - setupA.maskBottom1) < 0.5,
+          `遮罩底=${setupA.maskBottom1} 活动底=${a.activeBottom}`);
+      } else {
+        s54Push('文档A：行缝点击点未定位', false);
+      }
+    }
+    // ③ 文档B（段落→标题，空行本体 X=10px 可点击）：点击空行 = 光标落空行但
+    //    行不展开（无「新行」观感）、无提示、行数/值不变
+    const setupB = await page.evaluate(() => window.__gapClickB2026());
+    if (setupB.err) {
+      s54Push('S54 文档B 初始化', false, setupB.err);
+    } else {
+      s54Push('文档B：WYSIWYG 间隙 = 24px（= max(段落 mb 14, 标题 mt 24)，与阅读模式一致）',
+        setupB.wysGap != null && Math.abs(setupB.wysGap - 24) <= 1, 'wys=' + setupB.wysGap);
+      s54Push('文档B：阅读模式同口径 = 24px', setupB.readGap != null && Math.abs(setupB.readGap - 24) <= 1, 'read=' + setupB.readGap);
+      if (setupB.click && setupB.click.x != null) {
+        await page.evaluate((v) => { window.__gapClickBValue = v; }, setupB.value);
+        await page.mouse.click(setupB.click.x, setupB.click.y);
+        await page.waitForTimeout(300);
+        const b = await page.evaluate(() => window.__gapClickB2026After());
+        s54Push('文档B：点击空行本体不产生新行（行数不变）且文档值不变',
+          b.err == null && b.lineCount === setupB.lineCount && b.valueChanged === false,
+          `lines=${setupB.lineCount}→${b.lineCount} ${b.err || ''}`);
+        s54Push('文档B：点击空行本体光标落到该空行（行本身，非新行）',
+          b.err == null && b.cursor && b.cursor.line === 1, JSON.stringify(b.cursor));
+        s54Push('文档B：空行点击后不展开（高度保持塌缩 X=10px，<20px）且无提示',
+          b.err == null && b.blankHAfter != null && b.blankHAfter < 20 && (b.hints || 0) === 0,
+          `h=${setupB.blankHBefore}→${b.blankHAfter} hints=${b.hints}`);
+      } else {
+        s54Push('文档B：空行点击点未定位', false);
+      }
     }
   }
 
