@@ -1813,11 +1813,20 @@ body.is-resizing .side-btn {
 
 /* 底部滚动余量（2026-10-14 用户反馈「内容 17 行时页面没法往下滚，编辑底部行很不方便」）：
    CM 默认 .CodeMirror-lines 底部 padding 仅 4px，内容底缘即滚动底缘，末行贴死在视口
-   底缘滚不上来。加 50vh 底部留白 → 滚到底时末行可上移到约视口中上部。
+   底缘滚不上来。加 50vh 底部留白 → 滚到底时末行可上移到约视口中上部，用户可手动
+   滚动让正在输入的行居中。
    加在 .CodeMirror-lines（sizer 是 minHeight 自适应子级，滚动区随之增高）；
    ⚠️ 不可加在 sizer 的 padding-bottom——那是 CM 为横滚动条预留的、由 JS 内联管理。
-   裸类选择器：app 内 CM 实例只有主编辑器一个，对比页 harness 的临时编辑器也需同样余量。 */
-.CodeMirror-lines {
+   ⚠️⚠️ 2026-10-17 真机反馈「文末贴死视口底缘、滚动也无法让输入行居中」根因：原裸类
+   选择器被 vendored codemirror.css 里同特异性规则 `.CodeMirror-lines { padding: 4px 0; }`
+   （shorthand 把 bottom 重置回 4px）覆盖——真实 app 的 index.html 里 styles.css 在
+   codemirror.css **之前**加载，同特异性后者胜；而对比页 harness 顺序恰好相反，S32
+   套件一直假绿测不出。修法 = id 前缀抬特异性（app 的 CM 挂 #editor-wrapper，见
+   editor-core.js；harness 临时编辑器挂 #editor，一并覆盖）。
+   ⚠️ 不要改成「交换 index.html 的 CSS 加载顺序」来修：那会一次性翻转 styles.css 与
+   codemirror.css 之间所有冲突规则的胜负，不可控。 */
+#editor-wrapper .CodeMirror-lines,
+#editor .CodeMirror-lines {
   padding-bottom: 50vh;
 }
 

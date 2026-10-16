@@ -1012,10 +1012,16 @@ test('引用 + 行内语法渲染化：活动块 > 前缀灰显/左竖条，行�
   assert.doesNotMatch(css, /\.wysiwyg-inline-code \{[^}]*padding/, '行内代码不应加 padding（会干扰光标 x 测量）');
 });
 
-test('底部滚动余量：.CodeMirror-lines padding-bottom 50vh（2026-10-14 用户反馈：底部行滚不上来）', () => {
+test('底部滚动余量：padding-bottom 50vh 且特异性须压过 codemirror.css（2026-10-14 + 2026-10-17 真机：文末贴底缘）', () => {
   const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
-  assert.match(css, /\.CodeMirror-lines \{[^}]*padding-bottom: 50vh;/,
+  // 须同时覆盖 app 挂载点（#editor-wrapper，editor-core.js）与 harness 挂载点（#editor）
+  assert.match(css, /#editor-wrapper \.CodeMirror-lines,\s*\n\s*#editor \.CodeMirror-lines \{[^}]*padding-bottom: 50vh;/,
     '缺少底部滚动余量（内容底缘即滚动底缘，编辑底部行不便）');
+  // 不得回退裸 .CodeMirror-lines 规则：真实 app 的 index.html 中 styles.css 先于
+  // codemirror.css 加载，后者 .CodeMirror-lines { padding: 4px 0 }（shorthand）会以
+  // 同特异性覆盖裸规则 → 50vh 失效（harness 顺序相反，套件测不出，2026-10-17 真机复现）
+  assert.doesNotMatch(css, /(^|\})\.CodeMirror-lines \{[^}]*padding-bottom: 50vh;/,
+    '底部滚动余量不得用裸 .CodeMirror-lines 选择器（被后加载的 codemirror.css 覆盖）');
 });
 
 test('异步 pass 刷新风暴守卫：仅块内含 img/mermaid/[TOC] 才启动 pass 链（卡死回归）', () => {

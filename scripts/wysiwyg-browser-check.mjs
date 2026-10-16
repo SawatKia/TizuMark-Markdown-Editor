@@ -1339,7 +1339,7 @@ try {
 
   // ---------- S32：底部滚动余量（2026-10-14 用户反馈：底部行没法往上滚） ----------
   {
-    console.log('\n=== S32：底部行滚动余量（底部无行时也能上滚一段） ===');
+    console.log('\n=== S32：底部行滚动余量（底部无行时也能上滚一段；harness 内复现真实 app CSS 顺序：codemirror.css 裸规则在 styles.css 之后，50vh 须靠特异性取胜） ===');
     const bs = await page.evaluate(() => window.__runBottomScroll2026());
     if (bs.err) {
       console.log('  ⚠ 场景失败: ' + bs.err);
@@ -1354,6 +1354,7 @@ try {
         Math.round(bottom.lastLineBottomGap) + 'px）');
       if (!ok) fail++;
     }
+    await page.evaluate(() => { const s = document.getElementById('s32-late-css'); if (s) s.remove(); });
   }
 
   // ---------- S33：格编辑后拖行/列不丢内容（2026-10-14 用户反馈） ----------

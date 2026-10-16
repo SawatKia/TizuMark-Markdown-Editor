@@ -2247,6 +2247,15 @@
     const lines = ['第一行标题文字'];
     for (let i = 0; i < 15; i++) lines.push('');
     lines.push('底部行文字');
+    // 2026-10-17 真机「文末贴死视口底缘」根因：真实 app 的 index.html 里 styles.css 先于
+    // codemirror.css 加载，后者 .CodeMirror-lines { padding: 4px 0 }（shorthand）以同特异性
+    // 覆盖 styles.css 的 50vh 余量；本 harness 原顺序恰好相反 → 本场景一直假绿。
+    // 在**建编辑器之前**注入该规则复现真实顺序（CM 首帧渲染按当时计算样式定高度），
+    // styles.css 的余量规则须靠 id 前缀特异性取胜才应通过本场景。
+    const s32LateCss = document.createElement('style');
+    s32LateCss.id = 's32-late-css'; // 留存至驱动侧 __s32read(true) 读数后由驱动移除
+    s32LateCss.textContent = '.CodeMirror-lines { padding: 4px 0; }';
+    document.head.appendChild(s32LateCss);
     const { cm, ed } = makeEditor(lines.join('\n'));
     const wrap = cm.getWrapperElement();
     wrap.style.height = '300px';
