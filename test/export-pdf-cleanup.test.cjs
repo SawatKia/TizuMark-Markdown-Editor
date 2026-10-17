@@ -351,3 +351,44 @@ test('exportPDF: 图片内联为 base64（srcdoc 不含 blob: / 相对路径，�
     }
   });
 });
+
+test('exportPDF: 暗色模式下导出帧仍取亮色 hljs 配色（白纸可读性）', async () => {
+  // 根因：导出帧纸面恒为白底（data-theme="light"），但旧实现取「当前已加载」的
+  // #highlight-theme CSS——暗色模式下那是 github-dark 的浅灰 token 色，落白纸面几乎不可见
+  // （用户反馈：暗黑模式导出 PDF 代码块文字发灰看不清）。修复：一律取亮色 github.min.css。
+  await withEditor({}, async (w, ed) => {
+    ed.showConfirmDialog = async () => true;
+    // 模拟应用当前处于暗色模式：isDark + data-theme + hljs 主题链接已切 github-dark
+    ed.isDark = true;
+    w.document.documentElement.setAttribute('data-theme', 'dark');
+    const link = w.document.getElementById('highlight-theme');
+    if (link) link.setAttribute('href', 'lib/highlight.js/github-dark.min.css');
+
+    const fetchCalls = [];
+    const realFetch = w.fetch;
+    w.fetch = async (url) => {
+      fetchCalls.push(String(url));
+      return { ok: false, text: async () => '' };
+    };
+    const h = installPdfTestHarness(w);
+    try {
+      await ed.exportPDF().catch(() => {});
+      // 关键断言：导出帧请求亮色 hljs CSS，而非应用当前加载的暗色
+      assert.ok(
+        fetchCalls.includes('lib/highlight.js/github.min.css'),
+        '导出帧应 fetch 亮色 hljs CSS（github.min.css），实际请求: ' + JSON.stringify(fetchCalls),
+      );
+      assert.ok(
+        !fetchCalls.includes('lib/highlight.js/github-dark.min.css'),
+        '导出帧不得 fetch 暗色 hljs CSS（github-dark）',
+      );
+      // 导出帧 html 钉亮色 scheme
+      const iframe = h.capturedIframes[0];
+      assert.ok(iframe && iframe.srcdoc, '应创建含打印 HTML 的 iframe');
+      assert.ok(/data-theme="light"/.test(iframe.srcdoc), '导出帧应钉 data-theme="light"');
+    } finally {
+      w.fetch = realFetch;
+      h.restore();
+    }
+  });
+});

@@ -854,6 +854,242 @@ fn app_data_dir(app: tauri::AppHandle) -> Result<String, String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
+// ====== 更新安装包磁盘缓存 ======
+// tauri-plugin-updater 的 `plugin:updater|download` 把安装包字节放在 webview 资源表里
+// （纯内存），进程退出即丢失，下次检查更新只能重新下载。应用层在此补磁盘缓存：
+//   1. download_update_to_file：按更新 JSON 的 url 流式下载到 app_data_dir/updates/，
+//      落 .tmp → minisign 验签通过才转正 → 写 sidecar（version/signature/size）；
+//   2. find_cached_update：检查更新时按 version+signature 命中缓存（签名不一致
+//      视为官方重新上传 → 未命中，重新下载）；
+//   3. install_cached_update：读回缓存安装包，用本次 check 的 Update 元数据再验一次
+//      签名，交给插件 Update::install（与内存字节同一安装路径：临时文件 → ShellExecute）。
+// 缓存文件：installer_{version}.exe + installer_{version}.meta.json。
+
+fn updates_cache_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("updates");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建更新缓存目录失败: {e}"))?;
+    Ok(dir)
+}
+
+/// updater 公钥（tauri.conf.json 的 plugins.updater.pubkey）
+fn updater_pubkey<R: tauri::Runtime, M: tauri::Manager<R>>(mgr: &M) -> Result<String, String> {
+    mgr.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|v| v.get("pubkey"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "读不到 updater 公钥（tauri.conf.json plugins.updater.pubkey）".to_string())
+}
+
+/// minisign 验签，口径与 tauri-plugin-updater 的 verify_signature 完全一致：
+/// base64 解码 → PublicKey/Signature::decode → verify(data, sig, strict=true)
+fn verify_update_signature(data: &[u8], signature_b64: &str, pub_key_b64: &str) -> Result<(), String> {
+    use base64::Engine;
+    let eng = base64::engine::general_purpose::STANDARD;
+    let from_b64 = |b64: &str, what: &str| -> Result<String, String> {
+        let decoded = eng.decode(b64).map_err(|e| format!("{what} base64 解码失败: {e}"))?;
+        Ok(std::str::from_utf8(&decoded)
+            .map_err(|_| format!("{what} 不是合法字符串"))?
+            .to_string())
+    };
+    let pub_key = minisign_verify::PublicKey::decode(&from_b64(pub_key_b64, "公钥")?)
+        .map_err(|e| format!("公钥无效: {e}"))?;
+    let signature = minisign_verify::Signature::decode(&from_b64(signature_b64, "签名")?)
+        .map_err(|e| format!("签名无效: {e}"))?;
+    pub_key
+        .verify(data, &signature, true)
+        .map_err(|e| format!("签名校验失败（安装包签名不匹配）: {e}"))
+}
+
+/// 版本号用于文件名时的字符清洗（只留字母数字 . -，其余替换为 _）
+fn sanitize_version_for_filename(version: &str) -> String {
+    version
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect()
+}
+
+/// 下载更新安装包到本地缓存。成功返回 {path, size}；
+/// 事件形状与插件 DownloadEvent 一致：Started{contentLength}/Progress{chunkLength}/Finished。
+#[tauri::command]
+async fn download_update_to_file(
+    app: tauri::AppHandle,
+    url: String,
+    version: String,
+    signature: String,
+    on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+
+    // 只允许 https（更新端点均为 https；防 file:// 等异常地址）
+    if !url.starts_with("https://") {
+        return Err("仅支持 https 下载地址".to_string());
+    }
+    if version.trim().is_empty() || signature.trim().is_empty() {
+        return Err("缺少版本号或签名".to_string());
+    }
+
+    // 连接超时 15s（QA 审查 P2）：不设整包超时（大安装包慢网下会被误杀），
+    // 但「连不上服务器」必须有界失败，否则 UI 永远停在「正在下载」且无取消按钮。
+    let response = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("下载客户端初始化失败: {e}"))?
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("下载请求失败: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("下载失败: HTTP {}", response.status()));
+    }
+    let content_length = response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    let _ = on_event.send(serde_json::json!({
+        "event": "Started",
+        "data": { "contentLength": content_length },
+    }));
+
+    let dir = updates_cache_dir(&app)?;
+    let v = sanitize_version_for_filename(&version);
+    let name = format!("installer_{v}.exe");
+    let final_path = dir.join(&name);
+    let tmp_path = dir.join(format!("{name}.tmp"));
+
+    let mut file = std::fs::File::create(&tmp_path).map_err(|e| format!("创建缓存文件失败: {e}"))?;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("下载中断: {e}")
+        })?;
+        if file.write_all(&chunk).is_err() {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err("写入缓存文件失败".to_string());
+        }
+        let _ = on_event.send(serde_json::json!({
+            "event": "Progress",
+            "data": { "chunkLength": chunk.len() },
+        }));
+    }
+    if file.flush().is_err() || file.sync_all().is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err("写入缓存文件失败".to_string());
+    }
+    drop(file);
+    let _ = on_event.send(serde_json::json!({ "event": "Finished" }));
+
+    // 先验签，通过才转正（验签失败删掉半截文件）
+    let bytes = std::fs::read(&tmp_path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("读缓存安装包失败: {e}")
+    })?;
+    let size = bytes.len() as u64;
+    match verify_update_signature(&bytes, &signature, &updater_pubkey(&app)?) {
+        Ok(()) => {}
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e);
+        }
+    }
+    std::fs::rename(&tmp_path, &final_path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("缓存文件转正失败: {e}")
+    })?;
+    let meta = serde_json::json!({
+        "version": version,
+        "signature": signature,
+        "url": url,
+        "size": size,
+        "downloadedAt": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    });
+    let _ = std::fs::write(
+        dir.join(format!("installer_{v}.meta.json")),
+        serde_json::to_string(&meta).unwrap_or_default(),
+    );
+    // 清理其他版本的旧缓存，避免磁盘堆积
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            let ours = fname == name
+                || fname == format!("{name}.tmp")
+                || fname == format!("installer_{v}.meta.json");
+            if fname.starts_with("installer_") && !ours {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(serde_json::json!({ "path": final_path.to_string_lossy().to_string(), "size": size }))
+}
+
+/// 按 version+signature 查本地缓存；命中返回 {path, size}，未命中（文件缺失 /
+/// 签名不一致 / sidecar 损坏 / 大小不符）返回 None，调用方走重新下载。
+#[tauri::command]
+fn find_cached_update(app: tauri::AppHandle, version: String, signature: String) -> Result<Option<serde_json::Value>, String> {
+    let dir = match updates_cache_dir(&app) {
+        Ok(d) => d,
+        Err(_) => return Ok(None),
+    };
+    let v = sanitize_version_for_filename(&version);
+    let file = dir.join(format!("installer_{v}.exe"));
+    let meta_file = dir.join(format!("installer_{v}.meta.json"));
+    if !file.is_file() {
+        return Ok(None);
+    }
+    let meta_raw = match std::fs::read_to_string(&meta_file) {
+        Ok(s) => s,
+        Err(_) => return Ok(None),
+    };
+    let meta: serde_json::Value = match serde_json::from_str(&meta_raw) {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
+    if meta.get("signature").and_then(|x| x.as_str()) != Some(signature.as_str()) {
+        return Ok(None);
+    }
+    let size = file.metadata().map(|m| m.len()).unwrap_or(u64::MAX);
+    if meta.get("size").and_then(|x| x.as_u64()) != Some(size) {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::json!({
+        "path": file.to_string_lossy().to_string(),
+        "size": size,
+    })))
+}
+
+/// 安装已缓存的安装包：读回文件 → 用本次 check 的 Update 元数据再验一次签名 →
+/// 调插件 Update::install（Windows 上 = 写临时文件 + ShellExecute 启动 NSIS /UPDATE）。
+#[tauri::command]
+fn install_cached_update<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
+    update_rid: u32,
+    path: String,
+) -> Result<(), String> {
+    use tauri_plugin_updater::Update;
+    let update = webview
+        .resources_table()
+        .get::<Update>(update_rid)
+        .map_err(|e| format!("获取更新元数据失败: {e}"))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("读取缓存安装包失败: {e}"))?;
+    let app = webview.app_handle().clone();
+    verify_update_signature(&bytes, &update.signature, &updater_pubkey(&app)?)?;
+    update
+        .install(&bytes)
+        .map_err(|e| format!("安装失败: {e}"))
+}
+
 // ====== 系统字体枚举 ======
 // 用 fontdb 精确枚举系统全部已安装字体族名（跨平台），去重排序后返回。
 // 首次调用需解析全部字体文件头部（数百 ms），故放 spawn_blocking 避免卡 UI。
@@ -1269,7 +1505,11 @@ pub fn run() {
             rename_path,
             remove_path,
             copy_path,
-            move_path
+            move_path,
+            // 更新安装包磁盘缓存（下载落盘 / 查缓存 / 从缓存安装）
+            download_update_to_file,
+            find_cached_update,
+            install_cached_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

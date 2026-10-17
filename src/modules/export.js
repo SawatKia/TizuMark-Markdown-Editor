@@ -1243,7 +1243,9 @@
           const mermaidContainers = Array.from(clone.querySelectorAll('.mermaid-container'));
           if (typeof mermaid !== 'undefined' && mermaidContainers.length) {
             const ff = this._exportPdfFontStack();
-            mermaid.initialize({ startOnLoad: false, theme: this.isDark ? 'dark' : 'default', securityLevel: 'loose', fontFamily: ff, themeVariables: { fontSize: '14px' } });
+            // 导出帧纸面恒为白底（下方 data-theme="light"）→ 图一律用亮色 default 主题，
+            // 与 hljs 亮色主题同一口径，避免暗色模式下暗色主题的浅色线条/文字在白纸上看不清
+            mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose', fontFamily: ff, themeVariables: { fontSize: '14px' } });
             for (let i = 0; i < mermaidContainers.length; i++) {
               const code = (mermaidContainers[i].getAttribute('data-code') || mermaidContainers[i].textContent || '').trim();
               if (!code) continue;
@@ -1275,8 +1277,11 @@
   
           // 完整 styles.css：优先 fetch（原始文本保真），失败回退已加载样式表 CSSOM（加固，避免软依赖）
           const appCSS = await this._loadStylesheetText('styles.css');
+          // 代码高亮口径：导出帧纸面恒为白底（下方 data-theme="light"），一律取亮色主题 hljs CSS。
+          // 若取当前已加载的 #highlight-theme，暗色模式下会是 github-dark 的浅灰 token 色，
+          // 落白纸面几乎不可见（用户反馈：暗黑模式导出 PDF 代码块文字发灰看不清）。
           let hljsCSS = '';
-          try { const themeLink = document.getElementById('highlight-theme'); if (themeLink) { const resp = await fetch(themeLink.getAttribute('href')); if (resp.ok) hljsCSS = await resp.text(); } } catch (e) { /* skip */ }
+          try { const resp = await fetch('lib/highlight.js/github.min.css'); if (resp.ok) hljsCSS = await resp.text(); } catch (e) { /* skip */ }
           let katexCSS = '';
           try { const resp = await fetch('lib/katex/katex.min.css'); if (resp.ok) katexCSS = await resp.text(); } catch (e) { /* skip */ }
           // 自定义字体的 @font-face（base64 内联）由 #custom-fonts-style 持有。打印帧是独立文档，

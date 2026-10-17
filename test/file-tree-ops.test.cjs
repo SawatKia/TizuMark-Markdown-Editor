@@ -195,6 +195,21 @@ test('file-ops: 重命名非 md 文件不强行补 .md', async () => {
   } finally { cleanup(w); }
 });
 
+test('file-ops: 重命名文件夹按输入原样命名，不追加 .md（2026-10-21 修复）', async () => {
+  const { w, ed } = await makeEditor();
+  try {
+    const renames = [];
+    // 文件夹旧名无扩展名 + 新名也不带点：历史逻辑会误补 .md，修复后必须原样
+    stubUi(ed, { prompt: async () => 'docs2' });
+    w.TauriApi.renamePath = async (args) => { renames.push(args); };
+    w.TauriApi.listDir = async () => [];
+    ed._fileTreeCtx = { path: '/root/docs', isDir: true };
+    await ed.fileTreeRename();
+    assert.strictEqual(renames.length, 1, 'renamePath 应被调用一次');
+    assert.strictEqual(renames[0].to, '/root/docs2', '文件夹重命名不得追加 .md');
+  } finally { cleanup(w); }
+});
+
 test('keydown: 树选中文件后 Ctrl+C 复制文件（即便编辑器聚焦、无文本选区）', async () => {
   const { w, ed } = await makeEditor();
   try {

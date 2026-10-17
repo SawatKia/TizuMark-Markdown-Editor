@@ -281,6 +281,8 @@
         setText('update-latest-prefix', t('updateLatestPrefix'));
         setText('update-latest-suffix', t('updateLatestSuffix'));
         setText('update-skip', t('updateSkip'));
+        setText('update-skip-version', t('updateSkipVersion'));
+        setText('update-dl-suffix', t('updateDlSuffix'));
         setText('update-action', t('updateChecking'));
   
         // 跨文件搜索：目录路径 placeholder 补漏

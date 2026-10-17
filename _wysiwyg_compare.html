@@ -1520,12 +1520,14 @@
     const { cm, ed } = makeEditor(DOC);
     ed.renderWysiwygMasks();
     await sleep(150); // 后处理 + 异步 pass flush
-    const out = { nonListMasks: 0, btnNonList: 0, listMasks: 0, btnList: 0, headingMasks: 0, btnHeading: 0, headingNoBtnCls: 0, allHaveBtn: false, listNoBtn: false, headingNoBtn: false, defaultOpacity: null, codeOffsetOk: null, plainOffset: null, click: null };
+    const out = { nonListMasks: 0, btnNonList: 0, listMasks: 0, btnList: 0, headingMasks: 0, btnHeading: 0, headingNoBtnCls: 0, plainMasks: 0, btnPlain: 0, plainNoBtnCls: 0, allHaveBtn: false, listNoBtn: false, headingNoBtn: false, plainNoBtn: false, defaultOpacity: null, codeOffsetOk: null, plainOffset: null, click: null };
     try {
       // 2026-10-16 反馈 #1：列表块不挂「编辑」按钮（点行即编辑）→ 统计按「列表遮罩
       // /非列表遮罩」分类（列表遮罩=遮罩内容顶层是 ul/ol，与渲染切块同一口径）。
       // 2026-10-17 用户要求：标题遮罩块同样不挂「编辑」按钮（点遮罩即编辑，
       // wysiwyg-mask-no-btn-heading 补 12px 底距）→ 按 _wysiwygBlockIsHeading 归类。
+      // 2026-07-13 用户要求：普通文字段落（渲染恰为单个 <p> 且无 img/.katex）同样不挂
+      // （点文字经点击映射即编辑）→ 按 _wysiwygMaskIsPlainText 归类、no-btn 补 14px 底距。
       const masks = [];
       ed._wysiwygBlocks.forEach((b, idx) => {
         const mark = ed._wysiwygMarks.get(idx);
@@ -1533,6 +1535,7 @@
         const btn = mark.replacedWith.querySelector('button.block-edit-btn');
         const isListMask = !!(mark.replacedWith.querySelector(':scope > ul') || mark.replacedWith.querySelector(':scope > ol'));
         const isHeadingMask = typeof ed._wysiwygBlockIsHeading === 'function' && ed._wysiwygBlockIsHeading(b);
+        const isPlainMask = typeof ed._wysiwygMaskIsPlainText === 'function' && ed._wysiwygMaskIsPlainText(mark.replacedWith);
         if (isHeadingMask) {
           out.headingMasks++;
           if (btn) out.btnHeading++;
@@ -1540,6 +1543,10 @@
         } else if (isListMask) {
           out.listMasks++;
           if (btn) out.btnList++;
+        } else if (isPlainMask) {
+          out.plainMasks++;
+          if (btn) out.btnPlain++;
+          if (mark.replacedWith.classList.contains('wysiwyg-mask-no-btn')) out.plainNoBtnCls++;
         } else {
           out.nonListMasks++;
           if (btn) {
@@ -1551,6 +1558,7 @@
       out.allHaveBtn = out.nonListMasks > 0 && out.btnNonList === out.nonListMasks;
       out.listNoBtn = out.listMasks > 0 && out.btnList === 0;
       out.headingNoBtn = out.headingMasks > 0 && out.btnHeading === 0 && out.headingNoBtnCls === out.headingMasks;
+      out.plainNoBtn = out.plainMasks > 0 && out.btnPlain === 0 && out.plainNoBtnCls === out.plainMasks;
       const first = masks[0];
       if (first) out.defaultOpacity = getComputedStyle(first.btn).opacity;
       for (const m of masks) {
@@ -1558,8 +1566,9 @@
         if (m.node.querySelector('pre')) out.codeOffsetOk = (right === '76px');
         else if (out.plainOffset === null) out.plainOffset = (right === '10px');
       }
-      // 点击编辑：选非列表块（列表块 2026-10-16 起无块级入口，点行即编辑）
-      const target = (ed._wysiwygBlocks || []).find((b) => /^结尾段落。$/.test(cm.getLine(b.start) || ''));
+      // 点击编辑：选非列表/非标题/非普通文字块（列表 2026-10-16、标题 2026-10-17、
+      // 普通文字 2026-07-13 起均无块级入口，点行即编辑）→ 引用块保留按钮，作点击目标
+      const target = (ed._wysiwygBlocks || []).find((b) => /^> 引用块第一行$/.test(cm.getLine(b.start) || ''));
       if (target) {
         const idx = (ed._wysiwygBlocks || []).indexOf(target);
         const mark = ed._wysiwygMarks.get(idx);

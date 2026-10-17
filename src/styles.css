@@ -2903,10 +2903,11 @@ body.is-resizing .side-btn {
 
 .CodeMirror .wysiwyg-block-mask.preview-content > *:first-child { margin-top: 0; }
 .CodeMirror .wysiwyg-block-mask.preview-content > *:last-child { margin-bottom: 0; }
-/* 列表块不挂「编辑」按钮（2026-10-16 用户反馈 #1）：按钮撤走后 ul/ol 成为 last-child，
-   上面的清零规则会把其 14px margin-bottom 抹掉、遮罩矮 14px → 渲染↔源码切换时块下内容
-   跳动（S43 逐像素等高被破坏）。no-btn 遮罩把内容元素底边距补回 14px，与有按钮时同高。
-   （列表块内容恰为单个 ul/ol 顶层元素，`*` 安全。） */
+/* 列表块 / 普通文字段落不挂「编辑」按钮（2026-10-16 用户反馈 #1；2026-07-13 用户要求：
+   普通文字右侧不需要编辑按钮）：按钮撤走后 ul/ol/p 成为 last-child，上面的清零规则会把
+   其 14px margin-bottom 抹掉、遮罩矮 14px → 渲染↔源码切换时块下内容跳动（S43 逐像素
+   等高被破坏）。no-btn 遮罩把内容元素底边距补回 14px（14px 边距族：ul/ol/p），与有
+   按钮时同高。（这类块内容恰为单个顶层元素，`*` 安全。） */
 .CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn > *:last-child { margin-bottom: 14px; }
 /* 标题块不挂「编辑」按钮（2026-10-19 用户反馈 #1）：同 no-btn 机制——h1–h6 成为
    last-child 后 12px margin-bottom（预览 h1–h6 统一值）被清零、遮罩矮 12px → 补回。 */
@@ -3468,17 +3469,19 @@ body.is-resizing .side-btn {
 /* WYSIWYG 光标行显示源码（2026-10-21 用户要求：基础文本格式编辑时，光标所在行其中
    行内格式要显示源码）：光标行上的行内语法标记字符（** / * / _ / ` / ~~ / == /
    <u></u> / [ ] (url)）从「零宽透明（渲染化外观）」恢复为「真宽 + 次级色」，呈现
-   源码形态；非光标行维持零宽（渲染化外观，S58 口径）。载体 = active-line addon
-   （index.html L518 加载 + editor-core L172 styleActiveLine:true）挂在光标行
-   wrap 作用域的 CodeMirror-activeline 类，CM 原生随选区增删，零 JS 状态管理。
-   ⚠️ 选择器实测口径（2026-10-21 harness 实测）：wrap 作用域的包裹 div 只有挂 wrap
-   类时才创建，且类名单独就是 CodeMirror-activeline（**不带** CodeMirror-line 基类，
-   与 pre.CodeMirror-line 不同元素）；非活动行无包裹 div、pre 直挂 .CodeMirror-code。
+   源码形态；非光标行维持零宽（渲染化外观，S58 口径）。
+   载体（2026-07-13 换）= JS 显式管理的行类 wysiwyg-inline-cursor-line（'text' 域，
+   落 pre 元素；syncWysiwygActiveBlock 每次 cursorActivity 同步到光标行，与引用
+   > 槽的 wysiwyg-quote-cursor-line 同一机制）。原 active-line addon 载体弃用原因：
+   addon 对**非空选区清掉全部活动行**（updateActiveLines 跳过非空 range）→ 鼠标选中
+   一段文字时该行源码消失回渲染外观（用户反馈 ①）；且 addon 存 handle 与光标行可
+   失步（<ins> 行光标离开整列表才回渲染态，用户反馈 ②）。addon 仍保留供光标行底色
+   （codemirror.css #e8f2ff）与失步守卫使用。
    颜色与光标行 > 槽 / # 哈希同源（--text-secondary）。
    (0,6,2) 特异性稳压基础规则 (0,3,0) 与同身重申规则 (0,5,1)。
    ⚠️ 固有代价（如实声明）：光标行因标记占真宽而比渲染态宽，贴近折行处的行会多折
    一行（+27.2px 行高）——光标进出该行时下方内容随之位移，Typora 同款行为。 */
-.editor-container.wysiwyg-mode .CodeMirror .CodeMirror-activeline > pre.wysiwyg-plain-text span[class*="wysiwyg-inline-marker"] {
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-plain-text.wysiwyg-inline-cursor-line span[class*="wysiwyg-inline-marker"] {
   width: auto;
   color: var(--text-secondary);
 }
@@ -4382,6 +4385,26 @@ body.is-resizing-row .sidebar-h-resizer {
   color: var(--accent-color);
   background-color: var(--accent-subtle);
   font-weight: 600;
+}
+
+/* 拖放移动（文件/文件夹拖到目录上）：拖拽源半透明、合法目标 accent 高亮、
+   非法目标（自身/子目录/无意义移动）红色弱提示；空白区为根目录时整块树区域描边 */
+.tree-row.dragging {
+  opacity: 0.45;
+}
+
+.tree-row.drop-target {
+  background-color: var(--accent-subtle);
+  color: var(--accent-color);
+  box-shadow: inset 0 0 0 1px var(--accent-color);
+}
+
+.tree-row.drop-invalid {
+  background-color: color-mix(in srgb, var(--color-danger) 10%, transparent);
+}
+
+#folder-tree.tree-drop-root {
+  box-shadow: inset 0 0 0 2px var(--accent-color);
 }
 
 .tree-arrow {

@@ -665,8 +665,12 @@
           selectBase: true
         });
         if (newName === null) return;
-        const oldExt = oldName.includes('.') ? oldName.slice(oldName.lastIndexOf('.')) : '';
-        if (!newName.includes('.') && (oldExt === '' || oldExt === '.md')) newName += '.md';
+        // 仅对文件做 .md 补全（原 .md/无扩展名文件重命名缺扩展名时补 .md）；
+        // 文件夹一律按输入原样命名，不追加 .md。
+        if (!ctx.isDir) {
+          const oldExt = oldName.includes('.') ? oldName.slice(oldName.lastIndexOf('.')) : '';
+          if (!newName.includes('.') && (oldExt === '' || oldExt === '.md')) newName += '.md';
+        }
         const err = this.validateFileName(newName);
         if (err) { this.showToast(err, 'danger'); return; }
         if (newName === oldName) return;
@@ -725,7 +729,10 @@
         // 同上：复制完成后清除上下文，避免残留劫持编辑器/预览区的 Ctrl+C/V。
         this._fileTreeCtx = null;
       },
-      async fileTreePaste() {
+      // opts.source = 'drag' 时（拖放移动入口）成功/失败文案用「移动」口径；
+      // 默认（Ctrl+V 粘贴入口）保持「粘贴」口径。拖放与粘贴共用同一套
+      // 目标解析 / 自身子目录守卫 / 同名 (n) 后缀 / movePath / tab 同步逻辑，避免两套口径漂移。
+      async fileTreePaste(opts = {}) {
         const ctx = this._fileTreeCtx;
         if (!ctx || !this._fileClipboard) {
           this.showToast(this.t('clipboardEmpty'), 'danger');
@@ -746,6 +753,17 @@
             || normTarget.startsWith(normClip + '\\')) {
           this.showToast(this.t('pasteIntoSelf'), 'danger');
           return;
+        }
+        // 剪切后粘回自身父目录=无意义移动：原文件还在原名位置，同名 (n) 后缀逻辑
+        // 会把它「重命名」成 name (1).ext（拖放入口 _treeDropIsInvalid 早已同口径拦截，
+        // Ctrl+V 入口此前缺失，两入口口径漂移，2026-10-17 QA 审查补齐）。
+        // 复制场景不拦：粘回原目录产生 name (1) 副本是资源管理器标准行为。
+        if (clip.op === 'cut') {
+          const srcParent = this.parentPath(clip.path).replace(/[\/\\]+$/, '');
+          if (normTarget === srcParent) {
+            this.showToast(this.t('pasteIntoSelf'), 'danger');
+            return;
+          }
         }
         const srcName = this.baseName(clip.path);
         let dstPath = this.joinPath(targetDir, srcName);
@@ -773,12 +791,131 @@
           }
           this.expandedFolders.add(targetDir);
           this.renderFolderTree();
-          this.setStatus(this.t('filePasteDone') + ': ' + this.baseName(dstPath));
+          this.setStatus(
+            (opts.source === 'drag' ? this.t('fileMoveDone') : this.t('filePasteDone'))
+            + ': ' + this.baseName(dstPath)
+          );
           // 粘贴完成后清除文件树上下文，避免残留劫持编辑器/预览区的 Ctrl+C/V（与 copy/cut 一致）。
           this._fileTreeCtx = null;
         } catch (e) {
-          this.showToast(this.t('filePasteDone') + ': ' + e, 'danger');
+          this.showToast(
+            (opts.source === 'drag' ? this.t('fileMoveFailed') : this.t('filePasteDone'))
+            + ': ' + e, 'danger'
+          );
         }
+      },
+      // ---------- 文件树拖放移动（把文件/文件夹拖到目录上完成移动，2026-10-21）----------
+      // 复用剪切/粘贴管线：dragstart 写入「剪切」剪贴板（并快照拖拽前的剪贴板/上下文），
+      // drop 调 fileTreePaste({source:'drag'}) 走与 Ctrl+V 完全一致的逻辑——
+      // 目标目录解析（目录=本身 / 文件=父目录）、自身/子目录守卫、同名 (n) 后缀、
+      // movePath、打开中 tab 同步、展开目标目录、刷新文件树。拖拽取消（ESC/放到无效处）时恢复快照。
+      // 目标解析：节点行 → 落点目录（文件夹=本身 / 文件=其父目录，与 fileTreePaste 的
+      // targetDir 口径一致）；树空白区 → 工作区根目录。返回的 path 始终是目标目录。
+      _treeDropInfoFromEvent(e) {
+        const node = (e.target && e.target.closest) ? e.target.closest('.tree-node') : null;
+        if (node && node.dataset && node.dataset.path) {
+          const isDir = node.classList.contains('tree-folder');
+          const targetDir = isDir ? node.dataset.path : this.parentPath(node.dataset.path);
+          return { path: targetDir, isDir: true, nodeEl: node };
+        }
+        if (!this.workspaceFolder) return null;
+        return { path: this.workspaceFolder, isDir: true, nodeEl: null };
+      },
+      // 判断把 src 放进 targetDir 是否非法：
+      // ① 目录拖到自身/其子目录（递归移动，Rust 后端 move_path 亦有同口径纵深防御）；
+      // ② 文件/目录拖回自身父目录（无意义移动，且会触发同名后缀误产生「name (1)」副本——
+      //    如根目录文件夹拖到树空白区=根目录本身，不做拦截就会被改名）。
+      _treeDropIsInvalid(srcPath, srcIsDir, targetDir) {
+        if (!srcPath || !targetDir) return true;
+        const normSrc = srcPath.replace(/[\/\\]+$/, '');
+        const normT = targetDir.replace(/[\/\\]+$/, '');
+        if (normT === normSrc) return true;
+        if (normT.startsWith(normSrc + '/') || normT.startsWith(normSrc + '\\')) return true;
+        if (normT === this.parentPath(srcPath).replace(/[\/\\]+$/, '')) return true;
+        return false;
+      },
+      _treeClearDropHighlight() {
+        if (this._treeDropEl && this._treeDropEl.classList) {
+          this._treeDropEl.classList.remove('drop-target', 'drop-invalid');
+        }
+        const treeEl = document.getElementById('folder-tree');
+        if (treeEl) treeEl.classList.remove('tree-drop-root');
+        this._treeDropEl = null;
+      },
+      _treeDragStart(e, entry, node, row) {
+        if (this._treeDragActive) return;
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          try { e.dataTransfer.setData('text/plain', entry.path); } catch (_) { /* jsdom 无 dataTransfer */ }
+        }
+        this._treeDragActive = true;
+        this._treeDragDropDone = false;
+        this._treeDragSourceRow = row || null;
+        this._treeDragPrevClipboard = this._fileClipboard;
+        this._treeDragPrevCtx = this._fileTreeCtx;
+        // 写「剪切」剪贴板（与 fileTreeCut 同构），drop 时由 fileTreePaste 完成移动。
+        this._fileClipboard = { op: 'cut', path: entry.path, isDir: entry.is_dir };
+        this._fileTreeCtx = { path: entry.path, isDir: entry.is_dir, nodeEl: node };
+        if (row && row.classList) row.classList.add('dragging');
+      },
+      _treeDragOver(e) {
+        if (!this._treeDragActive) return;
+        const src = this._fileClipboard;
+        const info = this._treeDropInfoFromEvent(e);
+        if (!src || !info) return; // 无工作区/无拖拽：不 preventDefault → 不允许 drop
+        e.preventDefault();
+        const invalid = this._treeDropIsInvalid(src.path, src.isDir, info.path);
+        if (e.dataTransfer) e.dataTransfer.dropEffect = invalid ? 'none' : 'move';
+        // 目标高亮：事件 target 可能是子 span，closest 到 .tree-row；树空白区命中时高亮整块树区域。
+        const rowEl = (e.target && e.target.closest) ? e.target.closest('.tree-row') : null;
+        const prev = this._treeDropEl;
+        if (prev !== rowEl) {
+          this._treeClearDropHighlight();
+          this._treeDropEl = rowEl;
+          if (rowEl) rowEl.classList.add(invalid ? 'drop-invalid' : 'drop-target');
+          else {
+            const treeEl = document.getElementById('folder-tree');
+            if (treeEl) treeEl.classList.add('tree-drop-root');
+          }
+        } else if (rowEl) {
+          // 同一行内：仅切换合法/非法态（拖文件夹时悬停进入其子目录边界）
+          rowEl.classList.toggle('drop-invalid', invalid);
+          rowEl.classList.toggle('drop-target', !invalid);
+        }
+      },
+      async _treeDrop(e) {
+        if (!this._treeDragActive) return;
+        e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation(); // 行级 drop 不冒泡到树级 drop（防重复执行）
+        const src = this._fileClipboard;
+        const info = this._treeDropInfoFromEvent(e);
+        this._treeClearDropHighlight();
+        if (!src || !info || this._treeDropIsInvalid(src.path, src.isDir, info.path)) {
+          // 非法目标（自身/子目录/无意义移动）：不执行移动，dragend 恢复拖拽前剪贴板
+          return;
+        }
+        this._treeDragDropDone = true;
+        this._fileTreeCtx = { path: info.path, isDir: info.isDir, nodeEl: info.nodeEl };
+        await this.fileTreePaste({ source: 'drag' });
+      },
+      _treeDragEnd() {
+        if (!this._treeDragActive) return;
+        const dropDone = this._treeDragDropDone;
+        if (this._treeDragSourceRow && this._treeDragSourceRow.classList) {
+          this._treeDragSourceRow.classList.remove('dragging');
+        }
+        this._treeClearDropHighlight();
+        this._treeDragActive = false;
+        this._treeDragSourceRow = null;
+        this._treeDragDropDone = false;
+        if (!dropDone) {
+          // 取消（ESC / 放到无效目标）：恢复拖拽前的剪贴板与上下文，
+          // 用户拖拽前做的剪切/复制不会被一次未完成的拖拽吃掉。
+          this._fileClipboard = this._treeDragPrevClipboard;
+          this._fileTreeCtx = this._treeDragPrevCtx;
+        }
+        this._treeDragPrevClipboard = null;
+        this._treeDragPrevCtx = null;
       },
       fileTreeCopyPath() {
         const ctx = this._fileTreeCtx;
@@ -801,6 +938,12 @@
       async renderFolderTree() {
         const treeEl = document.getElementById('folder-tree');
         if (!treeEl) return;
+        // 拖拽进行中重渲染（folder-changed 防抖、关闭工作区等）：源行即将被移除，
+        // 浏览器对已移除节点不可靠派发 dragend → 在这里主动走 dragend 收尾
+        // （取消态会恢复拖拽前的剪贴板/上下文；drop 完成态则只清状态）。
+        // 否则 _treeDragActive 卡死为 true，之后每次 _treeDragStart 提前 return，
+        // 拖放功能到重启前全部失效（2026-10-17 QA 审查 P1）。
+        if (this._treeDragActive) this._treeDragEnd();
         // 空白处右键：新建到工作区根目录。树节点自己的 contextmenu 会 stopPropagation，
         // 这里的兜底判断防止事件从非节点区域冒泡上来时误判。
         if (!treeEl.dataset.blankMenuBound) {
@@ -820,6 +963,16 @@
             this.hideAllContextMenus();
             this.updateFileTreeMenuState();
             this.showContextMenu('context-menu-file-tree', e.clientX, e.clientY);
+          });
+          // 拖放：树空白区（节点之外的区域）= 放到工作区根目录。行级 dragover/drop
+          // 在 renderFolderLevel 逐行注册；此处只兜底非节点区域（行内 drop 会 stopPropagation）。
+          treeEl.addEventListener('dragover', (e) => {
+            if (e.target && e.target.closest && e.target.closest('.tree-node')) return;
+            this._treeDragOver(e);
+          });
+          treeEl.addEventListener('drop', (e) => {
+            if (e.target && e.target.closest && e.target.closest('.tree-node')) return;
+            this._treeDrop(e);
           });
         }
         const headerEl = document.getElementById('folder-header');
@@ -883,6 +1036,12 @@
           const row = document.createElement('div');
           row.className = 'tree-row';
           row.style.paddingLeft = (8 + depth * 14) + 'px';
+          // 拖放移动：整行可拖（文件/文件夹均可），目标解析与移动逻辑见 _treeDrag* 方法。
+          row.draggable = true;
+          row.addEventListener('dragstart', (e) => this._treeDragStart(e, entry, node, row));
+          row.addEventListener('dragend', () => this._treeDragEnd());
+          row.addEventListener('dragover', (e) => this._treeDragOver(e));
+          row.addEventListener('drop', (e) => this._treeDrop(e));
   
           const arrow = document.createElement('span');
           arrow.className = 'tree-arrow';

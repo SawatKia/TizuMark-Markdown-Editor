@@ -579,18 +579,20 @@
       node.setAttribute('contenteditable', 'false');
       this._wysiwygMaskTypography(node);
       this._postProcessWysiwygNode(node);
-      // 列表块 / 标题块不挂块级「编辑」按钮（2026-10-16 用户反馈 #1：点列表行直接进该行编辑，
-      // 块级源码入口多余；2026-10-19 用户反馈 #1：标题块同理，点标题行即进该行编辑，按钮多余
-      // ——遮罩 mousedown 本就把点击映射到源码行）。⚠️ 撤按钮后内容元素成为节点 last-child，
-      // styles.css 的 `> *:last-child { margin-bottom: 0 }` 会把其底边距清零、遮罩矮一截
-      // （渲染↔源码切换跳动）→ 挂 no-btn 类把底边距补回（列表 14px / 标题 12px，各对应该
+      // 列表块 / 标题块 / 普通文字段落不挂块级「编辑」按钮（2026-10-16 用户反馈 #1：点列表行
+      // 直接进该行编辑，块级源码入口多余；2026-10-19 用户反馈 #1：标题块同理；2026-07-13
+      // 用户要求：普通文字右侧不需要编辑按钮——遮罩 mousedown 本就把点击映射到源码行，
+      // 点行即编辑）。⚠️ 撤按钮后内容元素成为节点 last-child，styles.css 的
+      // `> *:last-child { margin-bottom: 0 }` 会把其底边距清零、遮罩矮一截（渲染↔源码切换
+      // 跳动）→ 挂 no-btn 类把底边距补回（列表/普通文字段落 14px、标题 12px，各对应该
       // 渲染值），遮罩高度与有按钮时逐像素一致。
-      // TOC 判定在挂遮罩时刻取（闭包用）：文档后续编辑使行号位移时，块表刷新会丢弃
-      // 本遮罩重建新遮罩，掩码生命周期内该判定不会变（[TOC] 行被改即不再是 TOC 块）。
+      // TOC 判定在挂遮罩时刻取（闭包用）且必须先于普通文字判定：[TOC] 行在异步替换目录
+      // 前遮罩就是单个 <p>，若先判普通文字会漏掉「删除」按钮。
       const isTocBlock = this._wysiwygBlockIsToc(b);
       if (this._wysiwygBlockIsList(b)) node.classList.add('wysiwyg-mask-no-btn');
       else if (this._wysiwygBlockIsHeading(b)) node.classList.add('wysiwyg-mask-no-btn-heading');
       else if (isTocBlock) this._addWysiwygTocDeleteButton(node);
+      else if (this._wysiwygMaskIsPlainText(node)) node.classList.add('wysiwyg-mask-no-btn');
       else this._addWysiwygEditButton(node);
       this._addWysiwygTableTools(node);
 
@@ -921,11 +923,29 @@
       return /^\[TOC\]$/i.test((line || '').trim());
     },
 
+    // 遮罩是否「普通文字」段落（2026-07-13 用户要求：普通文字右侧不需要编辑按钮）：
+    // 渲染结果恰为单个 <p>（正文段落）且不含图片/公式——点文字经 mousedown 点击映射
+    // 直接落光标逐字编辑，与列表/标题同款口径（点行即编辑，块级入口多余）。排除项：
+    //  - img：点图片开灯箱（吞掉点击映射），是遮罩上少数点不到源码的块，须保留显式入口；
+    //  - .katex 公式：公式非普通文字，保守保留。
+    // 表格（.wysiwyg-table-wrap 吞杂点、源码入口=按钮）、围栏（pre）、引用/callout（div）、
+    // 隐藏占位（div）等渲染结果不是「单个 <p>」，自然保留按钮。
+    // ⚠️ 调用点须在 TOC 判定之后：[TOC] 行在异步替换目录前遮罩就是单个 <p>，先判 TOC。
+    _wysiwygMaskIsPlainText(node) {
+      if (!node || node.children.length !== 1) return false;
+      const first = node.children[0];
+      if (!first || first.tagName !== 'P') return false;
+      if (node.querySelector('img')) return false;
+      if (node.querySelector('.katex')) return false;
+      return true;
+    },
+
     // 块右上「编辑」按钮（hover 显示，样式对齐代码块复制按钮，2026-10-11 用户反馈 #4）：
     // 大块内容的显式编辑入口，点击撤遮罩并定位块首行（见 mousedown 接管）。
     // 放在遮罩节点上而非 RenderPost：属所见即所得专属 chrome，阅读模式无「编辑块」概念。
-    // 除列表块（2026-10-16 用户反馈 #1）与标题块（2026-10-19 用户反馈 #1）外统一挂
-    // （二者逐行点击即编辑，无需块级入口）；纯空占位块（引用定义）也挂，点了直接进该行编辑。
+    // 除列表块（2026-10-16 用户反馈 #1）、标题块（2026-10-19 用户反馈 #1）与普通文字段落
+    // （2026-07-13 用户要求：点文字即编辑，按钮多余）外统一挂；纯空占位块（引用定义）
+    // 也挂，点了直接进该行编辑。
     _addWysiwygEditButton(node) {
       if (!node || node.querySelector('button.block-edit-btn')) return;
       const btn = document.createElement('button');
@@ -960,7 +980,18 @@
         if (!this.preview) return;
         const cs = getComputedStyle(this.preview);
         if (cs && cs.fontSize) node.style.fontSize = cs.fontSize;
-        if (cs && cs.lineHeight) node.style.lineHeight = cs.lineHeight;
+        // 行高必须是无单位比率，不能写 getComputedStyle 的 px 已解析值：px 值写进遮罩
+        // 子树后是固定值，sub/sup 等小字号元素（0.75em）的行高不再随字号等比缩放，
+        // 而阅读模式是无单位 1.7 随字号走——含上下标的行会高几 px（2026-07-13 demo.md
+        // 审计实测：H<sub>2</sub>O 行遮罩 37.7 vs 阅读 33.2）。settings.js applySettings
+        // 把无单位 String(s.lineHeight) 写在 #preview 内联样式上，优先取作者值；
+        // 拿不到（如联调页设置样式晚于建遮罩）再从计算值反推比率，绝不落 px 固定值。
+        let lh = (this.preview.style && this.preview.style.lineHeight) || '';
+        if (!lh && cs && cs.lineHeight && cs.fontSize) {
+          const a = parseFloat(cs.lineHeight), f = parseFloat(cs.fontSize);
+          if (f > 0 && a / f > 0.5 && a / f < 4) lh = String(Math.round((a / f) * 1000) / 1000);
+        }
+        if (lh) node.style.lineHeight = lh;
         if (cs && cs.fontFamily) node.style.fontFamily = cs.fontFamily;
         const codeFont = this.preview.style.getPropertyValue('--font-code-preview');
         if (codeFont) node.style.setProperty('--font-code-preview', codeFont);
@@ -2784,10 +2815,13 @@
       // 同样非空，但选区是折叠的——照常同步才能让光标行的灰底/高亮跟着点（S14 回归点）；
       // 跨块拖选必然产生非折叠选区，冻结条件天然成立。释放后选区即用户意图，活动块
       // 保持原块；下次点击/打字 cursorActivity 正常接管。
-      if (this._wysiwygSelDragging) return;
+      // 拖选冻结前先登记「释放后归位」（2026-07-13）：跨行拖选 mouseup 时 CM 常无新
+      // 选区变化（head 已在末次 move 落位）→ 无末次 cursorActivity → 行内标记行类会
+      // 停在拖选起始行（S66 跨行拖选断言抓出）。
+      if (this._wysiwygSelDragging) { this._ensureWysiwygSelEndSync(); return; }
       if (this.cm.state && this.cm.state.selectingText) {
         const pr = this.cm.listSelections()[0];
-        if (pr && !pr.empty()) return;
+        if (pr && !pr.empty()) { this._ensureWysiwygSelEndSync(); return; }
       }
       // 格编辑进行中：焦点在格内 contenteditable，任何 CM 块都不该保持源码态。进格编辑
       // 重遮罩旧块时，被钳制光标（reCheckSelection 推到块末行、仍在块内）会触发本同步——
@@ -2852,12 +2886,25 @@
       if (prevQuote != null && prevQuote !== nextQuote) this._setWysiwygQuoteCurClass(prevQuote, false);
       if (nextQuote != null && nextQuote !== prevQuote) this._setWysiwygQuoteCurClass(nextQuote, true);
       this._wysiwygQuoteCurLine = nextQuote;
+      // —— 行内标记光标行类（2026-07-13 用户反馈：①鼠标选中一段文字时编辑态源码消失
+      //    ——active-line addon 对**非空选区清掉全部活动行**（updateActiveLines 跳过非空
+      //    range），选区期间光标行回渲染外观；②demo.md 的 <ins> 行光标离开整列表才回
+      //    渲染态——addon 类与光标失步）。addon「选区→清行」语义与「光标行显示源码、
+      //    光标离开该行即回渲染」契约冲突 → 改 JS 显式挂行类（与上方引用光标行同一
+      //    机制）：每次 cursorActivity 同步到光标行（getCursor()=主选区头行=鼠标所在行）；
+      //    选区/拖选期间头行即当前行 → 源码保持；光标离开该行 → 撤类、回渲染态。
+      //    拖选冻结期（上方早退）类停在拖选起始行，释放后由 _ensureWysiwygSelEndSync
+      //    的一次性 pointerup（下一宏任务）归位。
+      //    addon 本身保留：光标行底色（codemirror.css #e8f2ff）与失步守卫仍用它。
+      this._applyWysiwygInlineCurLine();
       this.setWysiwygActiveBlock(activeIdx);
-      // active-line addon 失步守卫（2026-10-21，光标行显示源码的 CSS 载体）：光标落进
-      // **被遮罩块**（collapsed replacedWith）时，addon 用的 getLineHandleVisualStart 按
-      // 「视觉行」解析 = 遮罩起始行的 Line 对象 → CodeMirror-activeline 被挂到遮罩起始行，
-      // 且解罩后不自愈（sameArray 比 handle 恒等，无新选区变化就不重解析）。复现路径：
-      // 跳转行号/程序化 setCursor 落进遮罩（点击路径是「先解罩后落选区」，天然不受影响）。
+      // active-line addon 失步守卫（2026-10-21；2026-07-13 起行内源码显示已改 JS 行类
+      // 载体 wysiwyg-inline-cursor-line——按钳后光标行号直挂、无视觉行解析，天然不失步，
+      // 本守卫只护 addon 余下的光标行底色条 #e8f2ff）：光标落进**被遮罩块**（collapsed
+      // replacedWith）时，addon 用的 getLineHandleVisualStart 按「视觉行」解析 = 遮罩
+      // 起始行的 Line 对象 → CodeMirror-activeline 被挂到遮罩起始行，且解罩后不自愈
+      // （sameArray 比 handle 恒等，无新选区变化就不重解析）。复现路径：跳转行号/程序化
+      // setCursor 落进遮罩（点击路径是「先解罩后落选区」，天然不受影响）。
       // 对策：校验 addon 存储 handle 的行号 == 光标行，不符则重放一次当前选区（identical
       // 选区 → setSelectionInner 立即返回、不重复 cursorActivity；addSelectionToHistory
       // 按 equals 去重，不新增撤销步），让 addon 按解罩后的文档重解析。
@@ -2877,15 +2924,54 @@
     },
 
     // 引用光标行类（2026-10-20）：'text' 域 = pre 元素（CSS pre.wysiwyg-quote-cursor-line
-    // 控制该行 > 槽字符可见）。行已销毁时 no-op；行号越界不操作。
+    // 控制该行 > 槽字符可见）。
     _setWysiwygQuoteCurClass(n, on) {
+      this._setWysiwygCurLineClass(n, 'wysiwyg-quote-cursor-line', on);
+    },
+
+    // 光标行行类挂/撤（2026-10-20 引用 > 槽；2026-07-13 扩展行内标记源码显示）：
+    // 'text' 域 = pre 元素（类落在 pre.CodeMirror-line 上，行对象持久、渲染重建不丢）。
+    // 行已销毁时 no-op；行号越界不操作。
+    _setWysiwygCurLineClass(n, cls, on) {
       const cm = this.cm;
       if (!cm || n == null || n < 0 || n >= cm.lineCount()) return;
       try {
         const h = cm.getLineHandle(n);
-        if (on) cm.addLineClass(h, 'text', 'wysiwyg-quote-cursor-line');
-        else cm.removeLineClass(h, 'text', 'wysiwyg-quote-cursor-line');
+        if (on) cm.addLineClass(h, 'text', cls);
+        else cm.removeLineClass(h, 'text', cls);
       } catch (_) { /* 行已销毁（安全 no-op） */ }
+    },
+
+    // 行内标记行类归位到光标行（2026-07-13）：syncWysiwygActiveBlock 每次 cursorActivity
+    // 调用（拖选冻结期除外）+ 拖选释放后的一次性 pointerup 调用（见
+    // _ensureWysiwygSelEndSync）。getCursor() = 主选区头行 = 鼠标所在行；选区保留时
+    // 头行即「当前行」→ 源码保持，光标离开该行 → 撤类回渲染态。
+    _applyWysiwygInlineCurLine() {
+      if (this.viewMode !== 'wysiwyg' || !this.cm) return;
+      const line = this.cm.getCursor().line;
+      if (this._wysiwygInlineCurLine === line) return;
+      if (this._wysiwygInlineCurLine != null)
+        this._setWysiwygCurLineClass(this._wysiwygInlineCurLine, 'wysiwyg-inline-cursor-line', false);
+      this._setWysiwygCurLineClass(line, 'wysiwyg-inline-cursor-line', true);
+      this._wysiwygInlineCurLine = line;
+    },
+
+    // 拖选释放后行类归位（2026-07-13）：拖选冻结期（syncWysiwygActiveBlock 早退）行类
+    // 停在拖选起始行；mouseup 释放时 CM 常无新选区变化（head 已在末次 move 落位）→
+    // 无末次 cursorActivity，行类不会自行归位（S66 跨行拖选抓出）。挂一次性 document
+    // pointerup：⚠️ 必须 setTimeout(0) 而非同步——pointerup 先于 mouseup 派发，而 CM 在
+    // document mouseup 监听里才清 state.selectingText（codemirror.js initMouseDown），
+    // 同步读到的仍是拖选态；下一宏任务保证在 CM mouseup 处理之后。
+    _ensureWysiwygSelEndSync() {
+      if (this._wysiwygSelEndSyncBound) return;
+      this._wysiwygSelEndSyncBound = true;
+      const self = this;
+      const onUp = () => {
+        document.removeEventListener('pointerup', onUp);
+        self._wysiwygSelEndSyncBound = false;
+        setTimeout(() => self._applyWysiwygInlineCurLine(), 0);
+      };
+      document.addEventListener('pointerup', onUp);
     },
 
     // ---------------- 抖动补偿（同步 / operation 内延迟） ----------------
@@ -3056,6 +3142,9 @@
         this._applyWysiwygActiveHighlight();
         this._wysiwygApplyActiveDecor(this._wysiwygActiveIdx);
         this._applyWysiwygSelectionMaskClasses();
+        // 遮罩挂完后重挂光标行源码显示类（与 clearWysiwygMasks 的复位配对）：
+        // 文档/遮罩重建后当前行立即回到源码显示，不必等下一次 cursorActivity。
+        this._applyWysiwygInlineCurLine();
       } finally {
         this._wysiwygReleasePreRenderLoad();
       }
@@ -3838,6 +3927,12 @@
       if (this._wysiwygCellEditing) this._wysiwygEndCellEdit(true);
       // 在飞的全量预渲染作废（离开所见即所得 / 切标签 / 打开文件）
       this._cancelWysiwygPreRender();
+      // 光标行状态复位（2026-10-17 QA 审查 P2）：_wysiwygInlineCurLine 无其它复位点，
+      // 本方法在「离开所见即所得 / 切标签 / 打开文件 / 遮罩整体重建」时必被调用；
+      // 不复位时新文档光标行号恰与旧值相同 → _applyWysiwygInlineCurLine 的 === 早退，
+      // 该行以渲染态显示（源码行类挂在已销毁行上）直到光标移动。
+      // 与 renderWysiwygMasks 末尾的 _applyWysiwygInlineCurLine() 配对，重建后即刻重挂。
+      this._wysiwygInlineCurLine = null;
       if (this._wysiwygMaskTimer) {
         clearTimeout(this._wysiwygMaskTimer);
         this._wysiwygMaskTimer = null;

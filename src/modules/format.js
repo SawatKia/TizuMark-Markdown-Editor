@@ -518,31 +518,29 @@
         }
         this.cm.focus();
       },
-      // 在光标所在行下方插入空行（不截断当前行），光标保持在原来位置（原行、原列），不移动到新行。
+      // 在光标所在行下方插入空行（不截断当前行），光标跳转到新加的空行（行首）。
       insertLineBelow() {
         const cm = this.cm;
         if (!cm) return;
-        const cur = cm.getCursor();
-        const lineNo = cur.line;
+        const lineNo = cm.getCursor().line;
         const lineLen = cm.getLine(lineNo).length;
         cm.operation(() => {
           // 在行尾追加换行 → 当前行光标后文本留在原行，不截断；下方生成一个新的空行。
           cm.replaceRange('\n', { line: lineNo, ch: lineLen });
-          // 光标保持在原行、原列位置（新空行在其下方，原行内容不受影响）。
-          cm.setCursor({ line: lineNo, ch: cur.ch });
+          // 光标跳转到新加的空行（原行下方，列 0）。
+          cm.setCursor({ line: lineNo + 1, ch: 0 });
         });
       },
-      // 在光标所在行上方插入空行：原行整体下移，光标跟随原文本行、保持原列位置（不移动到新行）。
+      // 在光标所在行上方插入空行：原行整体下移，光标跳转到新加的空行（行首）。
       insertLineAbove() {
         const cm = this.cm;
         if (!cm) return;
-        const cur = cm.getCursor();
-        const lineNo = cur.line;
+        const lineNo = cm.getCursor().line;
         cm.operation(() => {
           // 在当前行行首插入换行 → 原行整体下移，上方生成一个新的空行。
           cm.replaceRange('\n', { line: lineNo, ch: 0 });
-          // 原文本整体下移一行，光标跟随到原文本所在的新行（lineNo+1），保持原列位置。
-          cm.setCursor({ line: lineNo + 1, ch: cur.ch });
+          // 新加的空行即原 lineNo（原文本已下移到 lineNo+1），光标跳转到新行行首。
+          cm.setCursor({ line: lineNo, ch: 0 });
         });
       },
   };

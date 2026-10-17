@@ -258,6 +258,19 @@ function guardMathBlocks(content) {
   let inCodeTag = false;
 
   while (i < len) {
+    // 行内代码跨度不能跨行（CommonMark：backtick string 不能包含行结束符）：反引号状态
+    // 必须是行局部的。全篇累积曾在某行游离的奇数反引号处翻转 inBacktick，使其后整篇
+    // 「反引号内的 $...$」全部被误判为数学（2026-07-13 demo.md 审计：L963 转义表格的
+    // \`` 未正确处理 → L1034 反引号内 $...$ 变 MATHBLOCK 占位 → remark 渲染成转义
+    // <code> 后 restore 匹配不到 → 阅读模式残留 <!--MATHBLOCK_N--> 字面垃圾文本）。
+    if (content[i] === '\n' || content[i] === '\r') {
+      inBacktick = false;
+      inDoubleBacktick = false;
+      result += content[i];
+      i++;
+      continue;
+    }
+
     // Track fenced code blocks (3+ backticks)
     if (content[i] === '`') {
       let btCount = 1;
@@ -321,6 +334,16 @@ function guardMathBlocks(content) {
     if (inDoubleBacktick) {
       result += content[i];
       i++;
+      continue;
+    }
+
+    // 反斜杠转义：`\` + ASCII 标点 = 字面字符（CommonMark）。只接管两个有状态机语义的
+    // 定界符：`\`` 是字面反引号、不是代码定界符（绝不能翻转 inBacktick——demo.md L963
+    // 转义表格的 \`` 曾在此翻转状态，污染其后整篇）；`\$` 是字面美元、不是数学开始。
+    // 其余反斜杠（含 \( \[ 的 LaTeX 定界符、\\ 自身）仍走后续原有分支。
+    if (content[i] === '\\' && i + 1 < len && (content[i + 1] === '`' || content[i + 1] === '$')) {
+      result += content[i] + content[i + 1];
+      i += 2;
       continue;
     }
 
@@ -1868,6 +1891,39 @@ function isOnlyLinkRefDefs(slice) {
   return has;
 }
 
+// 裸闭合标签行（如孤立的 `</p>` / `</details>`）：remark 把这类行切成 type-7 HTML 块，
+// 渲染为空（阅读模式不可见）；逐块渲染同样为空——若按空 html 处理，遮罩被跳过、
+// 该行以源码裸露在 WYSIWYG 里（阅读模式没有 → 不一致，demo.md 尾部 `</p>` 行实测）。
+// 与链接引用定义同法：整块都是孤闭合标签行 → 输出零高度占位，让遮罩把行盖掉。
+const STRAY_CLOSE_TAG_LINE = /^\s{0,3}<\s*\/[a-zA-Z][a-zA-Z0-9]*\s*>\s*$/;
+function isOnlyStrayClosingTags(slice) {
+  const ls = String(slice || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  let has = false;
+  for (const ln of ls) {
+    if (!ln.trim()) continue;
+    if (!STRAY_CLOSE_TAG_LINE.test(ln)) return false;
+    has = true;
+  }
+  return has;
+}
+
+// 未闭合裸 HTML 容器标签合并白名单——按真实管线（rehype-sanitize + parse5 全串重解析）
+// 逐标签实测（2026-07-13，_work/audit-4）：这些标签的「开标签行 + 空行 + 后续内容 +
+// 闭标签行」在**阅读模式**会被 parse5 并进同一个元素（如 demo.md 的 <details> 折叠块：
+// 阅读是一个含列表的完整折叠框）。而 remark 按 CommonMark 遇空行即断 HTML 块，WYSIWYG
+// 逐块遮罩各自渲染 → 显示「空壳容器 + 独立内容 + 裸露闭标签源码行」，与阅读不一致。
+// 故块表里把这类节点向后并到闭标签行，让块切片与阅读看到同一完整元素。
+// 不在名单（实测不合并）：p（浏览器遇下一个块级开标签即隐式闭合）、table/tr/th/td/
+// tbody/thead/tfoot（parse5 表格解析特殊，片段化输出）、form/html（rehype-sanitize 剥除
+// 开标签）——这些阅读与逐块同样片段化，天然一致，无需合并。pre/script/style/textarea
+// 是 type-4 块（remark 本就连闭标签一起成块），也不涉及。
+const OPEN_CONTAINER_TAGS = new Set([
+  'address', 'article', 'aside', 'blockquote', 'center', 'dd', 'details', 'dialog',
+  'dir', 'div', 'dl', 'dt', 'fieldset', 'figcaption', 'figure', 'footer',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'li', 'main', 'menu', 'nav',
+  'noframes', 'ol', 'section', 'summary', 'ul',
+]);
+
 function renderMarkdownBlocks(content, options) {
   const mdRaw = String(content == null ? '' : content);
   if (!mdRaw.trim()) return [];
@@ -1921,6 +1977,38 @@ function renderMarkdownBlocks(content, options) {
       blocks.push({ start: s, end: e, html: '', skipped: skipHtml });
     }
   }
+  // 未闭合裸 HTML 容器合并（与上面公式区合并同位、同模式）：节点行段只到空行（CommonMark），
+  // 阅读模式 parse5 却把内容并进容器元素直到 </T>（见 OPEN_CONTAINER_TAGS 注释的实测）。
+  // 扫描闭标签行时跳过围栏代码块内部，避免代码里的 `</div>` 文本提前截断。
+  for (const node of children) {
+    if (!node || node.type !== 'html' || typeof node.value !== 'string' || !node.position) continue;
+    const val = node.value;
+    const first = val.split('\n').find((l) => l.trim());
+    const om = first && first.match(/^\s{0,3}<([a-zA-Z][a-zA-Z0-9]*)\b([^>]*?)>/);
+    if (!om) continue;
+    const tag = om[1].toLowerCase();
+    if (!OPEN_CONTAINER_TAGS.has(tag)) continue;
+    if (om[2].trim().endsWith('/')) continue; // 自闭合
+    if (new RegExp('</' + tag + '[\\s>/]', 'i').test(val)) continue; // 块内已闭合
+    const start0 = node.position.start.line - 1;
+    const b = blocks.find((x) => x.start <= start0 && start0 < x.end);
+    if (!b) continue;
+    let fence = null;
+    let found = -1;
+    const cap = Math.min(lines.length, b.end + 600); // 上限防病态文档
+    for (let li = b.end; li < cap; li++) {
+      const ln = lines[li] || '';
+      const fm = ln.match(/^\s{0,3}(`{3,}|~{3,})/);
+      if (fm) {
+        if (!fence) fence = fm[1][0];
+        else if (fm[1][0] === fence) fence = null;
+        continue;
+      }
+      if (fence) continue;
+      if (new RegExp('^\\s{0,3}</' + tag + '\\b', 'i').test(ln)) { found = li + 1; break; }
+    }
+    if (found > b.end) b.end = found; // 后续重叠块由下面的相邻/重叠合并吃掉
+  }
   blocks.sort((a, b) => a.start - b.start);
   // 相邻/重叠段合并（两个公式区与同一块相交、或紧挨的两个区被同一节点覆盖时兜底）
   for (let k = 1; k < blocks.length; k++) {
@@ -1936,16 +2024,20 @@ function renderMarkdownBlocks(content, options) {
     const slice = lines.slice(b.start, b.end).join('\n');
     if (!slice.trim()) continue;
     let html = '';
+    let renderFailed = false;
     if (!b.skipped) {
       try {
         html = renderMarkdown(slice, options) || '';
       } catch (e) {
         console.error('renderMarkdownBlocks: 块渲染失败，该块保持源码态:', e);
         html = '';
+        renderFailed = true;
       }
-      // 整块都是链接引用定义：渲染为空 → 输出零高度占位（遮罩盖行，与阅读模式一致）。
-      // 只在「源文判定为纯定义」时替换，渲染失败（同样为空）仍保持源码态可见。
-      if (html === '' && slice.trim() && isOnlyLinkRefDefs(slice)) {
+      // 渲染为空的「按设计不可见」块：链接引用定义 / 孤闭合标签行 → 输出零高度占位
+      // （遮罩盖行，与阅读模式可见性一致）。只在源文判定为纯此类行时替换，
+      // 渲染失败（同样为空）仍保持源码态可见。
+      if (html === '' && slice.trim() && !renderFailed &&
+          (isOnlyLinkRefDefs(slice) || isOnlyStrayClosingTags(slice))) {
         html = '<div class="wysiwyg-block-hidden"></div>';
       }
     }

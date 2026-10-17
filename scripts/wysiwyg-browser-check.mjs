@@ -364,21 +364,27 @@ try {
     if (!ok) fail++;
   }
 
-  // ---------- S14：块「编辑」按钮（全块挂载 / hover 显现 / 代码块让位 / 点击解罩落块首，2026-10-12 #4） ----------
+  // ---------- S14：块「编辑」按钮（挂载口径 / hover 显现 / 代码块让位 / 点击解罩落块首，2026-10-12 #4） ----------
+  // 鼠标先复位到左上角并等过渡落定（0.2s opacity 过渡）：上一场景的鼠标位置若悬停在
+  // 本场景首个带按钮遮罩上，opacity 会处于过渡中间值（实测 0.9606），默认隐藏断言误判
+  await page.mouse.move(2, 2);
+  await new Promise((res) => setTimeout(res, 300));
   await page.evaluate(() => window.__runEditBtn());
   const bt = await page.evaluate(() => window.__RESULT_BTN);
   console.log('\n=== S14：块「编辑」按钮（hover 显现 + 点击解罩落块首）===');
   console.log('  ' + JSON.stringify(bt));
   const checks14 = [
-    [`每个非列表遮罩块均挂编辑按钮: ${bt.btnNonList}/${bt.nonListMasks}`, bt.allHaveBtn === true],
+    [`非列表/非标题/非普通文字的遮罩块均挂编辑按钮: ${bt.btnNonList}/${bt.nonListMasks}`, bt.allHaveBtn === true],
     [`列表遮罩块不挂编辑按钮（2026-10-16 反馈 #1：点行即编辑）: ${bt.listMasks} 个列表块 / ${bt.btnList} 个带按钮`,
       bt.listNoBtn === true],
     [`标题遮罩块不挂编辑按钮（2026-10-17 用户要求：点遮罩即编辑）: ${bt.headingMasks} 个标题块 / ${bt.btnHeading} 个带按钮 / ${bt.headingNoBtnCls} 个挂 no-btn-heading 类`,
       bt.headingNoBtn === true],
+    [`普通文字段落不挂编辑按钮（2026-07-13 用户要求：点文字即编辑）: ${bt.plainMasks} 个普通文字块 / ${bt.btnPlain} 个带按钮 / ${bt.plainNoBtnCls} 个挂 no-btn 类`,
+      bt.plainNoBtn === true],
     [`按钮默认隐藏（opacity 0，hover 显现）: ${bt.defaultOpacity}`, bt.defaultOpacity === '0'],
     [`代码块内让位复制按钮（right=76px）: ${bt.codeOffsetOk}`, bt.codeOffsetOk === true],
     [`普通块 right=10px: ${bt.plainOffset}`, bt.plainOffset === true],
-    [`点击编辑按钮（非列表块）：解罩 + 光标落块首行: ${JSON.stringify(bt.click)}`,
+    [`点击编辑按钮（引用块）：解罩 + 光标落块首行: ${JSON.stringify(bt.click)}`,
       bt.click && bt.click.unmasked === true && bt.click.activeIdx >= 0 && bt.click.cursorLine === bt.click.expectedLine],
   ];
   for (const [label, ok] of checks14) {
@@ -3670,7 +3676,8 @@ try {
   // .wysiwyg-ol-space 零宽（inline-block + width:0 + nowrap）；字符仍在 DOM，光标测量
   // 与编辑语义不变（本场景 ④⑤ 钉住）。列表符号/任务前缀各有专槽，不受波及（③ 钉住）。
   // 2026-10-21 用户要求「光标行显示源码」后口径拆分：零宽只约束**非光标行**（渲染化
-  // 外观），光标行标记恢复真宽+次级色（CodeMirror-activeline 载体，光标跟随——S61 钉住）。
+  // 外观），光标行标记恢复真宽+次级色（JS 行类 wysiwyg-inline-cursor-line 载体，光标
+  // 跟随——S61 钉住；2026-07-13 起从 activeline addon 换载，选区期间不再丢源码）。
   {
     console.log('\n=== S58：行内标记零宽（渲染态 ≡ 编辑态可见宽度） ===');
     const s58Push = (label, ok, extra) => {
@@ -3693,12 +3700,13 @@ try {
       out.maskLiH = Array.from(document.querySelectorAll('div.wysiwyg-block-mask ul li'))
         .map((li) => Math.round(li.getBoundingClientRect().height * 10) / 10);
       // ⚠️ 光标落行 6（行内代码项）而非行 2（2026-10-21 用户要求「光标行显示源码」后）：
-      // 光标行标记恢复真宽+次级色（styles.css .CodeMirror-activeline 规则），行 2 作为
+      // 光标行标记恢复真宽+次级色（styles.css wysiwyg-inline-cursor-line 规则），行 2 作为
       // 非光标行才保持「零宽 ≡ 渲染态」口径（折行一致性断言的对象）；光标行可见性由
       // markerW6 与 S61 钉住。
-      // ⚠️ 这里**故意**用 setCursor 直接落进遮罩（程序化路径，等价跳转行号）：addon 会
-      // 按视觉行把 activeline 误挂到遮罩起始行（行 2），靠 wysiwyg.js 失步守卫重放选区
-      // 自愈——若守卫失效，本场景 markerW/markerW6 会整体错位（行 2 变真宽、行 6 变零宽）。
+      // ⚠️ 这里**故意**用 setCursor 直接落进遮罩（程序化路径，等价跳转行号）：光标被 CM
+      // 钳到遮罩块末行（行 6），JS 行类按钳后的光标行号直挂（天然无误挂）；addon 的
+      // 底色仍可能按视觉行误挂遮罩起始行，靠 wysiwyg.js 失步守卫重放选区自愈（守卫失效
+      // 只影响底色条，不影响标记样式）。
       cm.setCursor(6, 1);
       ed.renderWysiwygMasks();
       cm.refresh();
@@ -4109,9 +4117,11 @@ try {
 
   // ---------- S61：光标行显示源码（2026-10-21 用户要求：基础文本格式编辑时，光标所在行
   // 其中行内格式要显示源码） ----------
-  // 载体：active-line addon（harness 已对齐 index.html L518 + editor-core L172）在光标行
-  // wrap 作用域挂 CodeMirror-activeline；styles.css (0,7,2) 规则把该行的行内标记 span
-  // 从零宽透明恢复为真宽 + 次级色（rgb(102,109,121)），非光标行维持零宽（S58 口径）。
+  // 载体（2026-07-13 换）：JS 行类 wysiwyg-inline-cursor-line（syncWysiwygActiveBlock 每
+  // 次 cursorActivity 同步到光标行，'text' 域落 pre）；styles.css 同特异性规则把该行的
+  // 行内标记 span 从零宽透明恢复为真宽 + 次级色（rgb(102,109,121)），非光标行维持零宽
+  // （S58 口径）。原 activeline addon 载体弃用：addon 对非空选区清掉全部活动行（选中时
+  // 源码消失）且存 handle 可与光标失步（S66 专项回归）。addon 仍提供光标行底色。
   // 固有代价（如实声明）：光标行标记占真宽 → 贴近折行处的行可多折一行（+27.2px），
   // 光标进出时下方内容位移（Typora 同款）。本场景短行：护栏 = 行数不超过遮罩 +1。
   console.log('\n=== S61：光标行行内格式显示源码（真宽+次级色、光标跟随） ===');
@@ -4167,6 +4177,9 @@ try {
         const ms = mSpans(pre);
         const cs = ms.map((s) => getComputedStyle(s).color);
         return {
+          // 新载体（2026-07-13）：JS 行类落 pre（标记样式判定用）；旧 addon wrap 类
+          // 仍在（光标行底色 + 失步守卫载体），一并读出供参考
+          curLine: String(pre.className).includes('wysiwyg-inline-cursor-line'),
           active: !!(wrap && wrap.className.includes('CodeMirror-activeline')),
           widths: ms.map(w),
           colors: cs,
@@ -4189,9 +4202,9 @@ try {
         r.l4.widths.length >= 2 && r.l4.widths.every((x) => x > 0.5)
         && r.l4.colors.every((c) => c === 'rgb(102, 109, 121)'),
         JSON.stringify({ widths: r.l4.widths, color: r.l4.colors[0] }));
-      s61Push('光标行 wrap 挂 CodeMirror-activeline；非光标行不挂',
-        r.l4.active === true && r.l2.active === false,
-        JSON.stringify({ l4: r.l4.active, l2: r.l2.active }));
+      s61Push('光标行 pre 挂 wysiwyg-inline-cursor-line；非光标行不挂（JS 行类载体随光标）',
+        r.l4.curLine === true && r.l2.curLine === false,
+        JSON.stringify({ l4: r.l4.curLine, l2: r.l2.curLine, addonWrap: { l4: r.l4.active, l2: r.l2.active } }));
       s61Push('非光标行（粗体）：** 标记 span 维持零宽透明（S58 口径不回归）',
         r.l2.widths.length >= 2 && r.l2.widths.every((x) => x < 0.5)
         && r.l2.colors.every((c) => c === 'rgba(0, 0, 0, 0)'),
@@ -4199,16 +4212,451 @@ try {
       s61Push('文本段渲染化不受影响（删除线文本 span 宽度 > 0）', r.l4TextW > 5, 'strikeW=' + r.l4TextW);
       s61Push('光标移到粗体行后：可见性跟随（新光标行真宽、旧光标行回零宽）',
         !!(r.afterMove && r.afterMove.l2 && r.afterMove.l4)
-        && r.afterMove.l2.active === true && r.afterMove.l4.active === false
+        && r.afterMove.l2.curLine === true && r.afterMove.l4.curLine === false
         && r.afterMove.l2.widths.length && r.afterMove.l2.widths.every((x) => x > 0.5)
         && r.afterMove.l4.widths.length && r.afterMove.l4.widths.every((x) => x < 0.5),
-        JSON.stringify({ l2w: r.afterMove.l2.widths, l4w: r.afterMove.l4.widths }));
+        JSON.stringify({ l2w: r.afterMove.l2.widths, l4w: r.afterMove.l4.widths, l2cls: r.afterMove.l2.curLine, l4cls: r.afterMove.l4.curLine }));
       // 几何护栏：短行光标行行数 = 遮罩行数（无标记宽撑折）；长行场景允许多折 ≤1 行
       const liLines = (h) => Math.max(1, Math.round(h / 27.2));
       const linesOf = (h) => Math.max(1, Math.round((h - 4) / 27.2));
       s61Push('几何护栏：光标行行数 ≤ 遮罩行数 + 1（短行实测应相等）',
         linesOf(r.l4.preH) <= liLines(r.maskLiH[2]) + 1,
         'activePreH=' + r.l4.preH + ' maskLiH=' + r.maskLiH[2]);
+    }
+  }
+
+  // ---------- S62：未闭合裸 HTML 容器块（demo.md 折叠区块审计，2026-07-13） ----------
+  // remark 按 CommonMark 遇空行断 HTML 块 → WYSIWYG 块表碎片化（details 壳 + 独立 ul +
+  // 裸露 </details> 源码行），而阅读模式 rehype-raw/parse5 全串重解析把内容并进同一元素。
+  // 修复：renderMarkdownBlocks 把未闭合容器块并到闭标签行（白名单按管线实测）。
+  // 断言：① 块表单块覆盖整个 details 区域 ② 遮罩=单个含列表的折叠框 ③ 遮罩几何≡阅读态
+  // ④ 编辑态进入后可见完整源码（含 </details> 行，可编辑）。
+  console.log('\n=== S62：未闭合裸 HTML 容器块合并（details 遮罩 ≡ 阅读、可编辑完整源码） ===');
+  {
+    const s62Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    const doc62 = '# T\n\n<details>\n<summary>点击展开</summary>\n\n<ul>\n<li>甲</li>\n<li>乙</li>\n</ul>\n\n</details>\n\n尾部正文。';
+    const r62 = await page.evaluate(async (d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s62cm = cm; window.__s62ed = ed;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      await new Promise((res) => setTimeout(res, 500));
+      const lines = cm.getValue().split('\n');
+      const blocks = ed._wysiwygBlocks || [];
+      const dStart = lines.findIndex((l) => l.trim() === '<details>');
+      const dEnd = lines.findIndex((l) => l.trim() === '</details>');
+      const covered = blocks.filter((b) => b.start <= dStart && dStart < b.end);
+      const db = covered.length === 1 ? covered[0] : null;
+      const out = { dStart, dEnd, blockCount: blocks.length, spans: blocks.map((b) => [b.start, b.end]) };
+      if (!db) return out;
+      out.span = [db.start, db.end];
+      out.coversClose = db.end > dEnd;
+      const mk = ed._wysiwygMarks.get(blocks.indexOf(db));
+      const det = mk && mk.replacedWith ? mk.replacedWith.querySelector('details') : null;
+      out.mask = det ? {
+        liCount: det.querySelectorAll('li').length,
+        open: det.open,
+        ulInside: !!det.querySelector('ul'),
+        strayUlSiblings: mk.replacedWith.querySelectorAll(':scope > ul').length,
+        h: Math.round(det.getBoundingClientRect().height * 10) / 10,
+      } : null;
+      // 阅读态对照（同款 post-process：展开 details）
+      const reading = document.getElementById('reading');
+      reading.style.fontSize = '16px'; reading.style.lineHeight = '1.7';
+      reading.innerHTML = window.UnifiedRenderer.renderMarkdown(d, ed.settings);
+      if (window.RenderPost) { window.RenderPost.normalizeDetails(reading); window.RenderPost.enableCheckboxes(reading); }
+      await new Promise((res) => setTimeout(res, 200));
+      const rd = reading.querySelector('details');
+      out.reading = rd ? {
+        liCount: rd.querySelectorAll('li').length,
+        ulInside: !!rd.querySelector('ul'),
+        h: Math.round(rd.getBoundingClientRect().height * 10) / 10,
+        detBorder: getComputedStyle(rd).borderLeftColor,
+        detPad: getComputedStyle(rd).padding,
+        sumColor: getComputedStyle(rd.querySelector('summary')).color,
+      } : null;
+      out.maskStyles = det ? {
+        detBorder: getComputedStyle(det).borderLeftColor,
+        detPad: getComputedStyle(det).padding,
+        sumColor: getComputedStyle(det.querySelector('summary')).color,
+      } : null;
+      // 编辑态：撤罩后可见完整源码（含闭标签行）
+      ed.setWysiwygActiveBlock(blocks.indexOf(db));
+      cm.setCursor(dEnd, 0);
+      cm.refresh();
+      await new Promise((res) => setTimeout(res, 450));
+      out.activeVisible = {
+        closeLine: (cm.getLine(dEnd) || '').trim(),
+        openLine: (cm.getLine(dStart) || '').trim(),
+        maskGone: !cm.getWrapperElement().querySelector('.wysiwyg-block-mask details'),
+      };
+      return out;
+    }, doc62);
+    if (!r62.span) {
+      s62Push('S62 初始化', false, JSON.stringify(r62));
+    } else {
+      s62Push('块表单块覆盖整个 details 区域（含闭标签行，非碎片三块）',
+        r62.span[0] === r62.dStart && r62.coversClose,
+        'span=' + JSON.stringify(r62.span) + ' blocks=' + JSON.stringify(r62.spans));
+      s62Push('遮罩=单个折叠框且列表在框内（无框外独立 ul、无裸露闭标签）',
+        !!(r62.mask && r62.mask.liCount === 2 && r62.mask.ulInside && r62.mask.open && r62.mask.strayUlSiblings === 0),
+        JSON.stringify(r62.mask));
+      s62Push('遮罩几何 ≡ 阅读态（高度差 ≤3px、边框/内边距/summary 色相同）',
+        !!(r62.mask && r62.reading && r62.maskStyles)
+        && Math.abs(r62.mask.h - r62.reading.h) <= 3
+        && r62.maskStyles.detBorder === r62.reading.detBorder
+        && r62.maskStyles.detPad === r62.reading.detPad
+        && r62.maskStyles.sumColor === r62.reading.sumColor,
+        JSON.stringify({ maskH: r62.mask && r62.mask.h, readH: r62.reading && r62.reading.h }));
+      s62Push('编辑态：撤罩后完整源码可见（含 </details> 行，可编辑）',
+        !!(r62.activeVisible && r62.activeVisible.maskGone
+          && r62.activeVisible.closeLine === '</details>' && r62.activeVisible.openLine === '<details>'),
+        JSON.stringify(r62.activeVisible));
+    }
+  }
+
+  // ---------- S63：孤闭合标签行（demo.md 尾部 </p> 审计，2026-07-13） ----------
+  // 阅读模式：孤立 </p> 渲染为空（不可见）；修复前 WYSIWYG 遮罩被跳过 → 源码行裸露。
+  // 修复：纯孤闭合标签行块输出零高度占位（同 ref 定义口径），遮罩盖行且不可见。
+  console.log('\n=== S63：孤闭合标签行零高度隐藏遮罩（不裸露源码） ===');
+  {
+    const s63Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    const doc63 = '# T\n\n<p align="center">\n\n行A<br>\n\n行B\n\n</p>\n\n尾部正文。';
+    const r63 = await page.evaluate(async (d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s63cm = cm; window.__s63ed = ed;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      await new Promise((res) => setTimeout(res, 500));
+      const lines = cm.getValue().split('\n');
+      const closeLine = lines.findIndex((l) => l.trim() === '</p>');
+      const blocks = ed._wysiwygBlocks || [];
+      const cb = blocks.find((b) => b.start <= closeLine && closeLine < b.end);
+      const out = { closeLine, spans: blocks.map((b) => [b.start, b.end]) };
+      if (!cb) return out;
+      out.cbHtml = cb.html;
+      const mi = blocks.indexOf(cb);
+      const mk = ed._wysiwygMarks.get(mi);
+      const mnode = mk && mk.replacedWith ? mk.replacedWith : null;
+      out.mask = mnode ? {
+        h: Math.round(mnode.getBoundingClientRect().height * 100) / 100,
+        hasHiddenDiv: !!mnode.querySelector('.wysiwyg-block-hidden'),
+        hasBtn: !!mnode.querySelector('button'),
+      } : null;
+      // 源码行不得以可见文本裸露：行内容被遮罩替换（pre 内只剩遮罩 chrome 文本，
+      // 如编辑按钮键名「editBlock」），原始 `</p>` 文本必须消失
+      const preOf = (n) => {
+        const h = cm.getLineHandle(n);
+        for (const lv of cm.display.view) {
+          if (lv && lv.line === h) return lv.node && lv.node.tagName === 'PRE' ? lv.node : (lv.node || null);
+        }
+        return null;
+      };
+      const pre = preOf(closeLine);
+      out.closeLinePre = pre ? pre.textContent.trim() : '(no node)';
+      // 阅读态：无 </p> 文本、顶层块 = h1 + 空p + p + p + p（5 个）
+      const reading = document.getElementById('reading');
+      reading.style.fontSize = '16px'; reading.style.lineHeight = '1.7';
+      reading.innerHTML = window.UnifiedRenderer.renderMarkdown(d, ed.settings);
+      out.reading = {
+        childTags: Array.from(reading.children).map((c) => c.tagName.toLowerCase()),
+        hasCloseText: reading.textContent.includes('</p>'),
+      };
+      return out;
+    }, doc63);
+    if (!r63.cbHtml) {
+      s63Push('S63 初始化', false, JSON.stringify(r63));
+    } else {
+      s63Push('`</p>` 块输出零高度占位（wysiwyg-block-hidden，同 ref 定义口径）',
+        r63.cbHtml === '<div class="wysiwyg-block-hidden"></div>',
+        'html=' + r63.cbHtml);
+      s63Push('遮罩存在且零高度、可点编辑按钮（源码行不裸露：`</p>` 文本消失）',
+        !!(r63.mask && r63.mask.h < 1 && r63.mask.hasHiddenDiv && r63.mask.hasBtn)
+        && typeof r63.closeLinePre === 'string' && r63.closeLinePre.indexOf('</p>') < 0,
+        JSON.stringify({ mask: r63.mask, closeLinePre: r63.closeLinePre }));
+      s63Push('阅读态对齐：无 </p> 文本（孤闭合标签不可见）',
+        !!(r63.reading && !r63.reading.hasCloseText),
+        JSON.stringify(r63.reading && r63.reading.childTags));
+    }
+  }
+
+  // ---------- S64：公式 guard 反引号状态失同步（demo.md L963 \`` 审计，2026-07-13） ----------
+  // 转义表行的 \``（字面反引号）不得翻转 guard 的 inBacktick 状态，否则其后整篇
+  // 「反引号内 $...$」被误判为数学占位 → 占位落在 <code> 内被转义后 restore 匹配
+  // 不到 → 阅读/遮罩残留 <!--MATHBLOCK_N--> 字面垃圾（修复前 demo.md L1034 实测）。
+  console.log('\n=== S64：guard 转义反引号不翻转状态（反引号内 $...$ 无 MATHBLOCK 垃圾） ===');
+  {
+    const s64Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? ' ' + extra : ''));
+    };
+    const doc64 = '# T\n\n| 转义写法 | 显示效果 |\n| --- | --- |\n| ``\\` `` | \\` 字面反引号 |\n\n除 `$...$` 行内公式外。';
+    const r64 = await page.evaluate(async (d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      await new Promise((res) => setTimeout(res, 500));
+      const lines = cm.getValue().split('\n');
+      const mathLine = lines.findIndex((l) => l.indexOf('行内公式外') >= 0);
+      const blocks = ed._wysiwygBlocks || [];
+      const mb = blocks.find((b) => b.start <= mathLine && mathLine < b.end);
+      const out = { mathLine, hasBlock: !!mb };
+      if (!mb) return out;
+      const mi = blocks.indexOf(mb);
+      const mk = ed._wysiwygMarks.get(mi);
+      const mnode = mk && mk.replacedWith ? mk.replacedWith : null;
+      out.maskHtml = mnode ? mnode.innerHTML : null;
+      const maskP = mnode ? mnode.querySelector('p') : null;
+      const reading = document.getElementById('reading');
+      reading.style.fontSize = '16px'; reading.style.lineHeight = '1.7';
+      const fullHtml = window.UnifiedRenderer.renderMarkdown(d, ed.settings);
+      reading.innerHTML = fullHtml;
+      const readP = Array.from(reading.children).find((c) => c.getAttribute('data-source-line') === String(mathLine + 1));
+      out.fullHtmlHasGarbage = fullHtml.indexOf('MATHBLOCK') >= 0;
+      out.maskHasGarbage = out.maskHtml ? out.maskHtml.indexOf('MATHBLOCK') >= 0 : null;
+      out.readPHasPlainMath = !!(readP && readP.textContent.indexOf('$...$') >= 0);
+      // 两模式同跑 RenderPost 后处理（与 app 的 render() 同链）再比几何
+      if (window.RenderPost) { window.RenderPost.processMath(mnode || reading); window.RenderPost.processMath(reading); }
+      await new Promise((res) => setTimeout(res, 300));
+      const h = (n) => (n ? Math.round(n.getBoundingClientRect().height * 100) / 100 : null);
+      out.heights = { maskP: h(maskP), readP: h(readP) };
+      out.maskPText = maskP ? maskP.textContent.slice(0, 60) : null;
+      return out;
+    }, doc64);
+    if (!r64.hasBlock) {
+      s64Push('S64 初始化', false, JSON.stringify(r64));
+    } else {
+      s64Push('阅读态渲染无 MATHBLOCK 垃圾（占位未漏进最终 HTML）',
+        r64.fullHtmlHasGarbage === false, '');
+      s64Push('遮罩渲染无 MATHBLOCK 垃圾（块切片与全文同一 guard）',
+        r64.maskHasGarbage === false, '');
+      s64Push('反引号内 $...$ 保持原样文本（未误判为数学占位）',
+        r64.readPHasPlainMath === true, 'maskPText=' + JSON.stringify(r64.maskPText));
+      const hm = r64.heights && r64.heights.maskP, hr = r64.heights && r64.heights.readP;
+      s64Push('遮罩 ≡ 阅读几何（同链后处理，含 KaTeX 还原）',
+        hm != null && hr != null && Math.abs(hm - hr) <= 1,
+        JSON.stringify(r64.heights));
+    }
+  }
+
+  // ---------- S65：普通文字段落不挂块级「编辑」按钮（2026-07-13 用户要求） ----------
+  // 点文字经 mousedown 点击映射直接落光标编辑（与列表/标题同款口径）→ 普通文字
+  // （渲染恰为单个 <p> 且无 img/.katex）不挂按钮、挂 no-btn 补回 14px 底边距；
+  // 表格（源码入口=按钮）/ 图片段（点图开灯箱）/ 公式段保守保留按钮。
+  console.log('\n=== S65：普通文字无编辑按钮（表格/图片/公式保留；点文字即编辑） ===');
+  {
+    const s65Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? ' ' + extra : ''));
+    };
+    const doc65 = '# T\n\n普通段落一。\n\n普通段落二，含 `代码` 与 **加粗**。\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n![图](https://example.com/img.png)\n\n$E = mc^2$ 公式段。';
+    const r65 = await page.evaluate(async (d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s65cm = cm; window.__s65ed = ed;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      await new Promise((res) => setTimeout(res, 600));
+      const blocks = ed._wysiwygBlocks || [];
+      const maskOf = (line) => {
+        const bi = blocks.findIndex((b) => b.start <= line && line < b.end);
+        if (bi < 0) return null;
+        const mk = ed._wysiwygMarks.get(bi);
+        return mk && mk.replacedWith ? { idx: bi, node: mk.replacedWith } : null;
+      };
+      const info = (m) => m ? {
+        btn: !!m.node.querySelector('button.block-edit-btn'),
+        noBtn: m.node.classList.contains('wysiwyg-mask-no-btn'),
+        h: Math.round(m.node.getBoundingClientRect().height * 100) / 100,
+        pt: (() => { const r = m.node.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })(),
+      } : null;
+      const p1 = info(maskOf(2)), p2 = info(maskOf(4)), tb = info(maskOf(6)),
+            img = info(maskOf(10)), math = info(maskOf(12));
+      const reading = document.getElementById('reading');
+      reading.style.fontSize = '16px'; reading.style.lineHeight = '1.7';
+      reading.innerHTML = window.UnifiedRenderer.renderMarkdown(d, ed.settings);
+      if (window.RenderPost) window.RenderPost.processMath(reading);
+      const readP1 = Array.from(reading.children).find((c) => c.getAttribute('data-source-line') === '3');
+      const readP1h = readP1 ? Math.round(readP1.getBoundingClientRect().height * 100) / 100 : null;
+      return { p1, p2, tb, img, math, readP1h };
+    }, doc65);
+    if (!r65.p1) {
+      s65Push('S65 初始化', false, JSON.stringify(r65));
+    } else {
+      s65Push('普通段落（一）无编辑按钮且挂 no-btn（14px 底边距补回）',
+        r65.p1.btn === false && r65.p1.noBtn === true, JSON.stringify(r65.p1));
+      s65Push('普通段落（二，含行内代码/加粗）无编辑按钮',
+        !!(r65.p2 && r65.p2.btn === false && r65.p2.noBtn === true), JSON.stringify(r65.p2));
+      s65Push('表格保留编辑按钮（整表源码入口）',
+        !!(r65.tb && r65.tb.btn === true), JSON.stringify(r65.tb));
+      s65Push('图片段保留编辑按钮（点图开灯箱，点不到源码）',
+        !!(r65.img && r65.img.btn === true), JSON.stringify(r65.img));
+      s65Push('公式段保留编辑按钮（公式非普通文字）',
+        !!(r65.math && r65.math.btn === true), JSON.stringify(r65.math));
+      // 高度回归护栏：no-btn 遮罩 = 内容 27.2 + 14px 底边距补回（与有按钮时同高；
+      // 若 no-btn 缺失会矮 14px）
+      s65Push('普通段落遮罩高度 = 阅读段高 + 14px 补回（no-btn 生效，渲染↔源码不跳动）',
+        r65.p1.h != null && r65.readP1h != null && Math.abs(r65.p1.h - (r65.readP1h + 14)) <= 1,
+        JSON.stringify({ mask: r65.p1.h, read: r65.readP1h }));
+      // 点普通段落文字（真实点击）→ 光标落到该行、撤罩出源码（点行即编辑，无需按钮）
+      if (r65.p1.pt) {
+        await page.mouse.click(r65.p1.pt.x, r65.p1.pt.y);
+        await new Promise((res) => setTimeout(res, 500));
+        const st2 = await page.evaluate(() => {
+          const cm = window.__s65cm, ed = window.__s65ed;
+          if (!cm || !ed) return { missing: true };
+          const c = cm.getCursor();
+          const blocks = ed._wysiwygBlocks || [];
+          const bi = blocks.findIndex((b) => b.start <= 2 && 2 < b.end);
+          const mk = bi >= 0 ? ed._wysiwygMarks.get(bi) : null;
+          return {
+            cur: { line: c.line, ch: c.ch },
+            line2: cm.getValue().split('\n')[2],
+            // 点中的块（第 2 行）撤罩：其 mark 失效；其余块遮罩不受影响
+            p1MaskGone: bi < 0 || !mk,
+          };
+        });
+        s65Push('点普通段落文字：光标落该行、撤罩出源码（点行即编辑）',
+          !!(st2 && !st2.missing && st2.cur.line === 2 && st2.p1MaskGone && st2.line2 === '普通段落一。'),
+          JSON.stringify(st2));
+      }
+    }
+  }
+
+  // ---------- S66：光标行源码——选中期间保持 + 离开行即回渲染（2026-07-13 用户反馈） ----------
+  // ① 鼠标选中一段文字时编辑态源码不得消失（旧 activeline addon 对非空选区清掉全部
+  //    活动行 → 选区期间光标行回渲染外观）；② 光标离开当前行（同列表另一行）应立即回
+  //    渲染态（旧载体失步：demo.md <ins> 行光标离开整个列表才回渲染态）。
+  // 新载体 = JS 行类 wysiwyg-inline-cursor-line（cursorActivity 每次同步到光标行）。
+  console.log('\n=== S66：选中保持源码 + 离开行即回渲染（demo.md 行内样式节同款列表） ===');
+  {
+    const s66Push = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? ' ' + extra : ''));
+    };
+    const doc66 = [
+      '- <u>下划线文本</u>：用 `<u>` 标签',
+      '- <ins>插入内容</ins>：用 `<ins>` 标签（带下划线，表示新增内容）',
+      '- ==高亮标记==：用 `==文本==` 语法（也支持原生 `<mark>` 标签）',
+    ].join('\n');
+    const lineInfo66 = () => page.evaluate(() => {
+      const cm = window.__s66cm, ed = window.__s66ed;
+      const preOf = (n) => {
+        const h = cm.getLineHandle(n);
+        for (const lv of cm.display.view) {
+          if (lv && lv.line === h) {
+            const el = lv.node;
+            return el.tagName === 'PRE' ? el : (el.querySelector ? el.querySelector('pre.CodeMirror-line') : null);
+          }
+        }
+        return null;
+      };
+      const mSpans = (pre) => Array.from(pre.querySelectorAll('span'))
+        .filter((s) => String(s.className).includes('wysiwyg-inline-marker'));
+      const w = (el) => Math.round(el.getBoundingClientRect().width * 100) / 100;
+      const info = (n) => {
+        const pre = preOf(n);
+        if (!pre) return { err: 'line ' + n + ' 未物化' };
+        const ms = mSpans(pre);
+        return {
+          curLine: String(pre.className).includes('wysiwyg-inline-cursor-line'),
+          widths: ms.map(w),
+          rect: (() => { const r = pre.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })(),
+        };
+      };
+      const c = cm.getCursor();
+      const sel = cm.listSelections()[0];
+      return {
+        l0: info(0), l1: info(1), l2: info(2),
+        cur: { line: c.line, ch: c.ch },
+        selEmpty: sel ? sel.empty() : null,
+        activeIdx: ed._wysiwygActiveIdx,
+      };
+    });
+    const r0 = await page.evaluate(async (d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s66cm = cm; window.__s66ed = ed;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      await new Promise((res) => setTimeout(res, 400));
+      // 进入列表块（与 S61 同序：先撤罩再落光标）
+      const listIdx = ed._wysiwygBlocks.findIndex((b) => b.start <= 1 && 1 < b.end);
+      if (listIdx < 0) return { err: '列表块未找到' };
+      ed.setWysiwygActiveBlock(listIdx);
+      cm.setCursor(1, 10);
+      cm.refresh();
+      await new Promise((res) => setTimeout(res, 450));
+      return { ok: true };
+    }, doc66);
+    if (r0.err) {
+      s66Push('S66 初始化', false, r0.err);
+    } else {
+      const st0 = await lineInfo66();
+      s66Push('进入 <ins> 行：该行标记真宽（源码），其余行零宽（渲染）',
+        st0.l1.widths.length >= 2 && st0.l1.widths.every((x) => x > 0.5)
+        && st0.l0.widths.length && st0.l0.widths.every((x) => x < 0.5)
+        && st0.l2.widths.length && st0.l2.widths.every((x) => x < 0.5)
+        && st0.l1.curLine === true && st0.l0.curLine === false,
+        JSON.stringify({ l0: st0.l0.widths, l1: st0.l1.widths, l2: st0.l2.widths }));
+      // ① 同行内真实拖选（mousedown→move→读中途→mouseup）：选中期间源码保持
+      if (st0.l1.rect) {
+        const sy = st0.l1.rect.y + st0.l1.rect.h / 2;
+        await page.mouse.move(st0.l1.rect.x + 30, sy);
+        await page.mouse.down();
+        await page.mouse.move(st0.l1.rect.x + 250, sy, { steps: 6 });
+        await new Promise((res) => setTimeout(res, 250));
+        const mid = await lineInfo66();
+        await page.mouse.up();
+        await new Promise((res) => setTimeout(res, 450));
+        const post = await lineInfo66();
+        s66Push('拖选中途（非空选区）：光标行源码保持（旧 addon 此时清行=用户反馈①）',
+          !!(mid.l1 && mid.selEmpty === false
+            && mid.l1.widths.length >= 2 && mid.l1.widths.every((x) => x > 0.5)),
+          JSON.stringify({ selEmpty: mid.selEmpty, l1w: mid.l1 && mid.l1.widths, cur: mid.cur }));
+        s66Push('拖选释放后：选区保留、光标行源码保持',
+          !!(post.l1 && post.selEmpty === false
+            && post.l1.widths.length >= 2 && post.l1.widths.every((x) => x > 0.5)
+            && post.l1.curLine === true),
+          JSON.stringify({ selEmpty: post.selEmpty, l1w: post.l1 && post.l1.widths, cls: post.l1 && post.l1.curLine }));
+      }
+      // ② 光标移到同列表另一行 → <ins> 行立即回渲染（零宽）、新行显源码
+      if (st0.l2.rect) {
+        await page.mouse.click(st0.l2.rect.x + 50, st0.l2.rect.y + st0.l2.rect.h / 2);
+        await new Promise((res) => setTimeout(res, 500));
+        const st1 = await lineInfo66();
+        s66Push('点同列表下一行：<ins> 行立即回渲染（零宽）、新行显源码（用户反馈②）',
+          !!(st1.l1 && st1.l2
+            && st1.l1.widths.length && st1.l1.widths.every((x) => x < 0.5)
+            && st1.l2.widths.length >= 2 && st1.l2.widths.every((x) => x > 0.5)
+            && st1.l1.curLine === false && st1.l2.curLine === true
+            && st1.cur.line === 2),
+          JSON.stringify({ cur: st1.cur, l1w: st1.l1 && st1.l1.widths, l2w: st1.l2 && st1.l2.widths, cls: { l1: st1.l1 && st1.l1.curLine, l2: st1.l2 && st1.l2.curLine } }));
+        // 跨行拖选（行0 → 行2）：拖选起始行源码保持，释放后头行（行2）显源码
+        await page.mouse.move(st1.l0.rect.x + 30, st1.l0.rect.y + st1.l0.rect.h / 2);
+        await page.mouse.down();
+        await page.mouse.move(st1.l2.rect.x + 100, st1.l2.rect.y + st1.l2.rect.h / 2, { steps: 8 });
+        await new Promise((res) => setTimeout(res, 250));
+        const mid2 = await lineInfo66();
+        await page.mouse.up();
+        await new Promise((res) => setTimeout(res, 450));
+        const post2 = await lineInfo66();
+        s66Push('跨行拖选：中途起始行源码保持；释放后头行（行2）源码、其余回渲染',
+          !!(mid2.l0 && mid2.l0.widths.length && mid2.l0.widths.every((x) => x > 0.5)
+            && post2.l2 && post2.l2.widths.length >= 2 && post2.l2.widths.every((x) => x > 0.5)
+            && post2.l0 && post2.l0.widths.length && post2.l0.widths.every((x) => x < 0.5)
+            && post2.l2.curLine === true && post2.l0.curLine === false),
+          JSON.stringify({ mid2l0: mid2.l0 && mid2.l0.widths, post2l0: post2.l0 && post2.l0.widths, post2l2: post2.l2 && post2.l2.widths }));
+      }
     }
   }
 

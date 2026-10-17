@@ -35,7 +35,8 @@ test('顶部视图模式为三钮，且文案已重命名为 阅读/源码/实�
   assert.doesNotMatch(block, />\s*编辑\s*<\/span>/, '模式按钮仍写「编辑」，应改为「源码」');
   assert.match(block, />\s*阅读\s*<\/span>/);
   assert.match(block, />\s*源码\s*<\/span>/);
-  assert.match(block, />\s*实时预览\s*<\/span>/);
+  // 2026-07-13：实时预览标注（beta）测试功能
+  assert.match(block, />\s*实时预览（beta）\s*<\/span>/);
 
   assert.match(html, /data-mode="preview"/);
   assert.match(html, /data-mode="edit"/);
@@ -288,8 +289,9 @@ test('遮罩生命周期正确：离开模式清理，不泄漏 mark', () => {
   // 注意：必须锚到定义体（'clearWysiwygMasks() {'），首个出现处是 renderWysiwygMasks 里的调用
   const cIdx = wsrc.indexOf('clearWysiwygMasks() {');
   assert.ok(cIdx > 0, '缺少 clearWysiwygMasks 定义');
-  // 窗口含开头的「标题活动行装饰清理」块（2026-10-14），需放宽到 mark 遍历之后
-  const blk = wsrc.slice(cIdx, cIdx + 1200);
+  // 窗口含开头的「标题活动行装饰清理」块（2026-10-14），需放宽到 mark 遍历之后；
+  // 2026-10-17 QA 审查又在函数头新增光标行状态复位块（~430 字符），1200→1600
+  const blk = wsrc.slice(cIdx, cIdx + 1600);
   assert.match(blk, /Array\.from\(this\._wysiwygMarks\.values\(\)\)/, '未遍历清理 mark');
   assert.match(blk, /mark\.clear\(\)/, '未 clear mark（会泄漏）');
   assert.match(blk, /clearTimeout\(this\._wysiwygMaskTimer\)/, '未清理防抖定时器');
@@ -961,10 +963,11 @@ test('全量视图驻留：直接写 cm.options 扩视口（避开 setOption 的
   const eIdx = wsrc.indexOf('_enterWysiwygFullView() {');
   const eblk = wsrc.slice(eIdx, eIdx + 800);
   assert.match(eblk, /cm\.operation\(\(\) => \{/, '全量挂遮罩未用单 operation 批量（逐块=数千次 display 更新）');
-  // 离开所见即所得恢复默认视口余量（窗口 5200：函数内含批量撤遮罩 + 活动块高亮撤行类 +
-  // 正文排版行类撤除 + 块间空行间隙清理（2026-10-17），函数体变长）
+  // 离开所见即所得恢复默认视口余量（窗口 5800：函数内含批量撤遮罩 + 活动块高亮撤行类 +
+  // 正文排版行类撤除 + 块间空行间隙清理（2026-10-17），函数体变长；
+  // 2026-10-17 QA 审查又新增光标行状态复位块（~430 字符），5200→5800）
   const cIdx = wsrc.indexOf('clearWysiwygMasks() {');
-  const cblk = wsrc.slice(cIdx, cIdx + 5200);
+  const cblk = wsrc.slice(cIdx, cIdx + 5800);
   assert.match(cblk, /setOption\('viewportMargin', 10\)/, '离开全量模式未恢复默认视口余量');
   assert.match(cblk, /this\._wysiwygFull = false;/, '离开未复位全量标志');
 });
@@ -1060,9 +1063,9 @@ test('渲染中指示：CSS spinner + 三语言 i18n key', () => {
   assert.match(css, /wysiwyg-rendering::before[\s\S]{0,300}animation: wysiwyg-mode-spin/, 'spinner 未接旋转动画');
   assert.match(css, /@keyframes wysiwyg-mode-spin/, '缺少旋转关键帧');
   const i18n = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'i18n-data.js'), 'utf8');
-  const zh = i18n.indexOf("viewModeWysiwyg: '实时预览'");
-  const en = i18n.indexOf("viewModeWysiwyg: 'Live Preview'");
-  const es = i18n.indexOf("viewModeWysiwyg: 'Vista en vivo'", en + 10);
+  const zh = i18n.indexOf("viewModeWysiwyg: '实时预览（beta）'");
+  const en = i18n.indexOf("viewModeWysiwyg: 'Live Preview (beta)'");
+  const es = i18n.indexOf("viewModeWysiwyg: 'Vista en vivo (beta)'", en + 10);
   for (const [name, idx] of [['zh', zh], ['en', en], ['es', es]]) {
     assert.ok(idx > 0, '未找到 ' + name + ' 的 viewModeWysiwyg');
     assert.match(i18n.slice(idx, idx + 200), /viewModeWysiwygRendering: '[^']+'/, name + ' 缺 viewModeWysiwygRendering 文案');
@@ -1156,15 +1159,122 @@ test('异步 pass 刷新风暴守卫：仅块内含 img/mermaid/[TOC] 才启动 
   assert.match(pblk, /hasToc = node\.querySelectorAll[\s\S]{0,160}?TOC/, '缺 [TOC] 段存在性守卫');
 });
 
-test('ref 定义行块：渲染器输出零高度占位 + 双条件判据 + CSS 塌缩（阅读模式对齐）', () => {
+test('ref 定义行 / 孤闭合标签块：渲染器输出零高度占位 + 判据 + CSS 塌缩（阅读模式对齐）', () => {
   const rsrc = fs.readFileSync(path.join(ROOT, 'src', 'unified-renderer.js'), 'utf8');
   // 源文本为 REF_DEF_LINE = /^\s{0,3}\[：`^` 需 \^ 转义，源里的反斜杠需 \\ 匹配
   assert.match(rsrc, /REF_DEF_LINE = \/\^\\s\{0,3\}\\\[/, '缺少 ref 定义行判定正则');
   assert.match(rsrc, /function isOnlyLinkRefDefs\(slice\)/, '缺少「整块纯定义」判据函数');
-  assert.match(rsrc, /html === '' && slice\.trim\(\) && isOnlyLinkRefDefs\(slice\)/, '占位必须双条件（空 html + 纯定义行）——渲染失败的块保持源码可见');
+  // 2026-07-13 demo.md 审计：尾部孤立 </p> 行渲染为空，WYSIWYG 源码裸露而阅读模式不可见
+  // → 与 ref 定义同法输出零高度占位；判据扩为「纯定义行 | 纯孤闭合标签行」
+  assert.match(rsrc, /STRAY_CLOSE_TAG_LINE = \/\^\\s\{0,3\}<\\s\*\\\/\[a-zA-Z\]/, '缺少孤闭合标签行判定正则');
+  assert.match(rsrc, /function isOnlyStrayClosingTags\(slice\)/, '缺少「整块纯孤闭合标签」判据函数');
+  assert.match(rsrc, /html === '' && slice\.trim\(\) && !renderFailed &&[\s\S]{0,40}\(isOnlyLinkRefDefs\(slice\) \|\| isOnlyStrayClosingTags\(slice\)\)/,
+    '占位必须三条件（空 html + 未渲染失败 + 纯定义/纯孤闭合行）——渲染失败的块保持源码可见');
+  assert.match(rsrc, /renderFailed = true;/, '渲染失败未标记（失败空块会被误隐藏）');
   assert.match(rsrc, /<div class="wysiwyg-block-hidden"><\/div>/, '占位输出缺失');
   const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
   assert.match(css, /\.wysiwyg-block-hidden \{\s*height: 0;\s*overflow: hidden;/, '缺占位塌缩 CSS（height:0 + overflow:hidden）');
+});
+
+test('未闭合裸 HTML 容器块合并：块表并到闭标签行 + 白名单按管线实测（demo.md details 审计）', () => {
+  const rsrc = fs.readFileSync(path.join(ROOT, 'src', 'unified-renderer.js'), 'utf8');
+  // 白名单：rehype-sanitize + parse5 全串重解析实测会「保持打开并吞并后续内容」的标签才合并；
+  // p/table 族/form/html 实测不合并（两模式同样片段化，天然一致）不得入名单
+  const setStart = rsrc.indexOf('const OPEN_CONTAINER_TAGS = new Set([');
+  assert.ok(setStart > 0, '缺少未闭合容器合并白名单');
+  const setBody = rsrc.slice(setStart, setStart + 800);
+  assert.match(setBody, /'details',/, '白名单须含 details（demo.md 折叠块实测合并）');
+  assert.match(setBody, /'figure',/, '白名单须含 figure（审计实测合并）');
+  assert.doesNotMatch(setBody, /'p',/, "p 误入合并白名单（浏览器遇下一块即隐式闭合，实测不合并）");
+  assert.doesNotMatch(setBody, /'table'/, 'table 误入合并白名单（parse5 表格解析特殊，实测不合并）');
+  assert.match(rsrc, /OPEN_CONTAINER_TAGS\.has\(tag\)/, '合并循环未查白名单');
+  // 合并循环：首行开标签判定 + 块内已闭合跳过 + 围栏感知扫描闭标签行 + 600 行上限
+  assert.match(rsrc, /first && first\.match\(/, '缺少块首开标签判定');
+  assert.match(rsrc, /om\[2\]\.trim\(\)\.endsWith\('\/'\)\) continue; \/\/ 自闭合/, '未排除自闭合开标签');
+  assert.match(rsrc, /\.test\(val\)\) continue; \/\/ 块内已闭合/, '未跳过块内已闭合容器');
+  assert.match(rsrc, /fence = fm\[1\]\[0\];/, '闭标签扫描未跟踪围栏代码块（代码里的 </div> 文本会提前截断）');
+  assert.match(rsrc, /b\.end \+ 600/, '闭标签扫描缺上限（病态文档会扫穿全文）');
+  // 合并必须在「相邻/重叠段合并」之前（吞掉的块靠后者收编）
+  assert.ok(rsrc.indexOf("if (found > b.end) b.end = found;") < rsrc.indexOf('相邻/重叠段合并'), '容器合并在重叠段合并之后，吞掉的块收不进去');
+});
+
+test('公式 guard：反斜杠转义 + 反引号状态行局部（demo.md L963 \\`` 失同步审计，2026-07-13）', () => {
+  const rsrc = fs.readFileSync(path.join(ROOT, 'src', 'unified-renderer.js'), 'utf8');
+  const gIdx = rsrc.indexOf('function guardMathBlocks(content) {');
+  assert.ok(gIdx > 0, '缺少 guardMathBlocks');
+  const gblk = rsrc.slice(gIdx, gIdx + 6500);
+  // 行局部：行内代码跨度不能跨行（CommonMark：backtick string 不能含行结束符）。
+  // 缺行重置时，某行游离的奇数反引号（如转义表 \``）会翻转 inBacktick，
+  // 使其后整篇「反引号内 $...$」被误判为数学占位 → 占位在 <code> 内被转义后
+  // restore 匹配不到 → 阅读/遮罩残留 <!--MATHBLOCK_N--> 字面垃圾。
+  assert.match(gblk, /if \(content\[i\] === '\\n' \|\| content\[i\] === '\\r'\) \{\s*inBacktick = false;\s*inDoubleBacktick = false;/,
+    '反引号状态未在换行重置（行内代码跨度按 CommonMark 不能跨行，状态必须行局部）');
+  // 反斜杠转义：`\`` = 字面反引号（不翻 inBacktick）、`\$` = 字面美元（不开数学）。
+  // 源文件里条件写作 content[i] === '\\' && i + 1 < len && (content[i + 1] === '`' || content[i + 1] === '$')
+  assert.match(gblk, /content\[i\] === '\\\\' && i \+ 1 < len && \(content\[i \+ 1\] === '`' \|\| content\[i \+ 1\] === '\$'\)/,
+    '缺少反斜杠转义分支（\\`` 会翻转 inBacktick，\\$ 会误开数学）');
+  // 行为（与审计脚本同款：从源提取 guard 及其依赖直接执行；bundle 的 Node 加载
+  // 因内联浏览器模块初始化引用 document 不可用）
+  function extractFn(name) {
+    const start = rsrc.indexOf('function ' + name + '(');
+    assert.ok(start >= 0, '提取失败: ' + name);
+    let i = rsrc.indexOf('{', start), depth = 0;
+    for (let j = i; j < rsrc.length; j++) {
+      if (rsrc[j] === '{') depth++;
+      else if (rsrc[j] === '}') { depth--; if (depth === 0) return rsrc.substring(start, j + 1); }
+    }
+    assert.fail('提取失败（花括号失衡）: ' + name);
+  }
+  const fns = ['looksLikeMath', 'looksLikeLatexMath', 'isAtBlockStart', 'escapeHTML', 'guardMathBlocks'].map(extractFn).join('\n');
+  const guard = new Function(fns + '\nreturn guardMathBlocks;')();
+  // 最小复现（demo.md L963 转义表行 + 其后反引号内 $...$）：
+  const repro = '| 转义写法 | 显示效果 |\n| --- | --- |\n| ``\\` `` | \\` 字面反引号 |\n\n除 `$...$` 行内公式外。';
+  const r = guard(repro);
+  assert.ok(r.content.indexOf('MATHBLOCK') < 0, '转义反引号翻转状态 → 其后反引号内 $...$ 被误判为数学占位');
+  assert.match(r.content, /除 \`\$\.\.\.\$\` 行内公式外/, '反引号内 $...$ 必须保持反引号包裹原样（交 remark 渲染代码跨度）');
+  // 正常数学不受影响
+  const r2 = guard('公式 $E = mc^2$ 正常');
+  assert.strictEqual(r2.placeholders.length, 1, '真实行内数学必须仍被保护为占位');
+  assert.strictEqual(r2.placeholders[0].text, '$E = mc^2$');
+});
+
+test('遮罩排版同步：行高必须是无单位比率，不得写 getComputedStyle 的 px 已解析值', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const tIdx = wsrc.indexOf('_wysiwygMaskTypography(node) {');
+  assert.ok(tIdx > 0, '缺少 _wysiwygMaskTypography');
+  const tblk = wsrc.slice(tIdx, tIdx + 1600);
+  // 2026-07-13 demo.md 审计：cs.lineHeight 是字号 16px 下已解析的 27.2px——写成
+  // 遮罩内联样式后是固定 px，sub/sup 等小字号元素（0.75em）的行高不再随字号等比
+  // 缩放，而阅读模式是无单位 1.7 随字号走 → 含上下标的行遮罩 37.7 vs 阅读 33.2。
+  assert.doesNotMatch(tblk, /node\.style\.lineHeight = cs\.lineHeight;/,
+    '行高不得直接写计算值 px（sub/sup 行高失配）');
+  assert.match(tblk, /this\.preview\.style && this\.preview\.style\.lineHeight/,
+    '行高须优先取 #preview 作者值（applySettings 写无单位 String(s.lineHeight)）');
+  assert.match(tblk, /a \/ f > 0\.5 && a \/ f < 4/,
+    '作者值缺失时须从计算值反推无单位比率（绝不落 px 固定值）');
+});
+
+test('普通文字段落不挂块级「编辑」按钮（2026-07-13 用户要求；点文字即编辑）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  // 判定函数：渲染结果恰为单个 <p> 且不含 img（点图开灯箱，吞点击映射）/ .katex（公式非普通文字）
+  const pIdx = wsrc.indexOf('_wysiwygMaskIsPlainText(node) {');
+  assert.ok(pIdx > 0, '缺少普通文字段落判定 _wysiwygMaskIsPlainText');
+  const pblk = wsrc.slice(pIdx, pIdx + 700);
+  assert.match(pblk, /node\.children\.length !== 1/, '普通文字须是单个顶层元素');
+  assert.match(pblk, /first\.tagName !== 'P'/, '普通文字顶层元素须是 <p>（表格/围栏/引用/占位 div 自然保留按钮）');
+  assert.match(pblk, /querySelector\('img'\)/, '含图片的段落须保留按钮（点图片开灯箱，点不到源码）');
+  assert.match(pblk, /querySelector\('\.katex'\)/, '含公式的段落须保留按钮（公式非普通文字，保守保留）');
+  // 接线：普通文字 → no-btn 类（14px 底边距补回，与列表同款，遮罩不矮 14px）
+  assert.match(wsrc, /else if \(this\._wysiwygMaskIsPlainText\(node\)\) node\.classList\.add\('wysiwyg-mask-no-btn'\);/,
+    '普通文字段落未挂 no-btn（撤按钮后 p 的 14px 底边距被清零，遮罩矮一截）');
+  // 顺序：TOC 判定必须先于普通文字（[TOC] 行异步替换目录前遮罩就是单个 <p>，
+  // 先判普通文字会漏掉「删除」按钮）
+  assert.ok(wsrc.indexOf('else if (isTocBlock) this._addWysiwygTocDeleteButton(node);')
+    < wsrc.indexOf("else if (this._wysiwygMaskIsPlainText(node)) node.classList.add('wysiwyg-mask-no-btn');"),
+    'TOC 判定未先于普通文字判定（[TOC] 漏挂删除按钮）');
+  // no-btn 的底边距补回仍在（14px 边距族：ul/ol/p）
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  assert.match(css, /wysiwyg-mask-no-btn > \*?:last-child \{ margin-bottom: 14px; \}/, 'no-btn 14px 底边距补回缺失');
 });
 
 test('预渲染带 loading 覆盖层：挂起至遮罩挂完、按代配对释放（不残留/不早放）', () => {
@@ -1313,18 +1423,44 @@ test('[TOC] 块遮罩：不允许编辑、点击无反应、「编辑」改「�
   assert.ok((i18n.match(/deleteToc: /g) || []).length >= 3, 'deleteToc i18n 三语言不齐');
 });
 
-test('光标行显示源码：行内标记真宽+次级色（2026-10-21 用户要求：基础文本格式编辑时光标所在行显示源码）', () => {
+test('光标行显示源码：行内标记真宽+次级色（2026-10-21 用户要求；2026-07-13 换 JS 行类载体）', () => {
   const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
-  // 载体 = active-line addon 挂到光标行 wrap 作用域的 CodeMirror-activeline（div.CodeMirror-line）
-  // ⚠️ 载体实测口径：wrap 包裹 div 的类名单独就是 CodeMirror-activeline（无 CodeMirror-line 基类）
-  const idx = css.indexOf('.CodeMirror-activeline > pre.wysiwyg-plain-text span[class*="wysiwyg-inline-marker"]');
-  assert.ok(idx > 0, '缺「光标行行内标记显示源码」CSS 规则（activeline 载体）');
+  // 载体（2026-07-13 换）= JS 显式行类 wysiwyg-inline-cursor-line（'text' 域落 pre）：
+  // 原 activeline addon 载体对**非空选区清掉全部活动行** → 鼠标选中时该行源码消失
+  // （用户反馈 ①），且 addon 存 handle 与光标行可失步（<ins> 行离开整列表才回渲染，②）
+  const idx = css.indexOf('pre.wysiwyg-plain-text.wysiwyg-inline-cursor-line span[class*="wysiwyg-inline-marker"]');
+  assert.ok(idx > 0, '缺「光标行行内标记显示源码」CSS 规则（wysiwyg-inline-cursor-line 载体）');
   const blk = css.slice(idx, idx + 400);
   assert.match(blk, /width: auto/, '光标行标记未恢复真宽（零宽即无源码可见性）');
   assert.match(blk, /color: var\(--text-secondary\)/, '光标行标记未用次级色（与光标行 > 槽 / # 哈希同源口径）');
-  // 应用侧载体齐备：editor-core 开 styleActiveLine（active-line 是 addon 实现的，option 必须开）
+  assert.ok(css.indexOf('.CodeMirror-activeline > pre.wysiwyg-plain-text span[class*="wysiwyg-inline-marker"]') < 0,
+    'activeline 版标记规则未移除（双载体并存：选区期间 addon 清类、JS 类仍在 → 行为分裂）');
+  // JS 接线：syncWysiwygActiveBlock 每次 cursorActivity 把行类同步到光标行（主选区头行）
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  assert.match(wsrc, /this\._wysiwygInlineCurLine = line;/, '缺行内标记光标行跟踪变量（_wysiwygInlineCurLine）');
+  assert.match(wsrc, /_setWysiwygCurLineClass\(this\._wysiwygInlineCurLine, 'wysiwyg-inline-cursor-line', false\);/,
+    '光标离开旧行未撤行内标记类（离开行不回渲染态）');
+  assert.match(wsrc, /_setWysiwygCurLineClass\(line, 'wysiwyg-inline-cursor-line', true\);/, '光标行进新行未挂行内标记类');
+  // 拖选释放归位：跨行拖选 mouseup 常无新选区变化 → 无末次 cursorActivity，行类会停在
+  // 拖选起始行（S66 抓出）→ 冻结早退前登记一次性 pointerup，setTimeout(0) 保证在 CM
+  // document mouseup 清 selectingText 之后归位
+  assert.match(wsrc, /_ensureWysiwygSelEndSync\(\); return;/, '拖选冻结早退未登记释放后归位（跨行拖选行类停在起始行）');
+  assert.match(wsrc, /document\.addEventListener\('pointerup', onUp\);/, '拖选释放未挂一次性 pointerup');
+  assert.match(wsrc, /setTimeout\(\(\) => self\._applyWysiwygInlineCurLine\(\), 0\);/,
+    '拖选释放归位未延迟到下一宏任务（pointerup 先于 mouseup，CM 在 mouseup 才清 selectingText）');
+  // 行类挂/撤公共方法（'text' 域 = pre；行销毁/越界 no-op）
+  const fIdx = wsrc.indexOf('_setWysiwygCurLineClass(n, cls, on) {');
+  assert.ok(fIdx > 0, '缺光标行行类挂/撤方法 _setWysiwygCurLineClass');
+  assert.match(wsrc.slice(fIdx, fIdx + 600), /cm\.addLineClass\(h, 'text', cls\)/, '行类未走 addLineClass text 域（须落 pre 元素）');
+  assert.match(wsrc.slice(fIdx, fIdx + 600), /cm\.removeLineClass\(h, 'text', cls\)/, '行类未走 removeLineClass text 域');
+  // 引用 > 槽类改走同一公共方法（不复制挂/撤逻辑）
+  const qIdx = wsrc.indexOf('_setWysiwygQuoteCurClass(n, on) {');
+  assert.ok(qIdx > 0, '缺引用光标行类方法');
+  assert.match(wsrc.slice(qIdx, qIdx + 300), /this\._setWysiwygCurLineClass\(n, 'wysiwyg-quote-cursor-line', on\);/,
+    '引用光标行类未复用公共挂/撤方法');
+  // addon 仍保留：光标行底色（codemirror.css #e8f2ff）与失步守卫仍依赖它
   const core = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'editor-core.js'), 'utf8');
-  assert.match(core, /styleActiveLine: true/, 'editor-core 未开 styleActiveLine（光标行类不产生）');
+  assert.match(core, /styleActiveLine: true/, 'editor-core 未开 styleActiveLine（光标行底色/失步守卫载体缺失）');
   const html = fs.readFileSync(path.join(ROOT, 'src', 'index.html'), 'utf8');
   assert.match(html, /lib\/codemirror\/addon\/selection\/active-line\.js/, 'index.html 未加载 active-line addon');
   // harness 与 app 对齐（否则 S58/S61 在 harness 测不出光标行行为）
@@ -1333,9 +1469,8 @@ test('光标行显示源码：行内标记真宽+次级色（2026-10-21 用户�
   assert.match(harness, /styleActiveLine: true/, 'harness 未开 styleActiveLine（与 editor-core 不对齐）');
   // 失步守卫：光标落进遮罩（collapsed span）时 addon 的 getLineHandleVisualStart 按视觉行
   // 解析到遮罩起始行、解罩后不自愈 → syncWysiwygActiveBlock 末尾校验并重放当前选区
-  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   const gIdx = wsrc.indexOf('active-line addon 失步守卫');
-  assert.ok(gIdx > 0, '缺 active-line addon 失步守卫（跳转行号落遮罩时显示源码挂错行）');
+  assert.ok(gIdx > 0, '缺 active-line addon 失步守卫（跳转行号落遮罩时底色/类挂错行）');
   const gblk = wsrc.slice(gIdx, gIdx + 1200);
   assert.match(gblk, /cm2\.state\.activeLines/, '守卫未校验 addon 存储的 handle');
   assert.match(gblk, /setSelection\(rng\.anchor, rng\.head, \{ scroll: false \}\)/, '守卫未重放当前选区让 addon 重解析');
@@ -2072,10 +2207,12 @@ test('跨块选区：遮罩两端非包含（选区端点可停在遮罩边界�
   const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   const mIdx = wsrc.indexOf('maskWysiwygBlock(idx) {');
   assert.ok(mIdx > 0, '缺 maskWysiwygBlock');
-  const mblk = wsrc.slice(mIdx, mIdx + 16000); // 窗口须覆盖到 mousedown 接管块之后的 markText 调用（接管块 2026-10-16 点击/拖拽分流后变长）
-  const optIdx = mblk.indexOf('cm.markText(from, to, {');
+  // markText 调用在 mousedown 接管块之后（接管块 2026-10-16 点击/拖拽分流后很长，且其后
+  // 持续追加逻辑）——固定窗口会随函数变长而截断（2026-07-13 普通文字按钮注释加长即触发），
+  // 改为在全文中定位 markText（全文件唯一）后开窗，不再受函数长度影响
+  const optIdx = wsrc.indexOf('cm.markText(from, to, {', mIdx);
   assert.ok(optIdx > 0, 'maskWysiwygBlock 未用 markText');
-  const opts = mblk.slice(optIdx, optIdx + 700);
+  const opts = wsrc.slice(optIdx, optIdx + 700);
   assert.match(opts, /inclusiveLeft: false/, '遮罩标记须 inclusiveLeft:false（true 时 {0,0} 算区间内部被推到遮罩末 → Ctrl+A 丢首块）');
   assert.match(opts, /inclusiveRight: false/, '遮罩标记须 inclusiveRight:false（右端点同样要能停在遮罩边界）');
 });
@@ -2094,10 +2231,12 @@ test('跨块选区：遮罩 mousedown 点击同步执行 + ≥4px 升级为选�
   assert.match(md, /self\._wysiwygSelDragging = true/, '拖拽分支未置 _wysiwygSelDragging 冻结位');
   const sIdx = wsrc.indexOf('syncWysiwygActiveBlock() {');
   const sblk = wsrc.slice(sIdx, sIdx + 1400);
-  assert.match(sblk, /if \(this\._wysiwygSelDragging\) return;/, 'syncWysiwygActiveBlock 缺遮罩拖选冻结守卫');
+  // 2026-07-13：冻结早退前先登记拖选释放归位（行内标记行类，见光标行显示源码测试）
+  assert.match(sblk, /if \(this\._wysiwygSelDragging\) \{ this\._ensureWysiwygSelEndSync\(\); return; \}/,
+    'syncWysiwygActiveBlock 缺遮罩拖选冻结守卫（或冻结前未登记释放归位）');
   // CM 原生拖选冻结须限定「非折叠选区」：普通单击窗口内 selectingText 也非空但选区折叠，
   // 无差别冻结会打断光标行灰底跟随（S15 回归）
-  assert.match(sblk, /if \(this\.cm\.state && this\.cm\.state\.selectingText\) \{[\s\S]{0,200}if \(pr && !pr\.empty\(\)\) return;/,
+  assert.match(sblk, /if \(this\.cm\.state && this\.cm\.state\.selectingText\) \{[\s\S]{0,200}if \(pr && !pr\.empty\(\)\) \{ this\._ensureWysiwygSelEndSync\(\); return; \}/,
     'syncWysiwygActiveBlock 缺 CM 原生拖选冻结守卫（活动块真实行起拖扫过遮罩行会中途解罩、几何漂移打断拖选）');
   // 拖拽 anchor 取遮罩边界（atomic 整块单元：向下/水平拖取块首、向上拖取块末）
   assert.match(md, /anchor = mv\.clientY >= downY \? \{ line: r\.from\.line, ch: r\.from\.ch \}[\s\S]{0,80}\{ line: r\.to\.line, ch: r\.to\.ch \}/,

@@ -143,13 +143,22 @@ test('B4 无序四级 ul ul ul ul：回到 disc（循环）', async () => {
 });
 
 // 回归：任务列表后未空行时，remark-gfm 会把后续普通项也放进同一个 contains-task-list，
-// 导致普通项失去 marker。CSS 需给 li:not(.task-list-item) 恢复 disc。
-test('B5 混合任务/普通列表：普通项恢复 disc marker', async () => {
+// 普通项必须恢复可见 marker。
+// 口径演进（83f826c，2026-10-16 用户反馈 #3「黑点与左侧距离异常」）：原生 outside marker
+// 相对 li 边框缘定位，任务样式把 ul padding 清零后黑点会偏左 24px → 弃用原生 marker
+// （list-style:none + padding-left:24px 拉回正文），改 ::before 绝对定位画 6px 实心圆，
+// 与正常 ul 渲染 disc 及 WYSIWYG 画圆（.wysiwyg-list-bullet）逐像素同位（S45 像素验证）。
+test('B5 混合任务/普通列表：普通项恢复 disc marker（::before 画圆口径）', async () => {
   assert.ok(CSS.includes('li:not(.task-list-item)'), 'CSS 应含 li:not(.task-list-item) 选择器');
   assert.ok(/\.preview-content\s+ul\.contains-task-list\s*>\s*li:not\(\.task-list-item\)/.test(CSS),
     '普通项选择器应针对 contains-task-list');
-  assert.ok(/li:not\(\.task-list-item\)\s*\{[^}]*list-style:\s*disc;/.test(CSS),
-    '普通项应恢复 list-style: disc');
+  // 主规则：弃原生 marker + 拉回正文缩进 + 相对定位（::before 画圆的定位上下文）
+  assert.ok(/li:not\(\.task-list-item\)\s*(?:,\s*[^{]+)?\{[^}]*list-style:\s*none;[^}]*padding-left:\s*24px;[^}]*position:\s*relative;/.test(CSS),
+    '普通项应 list-style:none + padding-left:24px + position:relative');
+  // ::before 圆点：6px 实心圆、currentColor、绝对定位
+  assert.ok(/li:not\(\.task-list-item\):?:?before\s*\{[^}]*content:\s*'';[^}]*position:\s*absolute;[^}]*width:\s*6px;[^}]*height:\s*6px;[^}]*border-radius:\s*50%;[^}]*background:\s*currentColor;/.test(CSS)
+    || /li:not\(\.task-list-item\)::before\s*\{[^}]*content:\s*'';[^}]*position:\s*absolute;[^}]*width:\s*6px;[^}]*height:\s*6px;[^}]*border-radius:\s*50%;[^}]*background:\s*currentColor;/.test(CSS),
+    '普通项 ::before 应画 6px 实心圆（与正常 ul disc 同位口径）');
 });
 
 // ============================================================
