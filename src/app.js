@@ -196,6 +196,7 @@ class MarkdownEditor {
     this.initOutlineFilter();       // layout
     this.initRecentMenus();         // tabs
     this.initFolderSortControls();  // files
+    this.initFileTreeDragEvents();  // files：文件树拖放移动（指针事件，规避 Tauri 原生 DnD 接管）
     this.initViewControls();        // layout
     this.initDialogDismiss();       // misc-ui
     this.initWindowControls();      // updater

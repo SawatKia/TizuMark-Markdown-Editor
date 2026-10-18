@@ -1956,6 +1956,30 @@ function renderMarkdownBlocks(content, options) {
     const start = node.position.start.line - 1; // 0-based
     const end = node.position.end.line;         // 开区间
     if (end <= start || start < 0 || end > lines.length) continue;
+    // 紧凑列表按项切块（2026-10-21 用户反馈「光标在列表某项，兄弟项也显示源码」——
+    // 应只显示光标所在列表项的源码，兄弟项保持渲染态）：块内**无空行**（紧凑列表）且
+    // 项数 > 1 时拆成逐项块，每个顶层项一个块（含其嵌套子项行段）。松散列表（项间空行）
+    // 不拆：空行是真实源行，拆项会把空行裸露成可见行、渲染间距改变，保持整块（= 用户
+    // 口径「所在块显示源码」）。逐项块的片段高度（li + 项间距 4px，末项 +14px 列表底距，
+    // 见 styles.css wysiwyg-mask-li-mid 规则与 S43 等高口径）与整列表遮罩对应区段逐像素
+    // 一致 → 渲染态外观与整块时完全相同，仅「点哪项哪项变源码」的粒度变细。
+    if (node.type === 'list') {
+      const items = (node.children || []).filter((c) => c && c.position);
+      const noBlank = !lines.slice(start, end).some((l) => (l || '').trim() === '');
+      if (noBlank && items.length > 1) {
+        items.forEach((li, k) => {
+          blocks.push({
+            start: li.position.start.line - 1,
+            end: li.position.end.line,
+            html: '',
+            skipped: skipHtml,
+            listItem: true,
+            listItemPos: (k === 0 ? 'first' : k === items.length - 1 ? 'last' : 'middle'),
+          });
+        });
+        continue;
+      }
+    }
     blocks.push({ start, end, html: '', skipped: skipHtml });
   }
   // 展示公式行段并回：占位 div 的 line 是 1-based 起始行，text 是含定界符的公式全文，
@@ -2041,7 +2065,11 @@ function renderMarkdownBlocks(content, options) {
         html = '<div class="wysiwyg-block-hidden"></div>';
       }
     }
-    out.push({ start: b.start, end: b.end, html, skipped: b.skipped });
+    // listItem/listItemPos 是逐项列表块的标签（遮罩片段底距 / 活动块 edge-bottom 判定用），
+    // 必须随块传出——此处重建对象时漏掉会让下游拿到 undefined（2026-10-21 单测实测）。
+    out.push(b.listItem
+      ? { start: b.start, end: b.end, html, skipped: b.skipped, listItem: true, listItemPos: b.listItemPos }
+      : { start: b.start, end: b.end, html, skipped: b.skipped });
   }
   return out;
 }

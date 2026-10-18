@@ -2909,6 +2909,13 @@ body.is-resizing .side-btn {
    等高被破坏）。no-btn 遮罩把内容元素底边距补回 14px（14px 边距族：ul/ol/p），与有
    按钮时同高。（这类块内容恰为单个顶层元素，`*` 安全。） */
 .CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn > *:last-child { margin-bottom: 14px; }
+/* 列表逐项片段（2026-10-21 用户反馈「光标在某列表项、兄弟项不应显示源码」）：紧凑列表
+   按项切块、每项一个遮罩。上面 no-btn 规则恢复的 14px 底距是「整列表底距」，只归属列表
+   **末项**；非末项片段底缘应 = 项间距 4px——把 ul/ol 自身底距清零，li 自身的
+   margin-bottom（4px）折进遮罩底缘（L2874 的 BFC 把它内收，不外溢）→ 片段底缘 =
+   li 底缘 + 4px，与整列表遮罩内项间距逐像素一致；叠起来的逐项片段总高与整列表遮罩
+   完全相同（S43 等高口径）。末项片段不挂本类，保留 14px 列表底距。 */
+.CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn.wysiwyg-mask-li-mid > *:last-child { margin-bottom: 0; }
 /* 标题块不挂「编辑」按钮（2026-10-19 用户反馈 #1）：同 no-btn 机制——h1–h6 成为
    last-child 后 12px margin-bottom（预览 h1–h6 统一值）被清零、遮罩矮 12px → 补回。 */
 .CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn-heading > *:last-child { margin-bottom: 12px; }
@@ -2928,12 +2935,15 @@ body.is-resizing .side-btn {
 }
 
 /* 块右上「编辑」按钮（所见即所得专属 chrome）：hover 显示，样式对齐代码块复制按钮
-   （2026-10-11 用户反馈 #4）。点击行为在 wysiwyg.js 遮罩 mousedown 接管（撤遮罩+定位块首行）。 */
+   （2026-10-11 用户反馈 #4）。点击行为在 wysiwyg.js 遮罩 mousedown 接管（撤遮罩+定位块首行）。
+   2026-10-17 用户反馈：代码块里「编辑/复制」两钮 top/padding 漂移（6px/3px 10px vs 8px/4px 12px）
+   导致高低不齐 → 与 .copy-btn 完全同指标（top/right 8px、padding 4px 12px），代码块内仅保留
+   right:76px 让位规则（见下）。 */
 .block-edit-btn {
   position: absolute;
-  top: 6px;
-  right: 10px;
-  padding: 3px 10px;
+  top: 8px;
+  right: 8px;
+  padding: 4px 12px;
   background-color: var(--bg-secondary);
   color: var(--text-secondary);
   border: 1px solid var(--border-color);
@@ -2952,6 +2962,10 @@ body.is-resizing .side-btn {
 }
 /* 代码块：复制按钮已占 pre 右上，编辑按钮左移避让 */
 .CodeMirror .wysiwyg-block-mask:has(> pre) .block-edit-btn { right: 76px; }
+/* 同排对齐（2026-10-17 用户反馈：编辑/复制不齐）：复制钮锚定 pre 的 padding box
+   （含 1px border-top），编辑钮锚定遮罩 border box（无 padding/边框）→ 复制钮天然低 1px。
+   仅遮罩上下文按边框厚度上移 1px 补偿（阅读模式复制钮仍 top:8px，单钮无需对齐）。 */
+.CodeMirror .wysiwyg-block-mask pre .copy-btn { top: 7px; }
 
 /* 活动块（光标所在块、源码态）背景（2026-10-11 用户反馈 #5 引入，2026-10-13 三轮修正：
    ① 修复选择器——addLineClass('background') 的类落在独立的 div.CodeMirror-linebackground
@@ -2973,6 +2987,143 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror div.CodeMirror-linebackground.cm-wysiwyg-active-last {
   border-bottom-left-radius: 6px;
   border-bottom-right-radius: 6px;
+}
+
+/* 代码块编辑态灰盒 = 整块一体（2026-10-18 用户要求：上下围栏都在灰框内；旧口径
+   2026-10-17「仅内容行、围栏在盒外」废弃）。渲染态 pre 盒的实测分解（2026-10-17
+   无头 Edge 逐层量出）：1px border + 16px pre 内距 + 12px code.hljs 内距
+   （.preview-content pre code.hljs 的 !important padding:12px 16px）+ n × .code-line
+   行高（1.8 × 0.9×预览字号，14.4px 字号下 = 25.92px/行）+ 同额底内距。编辑态整块
+   （开围栏/内容/闭围栏）逐行复现：
+   每行（wysiwyg-code-line，JS 挂围栏块整块每行含围栏）= 代码字族 + 0.9×字号 + 行高 1.8
+   （与 .code-line 同参 → 围栏行与内容行同高同宽排版）+ 左右 calc(行留白 + 33px)
+   （33 = 1 border + 16 pre + 16 hljs——渲染态代码文本 x = pre 左缘 + 33，而 pre 左缘
+   = 行基准 + 行留白，编辑态文本同位故加行留白，2026-10-21 用户截图修正：旧 33px 以
+   行基准为原点偏左）；首/末内容行补 29px 顶/底（1 border + 16 pre + 12 hljs，其中
+   1px 由 inset 描边占位）= 围栏与内容之间的 pre 内距。
+   → 灰盒总高 = 渲染态 pre 高 + 2×代码行高（开/闭围栏各一行，S67 断言 Δ<0.5px）。
+   特异性注意：本规则 4 类 1 元素，压过空行塌缩规则（.CodeMirror .cm-wysiwyg-blank
+   .CodeMirror-line，3 类）——渲染态代码内空行仍是一行 25.92px，编辑态必须同高。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line {
+  font-family: var(--font-code-preview);
+  font-size: calc(var(--wysiwyg-text-size, 16px) * 0.9);
+  line-height: 1.8;
+  padding-left: calc(var(--wysiwyg-line-inset, 32px) + 33px);
+  padding-right: calc(var(--wysiwyg-line-inset, 32px) + 33px);
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-pad-top { padding-top: 29px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-pad-bottom { padding-bottom: 29px; }
+/* 代码块编辑态语法色 ≡ 渲染态（2026-10-21 用户截图反馈「代码块编辑态文字高亮颜色与
+   渲染态不一样，改为一样的」）。渲染态围栏由 hljs 高亮（主题 lib/highlight.js/
+   github[-dark].min.css，theme.js 按明暗切换）；编辑态由 CM gfm 围栏内层模式
+   （javascript/python/…，editor-core L504-513 加载）tokenize，token 类 cm-keyword/
+   cm-def/… 吃 codemirror.css 默认色（亮）/ material-darker（暗）——两套色板不一致。
+   此处把编辑态围栏 token 色统一重映射到 GitHub hljs 色板（CM 类 → hljs 类逐组实测
+   映射，2026-10-21）：
+     基色（无 token 色文本）  ≡ .hljs（亮 #24292e / 暗 #c9d1d9）
+     cm-keyword（function/let/const/while/if/else/return） ≡ .hljs-keyword
+     cm-def（函数名/声明名）   ≡ .hljs-title.function_
+     cm-property（a.length/Math.floor） ≡ .hljs-title.function_（方法调用占多，
+        渲染态方法名即此紫；hljs 对纯属性不着色，属已知小残差）
+     cm-number ≡ .hljs-number；cm-string/cm-string-2 ≡ .hljs-string；
+     cm-atom ≡ .hljs-literal；cm-meta ≡ .hljs-meta；cm-attribute ≡ .hljs-attr
+     cm-variable-3/cm-type ≡ .hljs-attr（python 属性访问渲染态即蓝）
+     cm-comment ≡ .hljs-comment；cm-builtin ≡ .hljs-built_in
+     cm-tag ≡ .hljs-name（HTML 标签绿）；cm-qualifier ≡ .hljs-selector-pseudo
+     cm-negative/cm-positive ≡ .hljs-deletion/.hljs-addition（diff 围栏）
+   渲染态 hljs 色是固定色板（不随六套配色变，配色只换 --code-bg 底色）→ 此处用固定值
+   而非变量，保证两态像素级一致。范围限定 pre.wysiwyg-code-line（WYSIWYG 活动围栏整块
+   逐行 JS 挂，见 wysiwyg.js 代码块行类分支），经典编辑模式不受影响。
+   ⚠️ cm-variable-2/cm-variable/cm-operator/cm-link/cm-bracket：渲染态这些 token 无
+   hljs 着色（JS 文法不产 operator/params span，URL 不产 link）→ 继承基色中和主题色
+   （material-darker 的 cm-variable 是红、codemirror.css 的 cm-link 带下划线，都会漏出）。
+   围栏标志行（```lang）与 wysiwyg-code-fence 同身/嵌套（cm-comment 类也在其上）：
+   :not 排除同身 span，嵌套时内层 .wysiwyg-code-fence 规则按最近祖先仍赢——两种拓扑
+   都保住标志行的次级色设计（L3486），不被评论灰覆盖。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line { color: #24292e; }
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-keyword { color: #d73a49; }
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-def,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-property { color: #6f42c1; }
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-number,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-atom,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-meta,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-attribute,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-variable-3,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-type { color: #005cc5; }
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-string,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-string-2 { color: #032f62; }
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-comment:not([class*="wysiwyg-code-fence"]) { color: #6a737d; }
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-builtin { color: #e36209; }
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-tag,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-qualifier,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-positive { color: #22863a; }
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-negative { color: #b31d28; }
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-variable-2,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-variable,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-operator,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-bracket { color: inherit; }
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-link { color: inherit; text-decoration: none; }
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line { color: #c9d1d9; }
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-keyword { color: #ff7b72; }
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-def,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-property { color: #d2a8ff; }
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-number,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-atom,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-meta,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-attribute,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-variable-3,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-type { color: #79c0ff; }
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-string,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-string-2 { color: #a5d6ff; }
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-comment:not([class*="wysiwyg-code-fence"]) { color: #8b949e; }
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-builtin { color: #ffa657; }
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-tag,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-qualifier,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-positive { color: #7ee787; }
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-negative { color: #ffdcd7; }
+/* 暗态同样须中和 material-darker 的「渲染态无对应」token 色（cm-variable #f07178 红 /
+   cm-variable-2 #EEFFFF / cm-operator #89DDFF / cm-link 蓝下划线），否则漏出成异色 */
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-variable-2,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-variable,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-operator,
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-bracket { color: inherit; }
+[data-theme="dark"] .editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-line span.cm-link { color: inherit; text-decoration: none; }
+/* 灰盒底色+描边（2026-10-21 用户截图修正：旧 inset shadow 画满整个 linebackground =
+   整行宽（含左右各 --wysiwyg-line-inset 行留白区）——「编辑态左右没有空白全占满了」，
+   比渲染态 pre 圆角盒左右各宽出一整段行留白。linebackground 本身满行宽（codemirror.css
+   left/right:0），而遮罩 pre（渲染态）从行内容盒（行基准 + 行留白）起排 → 改用 ::before
+   内缩盒画底色+描边，left/right = 行留白，与渲染态 pre 逐缘对齐：左右竖线逐盒内行画
+   （行间叠成连续竖线）、顶线+上圆角在首行（开围栏行）、底线+下圆角在末行（闭围栏行，
+   2026-10-18 围栏行进盒后首/末行即围栏行）、单行块（开闭围栏同挂首末类）四边四角由
+   组合规则收口（旧 box-shadow 方案同特异性后规则覆盖首规则，单行会缺顶线）。水平几何
+   改内缩盒后垂直范围不变（仍整行高含 29px 顶/底内距），S67 高度断言随口径更新。
+   盒内每行（围栏+内容）均画背景层。 */
+.editor-container.wysiwyg-mode .CodeMirror div.CodeMirror-linebackground.cm-wysiwyg-code-box {
+  background: none; /* 底色移入 ::before 内缩盒（旧全行宽底色是编辑态偏宽的根因） */
+}
+.editor-container.wysiwyg-mode .CodeMirror div.CodeMirror-linebackground.cm-wysiwyg-code-box::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--wysiwyg-line-inset, 32px);
+  right: var(--wysiwyg-line-inset, 32px);
+  background: var(--code-bg);
+  border-left: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+}
+.editor-container.wysiwyg-mode .CodeMirror div.CodeMirror-linebackground.cm-wysiwyg-code-box.cm-wysiwyg-active-first::before {
+  border-top: 1px solid var(--border-color);
+  border-radius: 6px 6px 0 0;
+}
+.editor-container.wysiwyg-mode .CodeMirror div.CodeMirror-linebackground.cm-wysiwyg-code-box.cm-wysiwyg-active-last::before {
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 0 0 6px 6px;
+}
+.editor-container.wysiwyg-mode .CodeMirror div.CodeMirror-linebackground.cm-wysiwyg-code-box.cm-wysiwyg-active-first.cm-wysiwyg-active-last::before {
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 6px;
 }
 
 /* 表格单元格源码编辑态（Phase 2 / R5，2026-10-13）：点渲染表格的格子 → 该格
@@ -3111,8 +3262,8 @@ body.is-resizing .side-btn {
       截图对比打回。⚠️ 必须 calc(var + Npx) 而非裸值：本规则特异性更高，裸值会把
       基准 32px 整个替换掉（实测序号落到 x=12）。
       任务列表渲染 padding-left:0（复选框贴行首，::before 已对齐行首）→ 不叠加。
-      嵌套层级缩进（渲染每层 24px vs 源 2 空格）未对齐——本规则只对齐顶层左缘，
-      深层保持源缩进（近似）。 */
+      嵌套层级缩进（渲染每层 24px vs 源 2 空格）：
+      深层按 wysiwyg-list-lvl-N / wysiwyg-list-cont 行类逐层对齐（2026-10-17 源前导空格零宽化，见下方规则）。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line {
   padding-bottom: 4px;
 }
@@ -3123,6 +3274,78 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ol {
   padding-left: calc(var(--wysiwyg-line-inset, 32px) + 8px);
 }
+/* 嵌套列表层级（2026-10-17 用户截图：列表有嵌套子项时两态不一致）——渲染态每层多一圈
+   padding-left:24px（li 文本 x = 56 + 24×(层-1)，S68 实测），编辑态按行类同额叠加；
+   行前导缩进源空格已零宽化（.wysiwyg-list-space-zero）→ padding 与源空格数无关。
+   三口径（与顶层规则同构）：
+   ① ul 项/ul 续行（带 -indent-ul）：基准 +13 + 24(N-1)（圆点槽仍吃 13px 差值）；
+   ② ol 续行（带 -indent-ol）：24 + 24(N-1)（正文直接落 li 内容缘）；
+   ③ ol 项行 / 任务行（无 indent 类，24px 槽本身即第一圈）：24(N-1)。
+   N=2..6（良构文档嵌套 ≤6 层；超限按 6 层封顶）。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ul.wysiwyg-list-lvl-2 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 13px + 24px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ul.wysiwyg-list-lvl-3 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 13px + 48px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ul.wysiwyg-list-lvl-4 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 13px + 72px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ul.wysiwyg-list-lvl-5 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 13px + 96px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ul.wysiwyg-list-lvl-6 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 13px + 120px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ol.wysiwyg-list-lvl-2 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px + 24px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ol.wysiwyg-list-lvl-3 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px + 48px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ol.wysiwyg-list-lvl-4 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px + 72px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ol.wysiwyg-list-lvl-5 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px + 96px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-indent-ol.wysiwyg-list-lvl-6 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px + 120px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-lvl-2 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-lvl-3 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 48px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-lvl-4 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 72px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-lvl-5 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 96px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-lvl-6 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 120px); }
+/* 续行（无 marker 的列表内行）：正文直接落 li 内容缘 = 行基准 + 24×层
+   （2026-10-17；旧「+13/+8 + 源空格近似」有 1–3px 漂移，随源空格零宽化一并废弃）。
+   3 类复合规则压过 -indent-ul/-indent-ol（2 类，文件序亦在前）。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-cont { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-cont.wysiwyg-list-lvl-2 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px + 24px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-cont.wysiwyg-list-lvl-3 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px + 48px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-cont.wysiwyg-list-lvl-4 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px + 72px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-cont.wysiwyg-list-lvl-5 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px + 96px); }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-line.wysiwyg-list-cont.wysiwyg-list-lvl-6 { padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px + 120px); }
+/* 行前导缩进零宽槽（同 .wysiwyg-ol-space 机制）：源空格占位不占宽，正文/marker 落点
+   完全由行类 padding 决定（与源空格数解耦）。空格本就不可见；nowrap 防多字符在
+   width:0 盒内逐字换行撑高行盒（S41 同族口径）。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-list-space-zero {
+  display: inline-block;
+  width: 0;
+  white-space: nowrap;
+}
+/* ol 二级 marker：渲染态 paren-decimal「N)」——源「N.」被 CM5 拆成「数字槽」+「点 span」
+   两个兄弟 span（重叠区间合并同元素挂双类、不可嵌套，2026-10-17 实测 DOM），按双类收口：
+   ① 数字槽（含双类槽不受影响）padding-right 4.4 → 9.228px（= 4.4 + 「)」advance 4.828，
+      预览字体 16px canvas 实测 2026-10-17）：数字 advance 盒右缘 = 80−9.228 = 70.772，
+      与渲染原生「N)」数字同相（右对齐锚点 80−4.4 = 75.6 减「)」advance）；
+   ② 点 span（wysiwyg-ol-marker.wysiwyg-ol-paren）：0 宽 + 透明 + ::after 画「)」于
+      left: -9.228px（span 在槽右缘 80px 处，回画 = 渲染「)」墨迹同相 70.772..74.772）；
+   ③ 正文恒落槽右缘 80px = 渲染 li 内容缘（0 宽 span 不占宽）。
+   仅 lvl-2 生效；三级 circled-decimal（①②…）暂不跟随（源数字无法按字形映射，保持源文）。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-list-lvl-2 .wysiwyg-ol-marker {
+  padding-right: 9.228px;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-list-lvl-2 .wysiwyg-ol-marker.wysiwyg-ol-paren {
+  width: 0;
+  padding-right: 0;
+  text-align: left;
+  color: transparent;
+  position: relative;
+  white-space: nowrap;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-list-lvl-2 .wysiwyg-ol-marker.wysiwyg-ol-paren::after {
+  content: ')';
+  position: absolute;
+  left: -9.228px;
+  top: 0;
+}
+/* ul 嵌套 marker：渲染 list-style-type 虽按层变（L1 disc / L2 circle / L3 square /
+   L4+ disc），但本机 Edge 154（=app WebView2 同引擎）@16px 下三者墨迹均为
+   ~6px 实心点（2026-10-17 逐像素裁剪对比：circle 无可见空心、square 与 disc 同径）
+   → 编辑态各层同用 disc 画圆即两态一致，不做按层形态覆盖（曾按 CSS 语义画空心环/
+   方块，反而比渲染态更"花"，用户口径是两态一样）。圆心仍随 lvl 行类 padding 平移
+   （41px+24×(层-1)，S68 断言）。 */
 /* 点块进编辑的块高补齐（2026-10-15 用户截图：「点击编辑后内容会向上动一下」；
    2026-10-17 随遮罩盒模型归零重标定）：遮罩高度 = 渲染内容 + 14px（ul/ol/p 自身
    margin-bottom——BFC（display:flow-root）把它内收进遮罩底缘，> *:last-child 清零
@@ -3139,6 +3362,65 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-list-line.wysiwyg-block-edge-bottom,
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-para-line.wysiwyg-block-edge-bottom {
   padding-bottom: 14px;
+}
+/* 标题块编辑态块高补齐（S71 2026-10-21 用户反馈「点某行进编辑态再点其他行，页面往下移动
+   一段距离」）：遮罩高 = h 文本行（行高 1.3）+ padding-bottom + border-bottom + 12px 底距
+   （wysiwyg-mask-no-btn-heading 规则恢复，见上 L2912）；编辑态源行走 wysiwyg-plain-text
+   行高 1.7 且无底距 → 活动标题块比遮罩矮（实测 h1 54.39 vs 65.59、h2 40.8 vs 52.19，
+   ~11px）→ 切块重挂遮罩时标题下方内容整体跳 ~11px（「页面往下移动一段距离」的主体之一）。
+   补法（S43 同族）：活动标题行行高改 1.3（与渲染 h1–h6 同参：行盒=渲染行盒，字号仍由
+   wysiwyg-heading-text-N span 的 2em…0.9em 决定）+ 末行 padding-bottom = 渲染
+   padding-bottom + 边框厚 + 12px 底距（边框不画——2026-10-14 定稿活动标题不加下划线，
+   其厚度折进 padding）：h1 10+2+12=24 / h2 8+1+12=21 / h3–h6 0+0+12=12。
+   顶缘不补：遮罩首子 margin-top 归零（> *:first-child），渲染 h 的 24px 顶距不进遮罩高。
+   行高用**无单位 1.3**（与渲染 h1–h6 的 line-height:1.3 同参）：h1–h5 字号 ≥1em，文本
+   行盒（字号×1.3）≥ pre 基准字号（16px）strut（20.8），行盒恒=渲染行盒（h1 41.6 / h2
+   31.2 / h3 26 / h4 22.88 / h5 20.8 实测逐像素）。h6（0.9em=14.4px）文本行盒 18.72 <
+   strut 20.8 会被顶到 20.8（Δ+2.08px）→ 单独处理：pre 自身字号降到 0.9em（strut 变
+   18.72，与渲染 h6 同一字体上下文），em 系 span 按级补偿（正文 0.9em→1em、# 前缀
+   0.8em→px 直值 12.8）。⚠️ 不可用 px 行高替代：px 行高下 Chromium 按字体自然行高
+   （ascent+descent）顶高行盒（h2 实测 31.2→35.2、h1 +8px），与渲染态（无单位）失配。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-heading-line { line-height: 1.3; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-heading-line-1 { padding-bottom: 24px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-heading-line-2 { padding-bottom: 21px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-heading-line-3,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-heading-line-4,
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-heading-line-5 { padding-bottom: 12px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-heading-line-6 {
+  font-size: calc(var(--wysiwyg-text-size, 16px) * 0.9);
+  line-height: 1.3;
+  padding-bottom: 12px;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-heading-line-6 .wysiwyg-heading-text { font-size: 1em; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-heading-line-6 .wysiwyg-heading-hash { font-size: calc(var(--wysiwyg-text-size, 16px) * 0.8); }
+/* 定义列表（dl/dt/dd）编辑态 = 渲染态（2026-10-18 用户截图：编辑态 `: ` 冒号裸露、
+   dd 无缩进、dt 不加粗，且点 dd 行光标落 dt 行——落行修复见 wysiwyg.js 遮罩 mousedown）。
+   渲染态实测口径（.preview-content dl/dt/dd）：dt 粗 600 + margin-top 8px；dd 24px 左缩进
+   + --text-secondary + margin-bottom 8px；dl margin-bottom 16px。遮罩 BFC（flow-root）把
+   dl 的 margin 内收进遮罩高，折叠口径：块首 dt 顶距 = max(dt mt 8, dl mt 0) = 8px；
+   相邻 dd(mb 8) 与下一 dt(mt 8) 折叠 = 8px；块末 dd(mb 8) 与 dl(mb 16) 折叠 = 16px。
+   编辑态 padding 不折叠，按折叠后净距逐行补齐：块首 dt 行 +8 顶（edge-top 类）、
+   非末 dd 行 +8 底、块末 dd 行 +16 底（edge-bottom 类，覆盖 8px）→ 纯 dl 块（任意
+   dt/dd 对数）与遮罩逐像素等高（S70 断言 Δ<0.5px）。`: ` 前缀透明化保持源宽
+   （同列表符号教训：不可 width:0，光标测量与行尾 caret 锚定依赖真实宽度）。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-dt-line {
+  font-weight: 600;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-dt-line.wysiwyg-block-edge-top {
+  padding-top: 8px;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-dd-line {
+  /* 行基准留白 32px（L2850 基准规则）上叠加 24px（同列表 indent 规则的 calc 口径——
+     直接写 24px 会把基准 32px 整个替换，dd 文本反而左移到 x=24） */
+  padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px);
+  padding-bottom: 8px;
+  color: var(--text-secondary);
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-dd-line.wysiwyg-block-edge-bottom {
+  padding-bottom: 16px;
+}
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-dd-colon {
+  color: transparent;
 }
 /* 源字符保持真实宽度（光标测量精准），仅透明化；渲染符号由 ::before 绝对定位覆盖。
    ⚠️ 不可用 width:0 + overflow:hidden——会连 ::before 符号一起裁掉（2026-10-14 截图实测）。 */
@@ -3275,7 +3557,7 @@ body.is-resizing .side-btn {
 
 /* WYSIWYG 代码块活动态（2026-10-14 用户要求）：在渲染灰盒内编辑（灰盒 = 活动高亮
    --code-bg 圆角盒，与渲染代码块同色同角），与渲染态的唯一区别 = 上下围栏
-   ```lang / ``` 灰显为语法标志。 */
+   ```lang / ``` 灰显为语法标志且仍在盒内（2026-10-18 用户要求：围栏行进灰框）。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-code-fence {
   color: var(--text-secondary);
 }
@@ -3370,6 +3652,11 @@ body.is-resizing .side-btn {
   display: inline-block;
   width: 0;
   white-space: nowrap;
+  /* line-height:0（2026-10-21 逐项切块行盒校准）：inline-block 按基线对齐时其 27.2px
+     行盒会把所在源行行盒撑高 +0.99px（实测 28.19 vs 素行 27.19）→ 活动行比渲染片段
+     高、切块时块下内容位移（S72 参照行 1px 跳）。line-height:0 只消行盒 strut，字号/
+     基线不变（⚠️ 与上方禁用 font-size:0 不同：字体度量原样，标记字符渲染位置不动）。 */
+  line-height: 0;
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-bold { font-weight: var(--preview-bold-weight, 700); }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-italic { font-style: italic; }
@@ -3485,6 +3772,15 @@ body.is-resizing .side-btn {
   width: auto;
   color: var(--text-secondary);
 }
+/* 遮罩片段行盒 ≡ 源行行盒（2026-10-21 逐项切块行盒校准）：行内 code 带 2px 竖 padding
+   （行盒 27.94px）、mark 带 1px 竖 padding 且 inline-block（行盒 29.19px），均高于正文
+   27.2px → 渲染片段行比源行高，点项进源文态时块下内容位移 0.3~1px（S72 参照行跳）。
+   遮罩上下文（.wysiwyg-block-mask）去掉两者竖 padding，行盒统一回正文行高；阅读模式
+   .preview-content 规则不受影响。与源文态同观感：活动块内的 wysiwyg-inline-code /
+   wysiwyg-highlight 本就是紧凑底色（无 padding，见上方 L3584/L3587）——遮罩侧去 padding
+   后两态行内底色盒高度一致。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask code { padding-top: 0; padding-bottom: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask mark { padding-top: 0; padding-bottom: 0; }
 
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask table td.wysiwyg-cell-editing,
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask table th.wysiwyg-cell-editing {
@@ -3723,9 +4019,10 @@ body.wysiwyg-table-dragging * { cursor: grabbing !important; user-select: none !
    max(0, 下块 margin-top − 上块 margin-bottom)，使「块底 + 空行 + 块顶」总间隙
    与阅读模式的 margin 折叠值逐像素一致（用户要求：实时预览与源码预览样式完全
    一致含行间距）。12px 仍作用于：块内空行（松散列表项间等）与未映射的兜底态。
-   光标所在空行：块内空行由 JS 临时摘类恢复全高（提示需要可见）；块间独立空行
-   保持塌缩不展开、不显示「输入 / 可插入内容…」提示（2026-10-17 用户要求：
-   点击行与行之间的缝隙不允许出现新行，回车才出新行）。 */
+   光标所在空行：由 JS 临时摘类恢复全高（光标与光标行灰底指示需要可见）——块内/
+   块间空行同口径（2026-10-21 修订；块间空行无光标时保持塌缩：点击行与行之间的
+   缝隙不出现「新行」观感——不创建行，回车才出新行，2026-10-17）。光标所在块间空行
+   不显示「输入 / 可插入内容…」提示（empty-hint.js 口径不变）。 */
 .CodeMirror .cm-wysiwyg-blank .CodeMirror-line { line-height: 12px; }
 
 /* 遮罩所在行：行盒 strut（行自身的行高盒）会额外撑出一行高度。
@@ -4405,6 +4702,29 @@ body.is-resizing-row .sidebar-h-resizer {
 
 #folder-tree.tree-drop-root {
   box-shadow: inset 0 0 0 2px var(--accent-color);
+}
+
+/* 拖放移动（指针事件重构）：拖拽影子=克隆行跟随鼠标（transform 定位，pointer-events:none
+   保证不遮挡 elementFromPoint 落点解析）；拖拽期间整页光标由 body 驱动
+   （JS 设 move / not-allowed），并强制继承覆盖各行自身光标，禁止选中文本 */
+.tree-drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10000;
+  pointer-events: none;
+  opacity: 0.85;
+  overflow: hidden;
+}
+
+body.tree-dragging,
+body.tree-dragging * {
+  cursor: inherit !important;
+}
+
+body.tree-dragging {
+  cursor: move;
+  user-select: none;
 }
 
 .tree-arrow {

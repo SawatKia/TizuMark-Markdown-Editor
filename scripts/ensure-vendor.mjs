@@ -183,4 +183,56 @@ if (missing > 0) {
   process.exit(1);
 }
 
+// TizuMark CM5 本地补丁（2026-10-21 WYSIWYG「输入文字页面乱跳」修复）：
+// codemirror.js 是从 node_modules 确定性再生的 vendor 副本（src/lib/codemirror/ 在
+// .gitignore 内、不进 git），下列两处修复只存在于该文件——每次复制后必须在此重新打，
+// 否则下一次 npm install / npm ci 会抹掉修复、乱跳/跳顶静默复发。
+// 口径：严格字符串替换。已含 marker = 幂等跳过；锚点消失且无 marker = vendor 源码
+// 变了（CM 升级等）→ 必须失败显式报出，绝不静默跳过（静默 = 修复悄悄丢失）。
+function applyTizuMarkCm5Patches() {
+  const dest = path.join(LIB, 'codemirror', 'codemirror.js');
+  let code = fs.readFileSync(dest, 'utf8');
+  const patches = [
+    {
+      // 已渲染行保留实测行高：WYSIWYG 遮罩是行内 markText(replacedWith)，估算式
+      // widgetsHeight+文本行高会把 2600px TOC 遮罩行/340px 图片行重置回 ~15px，
+      // lineWrapping 下每次 refresh 都跑本函数 → 操作末 mustScroll 单跳数千 px 跳顶。
+      name: 'estimateLineHeights 跳过已渲染行（WYSIWYG 遮罩行保留实测行高）',
+      marker: 'if (rendered.has(line)) return;',
+      from: 'function estimateLineHeights(cm) {\n    var doc = cm.doc, est = estimateHeight(cm);\n    doc.iter(function (line) {\n      var estHeight = est(line);\n      if (estHeight != line.height) { updateLineHeight(line, estHeight); }\n    });\n  }',
+      to: 'function estimateLineHeights(cm) {\n    var doc = cm.doc, est = estimateHeight(cm);\n    // TizuMark 补丁（2026-10-21 WYSIWYG 不跳顶）：已渲染（display.view 在视口内）的行保留实测行高，\n    // 不做启发式估算——WYSIWYG 遮罩是行内 markText(replacedWith) 节点（非 line.widgets），估算式\n    // 会把 TOC 大遮罩行/图片行重置回单行高，lineWrapping 下每次 refresh 重估 → 操作末\n    // updateHeightsInViewport 按「实测 − 被重置记录值」补偿 scroller.scrollTop，单跳可达数千 px。\n    // 未渲染行照旧估算（滚动条预估所需，原语义不变）。\n    var view = cm.display.view, rendered = new WeakSet();\n    for (var i = 0; i < view.length; i++) {\n      var vl = view[i] && view[i].line;\n      if (vl) rendered.add(vl);\n    }\n    doc.iter(function (line) {\n      if (rendered.has(line)) return;\n      var estHeight = est(line);\n      if (estHeight != line.height) { updateLineHeight(line, estHeight); }\n    });\n  }',
+    },
+    {
+      // refresh 以真实滚动重同步：原生滚动锚定在 CM 操作之外移动真实滚动条，
+      // doc.scrollTop 只在操作末同步；按陈旧 doc 值做 pending 重断言会把已修正
+      // 位置改回，上层 delta 补偿再二次计入（实测 2570 vs 3161 → 1182px 过冲）。
+      name: 'refresh() 首句以真实 scroller 滚动同步 doc.scrollTop',
+      marker: 'if (this.display.wrapper.offsetHeight) { this.doc.scrollTop = this.display.scroller.scrollTop; }',
+      from: 'refresh: methodOp(function() {\n        var oldHeight = this.display.cachedTextHeight;\n        regChange(this);',
+      to: 'refresh: methodOp(function() {\n        var oldHeight = this.display.cachedTextHeight;\n        // TizuMark 补丁（2026-10-21 WYSIWYG 不跳顶）：浏览器原生滚动锚定会在视口上方内容高度变化时\n        // （遮罩占位缩放等，CM 操作之外）移动真实滚动条，而 doc.scrollTop 只在操作结束才同步；\n        // 按陈旧 doc 值做 pending 重断言会把已被修正的实际位置改回，上层 delta 补偿再二次计入\n        // （harness 实测 TOC 占位窗口内真实滚动 3161 vs doc.scrollTop 2570，最终 1182px 过冲）。\n        // 与 endOperation_finish 的同步方向一致：以真实当前滚动为准。\n        if (this.display.wrapper.offsetHeight) { this.doc.scrollTop = this.display.scroller.scrollTop; }\n        regChange(this);',
+    },
+  ];
+  let bad = 0;
+  for (const p of patches) {
+    if (code.indexOf(p.marker) !== -1) {
+      console.log('[ensure-vendor] CM5 补丁已在（幂等跳过）：' + p.name);
+      continue;
+    }
+    if (code.indexOf(p.from) === -1) {
+      console.error(`[ensure-vendor] CM5 补丁锚点未找到：${p.name}（vendor 源码已变化，须更新补丁；拒绝继续以免修复静默丢失）`);
+      bad++;
+      continue;
+    }
+    code = code.replace(p.from, p.to);
+    console.log('[ensure-vendor] CM5 补丁已应用：' + p.name);
+  }
+  fs.writeFileSync(dest, code);
+  if (bad > 0) {
+    console.error(`[ensure-vendor] ${bad} 个 CM5 补丁未应用，vendor 不完整`);
+    process.exit(1);
+  }
+}
+
+applyTizuMarkCm5Patches();
+
 console.log('[ensure-vendor] vendor 同步完成：src/lib（codemirror/katex/mermaid/html2canvas/markdown-it/highlight.js）');

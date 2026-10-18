@@ -160,9 +160,12 @@ try {
   const off = a.offset || 0;
   const inView = a.samples.filter(Boolean).every(s => s.top >= off && s.top < off + 600);
   const checks3 = [
-    // 硬底线：被点中的源码行必须留在视口内——这才是「不乱跳」；像素级回到点击点只是锦上添花
+    // 硬底线：被点中的源码行必须留在视口内——这才是「不乱跳」
     [`每次点击后目标源码行都在视口内（${off} ≤ top < ${off + 600}）: ${inView}`, inView],
-    [`点击锚定精确到亚像素（最大偏差 ${a.maxGap}px，应 < 8）`, a.maxGap < 8],
+    // S71 口径（2026-10-21 用户反馈「点某行进编辑态再点其他行，页面往下移动一段距离」）：
+    // 被点源码行顶边落回撤罩前位置（像素级一致块 → 页面不动）；旧口径「行顶回点击 y」
+    // 会把行顶钉到点击点，点行中部整页下移半个行高（最大偏差曾 26px = h2 遮罩半高）
+    [`被点行顶边落回撤罩前位置（最大偏差 ${a.maxGap}px，应 < 1）`, a.maxGap < 1],
     [`点击锚点已消费、无残留（残留会污染后续光标移动导致乱跳）: ${a.residualClean}`, a.residualClean],
   ];
   for (const [label, ok] of checks3) {
@@ -383,7 +386,9 @@ try {
       bt.plainNoBtn === true],
     [`按钮默认隐藏（opacity 0，hover 显现）: ${bt.defaultOpacity}`, bt.defaultOpacity === '0'],
     [`代码块内让位复制按钮（right=76px）: ${bt.codeOffsetOk}`, bt.codeOffsetOk === true],
-    [`普通块 right=10px: ${bt.plainOffset}`, bt.plainOffset === true],
+    [`普通块 right=8px（2026-10-17 与复制按钮统一指标后由 10px 改 8px）: ${bt.plainOffset}`, bt.plainOffset === true],
+    [`代码块「编辑/复制」两钮同排对齐（中心 Y 差 ${bt.btnPair && bt.btnPair.centerGap}px / 高度差 ${bt.btnPair && bt.btnPair.heightGap}px，2026-10-17 用户反馈）`,
+      bt.btnPairAligned === true],
     [`点击编辑按钮（引用块）：解罩 + 光标落块首行: ${JSON.stringify(bt.click)}`,
       bt.click && bt.click.unmasked === true && bt.click.activeIdx >= 0 && bt.click.cursorLine === bt.click.expectedLine],
   ];
@@ -409,9 +414,9 @@ try {
     [`灰底随光标在块内移动（行 13 有底、行 12 撤底）: ${JSON.stringify(hl.inListFollow)}`,
       hl.inListFollow && hl.inListFollow.line13 === true && hl.inListFollow.line12 === false &&
       hl.inListFollow.rows === 1 && hl.inListFollow.singleLineAllCorners === true],
-    [`移到块间空行：全部撤光 + 角类清除（块重新遮罩）: ${JSON.stringify(hl.onBlank)}`,
-      hl.onBlank && hl.onBlank.activeIdx === -1 && hl.onBlank.line12 === false && hl.onBlank.line13 === false &&
-      hl.onBlank.noBgDiv === true],
+    [`移到块间空行：块行全部撤光（行 12/13 无底）+ 块重新遮罩；光标行（行 1）保留灰底（2026-10-21 修订：块间空行光标行全高 + 灰，S69 同源）: ${JSON.stringify(hl.onBlank)}`,
+      hl.onBlank && hl.onBlank.activeIdx === -1 && hl.onBlank.line1 === true &&
+      hl.onBlank.line12 === false && hl.onBlank.line13 === false && hl.onBlank.bgRows === 1],
   ];
   for (const [label, ok] of checks15) {
     console.log(`  ${ok ? '✓' : '✗'} ${label}`);
@@ -1322,9 +1327,11 @@ try {
       const initial = await read();
       console.log('  初始(ul 活动): ' + JSON.stringify(initial));
       const checks31 = [];
-      checks31.push(['初始：ul 活动行 = 3 个•圆点 + 条目文字（含嵌套），其余 4 块遮罩',
-        initial.bullets === 3 && initial.listTexts.join('|') === '无序条目一|无序条目二|嵌套条目' &&
-        initial.masks === 4 && initial.activeIdx === 0]);
+      // 紧凑列表逐项切块（2026-10-21）：初始光标在行 0 → ul 首项块活动（1 圆点）；
+      // 点 DOM 首个 ul 遮罩 = 含嵌套子项的第二项块（父+子 2 圆点）；ol/task 同理逐项。
+      checks31.push(['初始：ul 首项活动行 = 1 个•圆点 + 条目文字，其余 7 块遮罩',
+        initial.bullets === 1 && initial.listTexts.join('|') === '无序条目一' &&
+        initial.masks === 7 && initial.activeIdx === 0]);
       let r = await page.evaluate(() => window.__s31rects());
       if (!r.ol) {
         checks31.push(['ol 块：未找到遮罩（场景异常）', false]);
@@ -1333,9 +1340,9 @@ try {
         await new Promise(rr => setTimeout(rr, 200));
         const st = await read();
         console.log('  点 ol 后: ' + JSON.stringify(st));
-        checks31.push(['点 ol：数字序号 1./2. 原样渲染 + 条目文字（预览字族）',
-          st.olMarkers.join('|') === '1.|2.' && st.listTexts.join('|') === '有序条目一|有序条目二' &&
-          st.bullets === 0 && st.masks === 4]);
+        checks31.push(['点 ol（首项）：数字序号 1. 原样渲染 + 条目文字（预览字族）',
+          st.olMarkers.join('|') === '1.' && st.listTexts.join('|') === '有序条目一' &&
+          st.bullets === 0 && st.masks === 7]);
       }
       r = await page.evaluate(() => window.__s31rects());
       if (!r.task) {
@@ -1345,9 +1352,9 @@ try {
         await new Promise(rr => setTimeout(rr, 200));
         const st = await read();
         console.log('  点 task 后: ' + JSON.stringify(st));
-        checks31.push(['点 task：0 圆点（任务项渲染态无黑点）+ 2 前缀槽（1 勾选）+ 任务文字（含框后源空格间距）',
-          st.bullets === 0 && st.taskBoxes === 2 && st.taskChecked === 1 &&
-          st.listTexts.join('|') === ' 未完成任务| 已完成任务' && st.masks === 4]);
+        checks31.push(['点 task（首项）：0 圆点（任务项渲染态无黑点）+ 1 前缀槽（未勾选）+ 任务文字（含框后源空格间距）',
+          st.bullets === 0 && st.taskBoxes === 1 && st.taskChecked === 0 &&
+          st.listTexts.join('|') === ' 未完成任务' && st.masks === 7]);
       }
       r = await page.evaluate(() => window.__s31rects());
       if (!r.code) {
@@ -1357,15 +1364,15 @@ try {
         await new Promise(rr => setTimeout(rr, 200));
         const st = await read();
         console.log('  点 code 后: ' + JSON.stringify(st));
-        checks31.push(['点 code：上下围栏灰显（```js / ```）+ 整块灰盒 4 行',
+        checks31.push(['点 code：上下围栏灰显（```js / ```）+ 灰盒=整块 4 行（2026-10-18：上下围栏进灰框，含围栏 2 行）',
           st.fences.join('|') === '```js|```' && st.activeBoxLines === 4 &&
-          st.listTexts.length === 0 && st.masks === 4]);
+          st.listTexts.length === 0 && st.masks === 7]);
         // 行内编辑：代码块内输入 → 装饰稳定（围栏不变）
         await page.keyboard.type('X');
         await new Promise(rr => setTimeout(rr, 150));
         const stE = await read();
         checks31.push(['代码块内输入：围栏装饰稳定（仍 2 段灰显）',
-          stE.fences.join('|') === '```js|```' && stE.masks === 4]);
+          stE.fences.join('|') === '```js|```' && stE.masks === 7]);
       }
       r = await page.evaluate(() => window.__s31rects());
       if (r.para) {
@@ -1375,7 +1382,7 @@ try {
         console.log('  点段落后: ' + JSON.stringify(stP));
         checks31.push(['点段落：列表/代码装饰全清（无残留 span）',
           stP.bullets === 0 && stP.taskBoxes === 0 && stP.olMarkers.length === 0 &&
-          stP.fences.length === 0 && stP.masks === 4]);
+          stP.fences.length === 0 && stP.masks === 7]);
       } else {
         checks31.push(['点段落：未找到遮罩（场景异常）', false]);
       }
@@ -1651,7 +1658,7 @@ try {
             p6: window.__s35plain(6), p7: window.__s35plain(7), p8: window.__s35plain(8),
           }));
           console.log('  点围栏后: ' + JSON.stringify(f));
-          checks35.push(['代码块：整块灰盒（首/中/末行均有底）',
+          checks35.push(['代码块：灰盒=整块（行7 有底；开/闭围栏行 6/8 同挂灰底在盒内，2026-10-18 新口径）',
             f.activeIdx === 2 && f.bg6 === true && f.bg7 === true && f.bg8 === true]);
           checks35.push(['代码块：源文行不挂 plain-text（保持等宽源文 + 语法色）',
             f.p6 === false && f.p7 === false && f.p8 === false]);
@@ -1769,10 +1776,11 @@ try {
       };
       const allToksOk = (info) => Array.isArray(info.toks) && info.toks.length > 0 && info.toks.every(t => t.ok);
       const spanOf = (info, cls) => (info.spans || []).find(s => s.cls.indexOf(cls) !== -1);
-      // 初始：光标在行0（标题）→ 标题块活动，其余 7 块全部渲染遮罩
+      // 初始：光标在行0（标题）→ 标题块活动，其余 10 块全部渲染遮罩
+      //（紧凑列表逐项切块后块表 = 11 块：ul 2 项 + ol 2 项 + task 2 项各拆单项）
       const masked0 = await page.evaluate(() => window.__s38maskedBlocks());
       const h0 = await page.evaluate(() => window.__s38spanInfo(0));
-      chk38('初始：7 个块渲染遮罩（标题块活动）', masked0.length === 7, JSON.stringify(masked0));
+      chk38('初始：10 个块渲染遮罩（标题块活动）', masked0.length === 10, JSON.stringify(masked0));
       const hts1 = spanOf(h0, 'wysiwyg-heading-text-1');
       chk38('标题行：正文 span 渲染尺寸 32px + 粗体 700（对齐渲染态 h1）',
         !!hts1 && hts1.fs === '32px' && hts1.fw === '700', JSON.stringify(hts1));
@@ -1836,14 +1844,16 @@ try {
       if (ptUl) {
         await page.mouse.click(ptUl.x, ptUl.y);
         await sleep38(250);
+        // 逐项切块契约（2026-10-21）：点某项只解罩该项，兄弟项保持渲染遮罩
         const mUl = await page.evaluate((n) => ({ a: window.__s38masked(n - 1), b: window.__s38masked(n) }), ul2);
-        chk38('点列表后：整块源文态（两项都解罩）', mUl.a === false && mUl.b === false, JSON.stringify(mUl));
+        chk38('点列表项后：仅点击项源文态、兄弟项保持遮罩', mUl.a === true && mUl.b === false, JSON.stringify(mUl));
         const iA = await page.evaluate((n) => window.__s38spanInfo(n), ul2 - 1);
         const iB = await page.evaluate((n) => window.__s38spanInfo(n), ul2);
-        chk38('列表项：圆点符号渲染化（wysiwyg-list-bullet）', !!spanOf(iA, 'wysiwyg-list-bullet') && !!spanOf(iB, 'wysiwyg-list-bullet'));
-        chk38('列表项：正文预览字族 span + plain-text', !!spanOf(iA, 'wysiwyg-list-text') && iA.plain && iB.plain);
-        chk38('列表项：行内 ** / == 渲染化', !!spanOf(iA, 'wysiwyg-bold') && !!spanOf(iB, 'wysiwyg-highlight'));
-        chk38('列表项：token 色继承', allToksOk(iA) && allToksOk(iB));
+        chk38('列表项：圆点符号渲染化（wysiwyg-list-bullet）', !!spanOf(iB, 'wysiwyg-list-bullet'));
+        chk38('列表项：正文预览字族 span + plain-text', !!spanOf(iB, 'wysiwyg-list-text') && iB.plain === true);
+        chk38('列表项：行内 == 高亮渲染化', !!spanOf(iB, 'wysiwyg-highlight'));
+        chk38('列表项：token 色继承', allToksOk(iB));
+        chk38('兄弟项保持遮罩（无 wysiwyg 装饰 span）', (iA.spans || []).length === 0);
         await page.evaluate(({ n, ch }) => window.__s38cursor(n, ch), { n: ul2, ch: await page.evaluate((n) => window.__s38lineLen(n), ul2) });
         await page.keyboard.press('Enter');
         await sleep38(120);
@@ -1915,8 +1925,9 @@ try {
         const iT = await page.evaluate((n) => window.__s38spanInfo(n), t2);
         const iT0 = await page.evaluate((n) => window.__s38spanInfo(n), t2 - 1);
         const box = spanOf(iT, 'wysiwyg-task-prefix'), box0 = spanOf(iT0, 'wysiwyg-task-prefix');
-        chk38('任务行：复选框渲染化（[x] 勾选态 / [ ] 未勾选态）',
-          !!box && box.cls.indexOf('checked') !== -1 && !!box0 && box0.cls.indexOf('checked') === -1,
+        // 逐项切块契约：点击项（[x] 勾选态）解罩渲染化；兄弟项（[ ]）保持遮罩、无 span
+        chk38('任务行：复选框渲染化（[x] 勾选态；兄弟 [ ] 项保持遮罩）',
+          !!box && box.cls.indexOf('checked') !== -1 && box0 == null,
           JSON.stringify({ box: box && box.cls, box0: box0 && box0.cls }));
         await page.evaluate(({ n, ch }) => window.__s38cursor(n, ch), { n: t2, ch: await page.evaluate((n) => window.__s38lineLen(n), t2) });
         await page.keyboard.press('Enter');
@@ -2109,9 +2120,12 @@ try {
     const B = await runS40('list');
     if (B) {
       console.log('  list Enter#1 后: ' + JSON.stringify(B.st1));
-      s40Push('[list] Enter#1：续行 "- "、光标新行、块保持活动', sameL(B.st1.lines, ['- 32333223', '- ']) && B.st1.cursor.line === 1 && B.st1.cursor.ch === 2
-        && B.st1.activeIdx === 0 && B.st1.marks.length === 0);
-      s40Push('[list] +600ms：仍保持活动', B.st2.activeIdx === 0 && B.st2.marks.length === 0);
+      // 逐项切块契约（2026-10-21）：回车续行 = 新项块（光标行源文态可继续输入）；
+      // 旧项重遮回渲染——与段落 Enter「旧段恢复渲染」同口径（用户不再在旧项行上）。
+      s40Push('[list] Enter#1：续行 "- "、光标新行、新项块活动（旧项重遮，同段落口径）', sameL(B.st1.lines, ['- 32333223', '- ']) && B.st1.cursor.line === 1 && B.st1.cursor.ch === 2
+        && B.st1.activeIdx === 1 && B.st1.marks.length === 1 && B.st1.marks[0].from === 0 && B.st1.marks[0].to === 0);
+      s40Push('[list] +600ms：仍保持活动（光标行 = 活动项块，不重遮）',
+        B.st2.activeIdx === 1 && B.st2.marks.length === 1 && B.st2.marks[0].from === 0 && B.st2.marks[0].to === 0);
       s40Push('[list] 空行回车：退出列表、块恢复渲染', B.st3.activeIdx === -1 && B.st3.cursor.line === 2 && B.st3.cursor.ch === 0
         && sameL(B.st3.lines, ['- 32333223', '', '']) && B.st3.marks.some(m => m.from === 0 && m.to === 0),
         JSON.stringify({ lines: B.st3.lines, cursor: B.st3.cursor, activeIdx: B.st3.activeIdx, marks: B.st3.marks }));
@@ -2221,27 +2235,42 @@ try {
       else {
         s42Push('[渲染] 数字 li 与 URL <a> 均无下划线（本应用链接口径 text-decoration:none）',
           rendered.li0 === 'none' && rendered.a === 'none', JSON.stringify(rendered));
-        const mp = await page.evaluate(() => window.__s42maskPoint());
-        if (!mp) { console.log('  ⚠ S42 遮罩未定位'); fail++; }
-        else {
-          await page.mouse.click(mp.x, mp.y);
+        // 逐项切块（2026-10-21）：每项独立成块 → 逐项点击遮罩、逐项量编辑态
+        const clickItem = async (lineNo) => {
+          const m = await page.evaluate((n) => window.__s42maskPointFor(n), lineNo);
+          if (!m) return false;
+          await page.mouse.click(m.x, m.y);
           await new Promise(r => setTimeout(r, 300));
+          return true;
+        };
+        const digitSpans = [];
+        for (const n of [0, 1, 2]) {
+          if (!(await clickItem(n))) { s42Push('[编辑] 数字项遮罩未定位（行 ' + n + '）', false); continue; }
           const active = await page.evaluate(() => window.__s42active());
-          const digitRows = active.rows.filter((r) => !/https?:\/\//.test(r.spans.map((s) => s.txt).join('')) && r.spans.every((s) => !/点我/.test(s.txt)));
-          const urlRow = active.rows.find((r) => r.spans.some((s) => /https?:\/\//.test(s.txt)));
-          const linkRow = active.rows.find((r) => r.spans.some((s) => /点我/.test(s.txt)));
-          const digitsClean = digitRows.length === 3 && digitRows.every((r) =>
-            r.spans.every((s) => (s.deco || 'none') === 'none' && (s.cls || '').indexOf('cm-link') === -1));
-          s42Push('[编辑] 纯数字项 span 无下划线、无 cm-link token（gitHubSpice 已关）',
-            digitsClean, JSON.stringify(digitRows.map((r) => r.spans)));
+          const row = active.rows.find((r) => r.line === n);
+          digitSpans.push(row ? row.spans : null);
+        }
+        const digitsClean = digitSpans.length === 3 && digitSpans.every((spans) =>
+          !!spans && spans.length > 0 && spans.every((s) => (s.deco || 'none') === 'none' && (s.cls || '').indexOf('cm-link') === -1));
+        s42Push('[编辑] 纯数字项 span 无下划线、无 cm-link token（gitHubSpice 已关，逐项点入）',
+          digitsClean, JSON.stringify(digitSpans));
+        const urlLine = await page.evaluate(() => window.__s42find('https://example.com/x'));
+        if (urlLine >= 0 && (await clickItem(urlLine))) {
+          const active = await page.evaluate(() => window.__s42active());
+          const urlRow = active.rows.find((r) => r.line === urlLine);
           s42Push('[编辑] URL 项 span 无下划线（与渲染 <a> 口径一致）',
             !!urlRow && urlRow.spans.every((s) => (s.deco || 'none') === 'none'),
             JSON.stringify(urlRow && urlRow.spans));
+        } else { s42Push('[编辑] URL 项遮罩未定位', false); }
+        const linkLine = await page.evaluate(() => window.__s42find('点我'));
+        if (linkLine >= 0 && (await clickItem(linkLine))) {
+          const active = await page.evaluate(() => window.__s42active());
+          const linkRow = active.rows.find((r) => r.line === linkLine);
           const linkSpan = linkRow ? linkRow.spans.find((s) => /点我/.test(s.txt)) : null;
           s42Push('[编辑] 显式链接文本主题色、无下划线（wysiwyg-inline-link 不重申 underline）',
             !!linkSpan && (linkSpan.deco || 'none') === 'none' && linkSpan.cls.indexOf('wysiwyg-inline-link') !== -1,
             JSON.stringify(linkSpan));
-        }
+        } else { s42Push('[编辑] 链接项遮罩未定位', false); }
       }
     }
   }
@@ -2282,10 +2311,10 @@ try {
         dBottom != null && dBottom < 0.5, '遮罩底=' + m.maskBottom + ' 活动底=' + a.listBottom + ' Δ=' + (dBottom == null ? '?' : dBottom.toFixed(3)));
       s43Push('[列表] 块下段落行顶不跳（遮罩态 vs 活动态，差 <0.5px）',
         dPara != null && dPara < 0.5, '遮罩态=' + m.paraTop + ' 活动态=' + a.paraTop + ' Δ=' + (dPara == null ? '?' : dPara.toFixed(3)));
-      const topEdge = a.edges.find((e) => e.edge === 'top');
-      const botEdge = a.edges.find((e) => e.edge === 'bottom');
-      s43Push('[列表] 边缘行类挂上且补齐生效（2026-10-17 新口径：首行 padTop 0 / 末行 padBottom 14px）',
-        !!topEdge && !!botEdge && parseFloat(topEdge.padTop) === 0 && parseFloat(botEdge.padBottom) === 14,
+      // 逐项切块（2026-10-21）：非末项块底 = 项间距 4px；14px 底边归属末项（下面点末项验证）
+      const firstEdge = a.edges[0];
+      s43Push('[列表] 首项边缘行类挂上且补齐生效（2026-10-21 逐项：padTop 0 / 非末项底 4px = 项间距）',
+        !!firstEdge && parseFloat(firstEdge.padTop) === 0 && parseFloat(firstEdge.padBottom) === 4,
         JSON.stringify(a.edges));
       // [S44] 圆点垂直居中锚定行盒（2026-10-15 用户截图「点入编辑黑点往上移一点点」）：
       // 真机 WebView2 里内联 span 字体盒按基线放置，与渲染 disc（行盒中心）差 1px；
@@ -2306,6 +2335,24 @@ try {
             Math.abs(b.spanH - lineH) < 0.5,
             `span=${b.spanH.toFixed(3)} line=${lineH} display=${b.display} vAlign=${b.vAlign}`);
         }
+      }
+      // 末项：14px 底边归属末项（遮罩盒模型 = 内容 + 14px mb），且末项下方段落行顶不跳
+      const lastPt = await page.evaluate(() => window.__s43lastMaskPoint());
+      if (lastPt) {
+        await page.mouse.click(lastPt.x, lastPt.y);
+        await new Promise(r => setTimeout(r, 300));
+        const a2 = await page.evaluate(() => window.__s43active());
+        const e2 = a2.edges[0];
+        s43Push('[列表] 末项块底 = 遮罩底（差 <0.5px）',
+          a2.listBottom != null && Math.abs(a2.listBottom - lastPt.maskBottom) < 0.5,
+          '遮罩底=' + lastPt.maskBottom + ' 活动底=' + a2.listBottom);
+        s43Push('[列表] 末项底边 14px（2026-10-17 口径：列表底距归末项）',
+          !!e2 && parseFloat(e2.padBottom) === 14, JSON.stringify(a2.edges));
+        const dPara2 = (a2.paraTop != null && m.paraTop != null) ? Math.abs(a2.paraTop - m.paraTop) : null;
+        s43Push('[列表] 末项下段落行顶不跳（遮罩态 vs 点末项后）',
+          dPara2 != null && dPara2 < 0.5, '遮罩态=' + m.paraTop + ' 活动态=' + a2.paraTop + ' Δ=' + (dPara2 == null ? '?' : dPara2.toFixed(3)));
+      } else {
+        s43Push('[列表] 末项遮罩未定位（逐项切块后应存在）', false);
       }
       // 段落块同口径（14px 边距族的另一成员）
       const paraInit = await page.evaluate(() => {
@@ -2396,44 +2443,50 @@ try {
     try {
       await page.evaluate(() => window.__runListType2026('ul'));
       await new Promise(r => setTimeout(r, 500));
+      // 逐项切块（2026-10-21）：渲染侧 li 分散在各项片段遮罩里，跨遮罩收集
       const rendGeo = await page.evaluate(() => {
-        const mask = document.querySelector('.wysiwyg-block-mask.preview-content');
-        if (!mask) return null;
-        return {
-          tops: [...mask.querySelectorAll('li')].map((li) => li.getBoundingClientRect().top),
-          x: mask.getBoundingClientRect().x,
-        };
+        const lis = Array.from(document.querySelectorAll('.wysiwyg-block-mask.preview-content ol li, .wysiwyg-block-mask.preview-content ul li'));
+        if (!lis.length) return null;
+        const first = lis[0].closest('.wysiwyg-block-mask').getBoundingClientRect();
+        return { tops: lis.map((li) => li.getBoundingClientRect().top), x: first.x };
       });
       if (!rendGeo || !rendGeo.tops.length) { s45Push('S45 场景初始化（遮罩态）', false); }
       else {
         const rendClipY = Math.max(0, rendGeo.tops[0] - 10);
-        const rendDots = await scanDots({ x: 0, y: rendClipY, width: 350, height: 100 });
-        const mp = await page.evaluate(() => window.__s41maskPoint());
-        await page.mouse.click(mp.x, mp.y);
-        await new Promise(r => setTimeout(r, 500));
-        const actGeo = await page.evaluate(() => {
-          const wrap = document.querySelector('.CodeMirror');
-          const isM = (l) => !!(l.parentElement && l.parentElement.classList && l.parentElement.classList.contains('CodeMirror-measure'));
-          const pres = [...wrap.querySelectorAll('pre.CodeMirror-line')]
-            .filter((l) => !isM(l) && (l.className || '').toString().indexOf('wysiwyg-list-line') !== -1);
-          // 基准 = **行盒顶**（pre 顶 + padding-top；渲染侧 li top 也是行盒顶：li 无 padding）。
-          // 用 pre top 会把首行 padT=1px（S43 块高补齐）算进偏移，恰好抵消真实差 → 断言失真
-          return { tops: pres.map((p) => { const r = p.getBoundingClientRect(); return r.top + parseFloat(getComputedStyle(p).paddingTop || '0'); }) };
-        });
-        const actClipY = actGeo && actGeo.tops.length ? Math.max(0, actGeo.tops[0] - 10) : 0;
-        const actDots = actGeo && actGeo.tops.length ? await scanDots({ x: 0, y: actClipY, width: 350, height: 100 }) : [];
-        // 逐行比较：圆点中心相对**本行行顶**（渲染=li top，编辑=pre top），clip 偏移加回
-        const n = Math.min(rendDots.length, actDots.length, rendGeo.tops.length, actGeo.tops.length);
-        let maxD = null;
-        for (let i = 0; i < n; i++) {
+        const rendH = Math.ceil(rendGeo.tops[rendGeo.tops.length - 1] - rendGeo.tops[0] + 60);
+        const rendDots = await scanDots({ x: 0, y: rendClipY, width: 350, height: rendH });
+        // 逐项点入：每项活动行的源文态圆点 vs 该项渲染态圆点（窗口内首个圆点 = 活动行源文圆点，
+        // 下方遮罩兄弟项的圆点是渲染圆点、按顺序与 rendDots 对齐，不影响首点比较）
+        const maskPts = await page.evaluate(() => Array.from(document.querySelectorAll('.wysiwyg-block-mask.preview-content ol, .wysiwyg-block-mask.preview-content ul'))
+          .map((m) => { const r = m.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + 12 }; }));
+        let n = 0, maxD = null, bad = false;
+        for (let i = 0; i < maskPts.length && i < rendGeo.tops.length; i++) {
+          await page.mouse.click(maskPts[i].x, maskPts[i].y);
+          await new Promise(r => setTimeout(r, 300));
+          // 基准 = **行盒顶**（pre 顶 + padding-top；渲染侧 li top 也是行盒顶：li 无 padding）
+          const actTop = await page.evaluate(() => {
+            const wrap = document.querySelector('.CodeMirror');
+            const isM = (l) => !!(l.parentElement && l.parentElement.classList && l.parentElement.classList.contains('CodeMirror-measure'));
+            const pres = [...wrap.querySelectorAll('pre.CodeMirror-line')]
+              .filter((l) => !isM(l) && (l.className || '').toString().indexOf('wysiwyg-list-line') !== -1);
+            if (!pres.length) return null;
+            const p = pres[pres.length - 1];
+            const r = p.getBoundingClientRect();
+            return r.top + parseFloat(getComputedStyle(p).paddingTop || '0');
+          });
+          if (actTop == null) { bad = true; break; }
+          const actClipY = Math.max(0, actTop - 10);
+          const actDots = await scanDots({ x: 0, y: actClipY, width: 350, height: 100 });
+          if (rendDots[i] == null || actDots[0] == null) { bad = true; break; }
           const dR = rendDots[i] + rendClipY - rendGeo.tops[i];
-          const dA = actDots[i] + actClipY - actGeo.tops[i];
+          const dA = actDots[0] + actClipY - actTop;
           const d = Math.abs(dR - dA);
+          n++;
           if (maxD === null || d > maxD) maxD = d;
         }
-        s45Push('两态圆点相对本行行顶逐像素同位（Δ<0.5px，' + n + ' 行）',
-          n >= 2 && maxD !== null && maxD < 0.5,
-          '渲染=' + JSON.stringify(rendDots) + ' 编辑=' + JSON.stringify(actDots) + ' maxΔ=' + (maxD === null ? '?' : maxD.toFixed(2)));
+        s45Push('两态圆点相对本行行顶逐像素同位（逐项点入，Δ<0.5px，' + n + ' 行）',
+          !bad && n >= 2 && maxD !== null && maxD < 0.5,
+          '渲染=' + JSON.stringify(rendDots) + ' maxΔ=' + (maxD === null ? '?' : maxD.toFixed(2)));
       }
     } catch (e) {
       s45Push('S45 场景执行', false, String(e && e.message || e).slice(0, 120));
@@ -2463,16 +2516,16 @@ try {
         s46Push('li#' + (i + 1) + ' 遮罩定位', false, '列表遮罩/项未物化');
         continue;
       }
-      s46Push(`点第 ${i + 1} 项前：列表块有遮罩且无「编辑」按钮（#1）`,
-        pre && pre.listMasked === true && pre.listBtn === false,
-        'listMasked=' + (pre && pre.listMasked) + ' listBtn=' + (pre && pre.listBtn));
+      s46Push(`点第 ${i + 1} 项前：5 项各成块且有遮罩、无「编辑」按钮（#1）`,
+        pre && pre.maskedItems === 5 && pre.listBtn === false,
+        'maskedItems=' + (pre && pre.maskedItems) + ' listBtn=' + (pre && pre.listBtn));
       await page.mouse.click(pt.x, pt.y);
       await new Promise(r => setTimeout(r, 300));
-      const st = await page.evaluate(() => window.__s44read());
+      const st = await page.evaluate((n) => window.__s44read(n), i + 1);
       const expected = LIST_LINES[i];
-      s46Push(`点第 ${i + 1} 项（${pt.text}）：一次点击即解罩 + 光标精确落该行（line ${expected}）`,
-        !!st && st.listMasked === false && st.cursorLine === expected && st.lineText === '- 列表项' + '一二三四五'[i],
-        'cursor=' + (st && JSON.stringify(st.cursorLine)) + ' 期望=' + expected + ' 行文=' + (st && st.lineText));
+      s46Push(`点第 ${i + 1} 项（${pt.text}）：一次点击即解罩该项 + 光标精确落该行（line ${expected}）、其余 4 项保持遮罩`,
+        !!st && st.listMasked === false && st.maskedItems === 4 && st.cursorLine === expected && st.lineText === '- 列表项' + '一二三四五'[i],
+        'cursor=' + (st && JSON.stringify(st.cursorLine)) + ' 期望=' + expected + ' 行文=' + (st && st.lineText) + ' maskedItems=' + (st && st.maskedItems));
     }
     // 松散列表（多段 li）：点第二段落 → 落该段自身行（<p> 标注比 <li> 更精确），而非项首行
     await page.evaluate(() => window.__s44setupLoose());
@@ -2620,7 +2673,8 @@ try {
     };
     try {
       const setup = await page.evaluate(() => window.__s49setup());
-      s49Push('S49 初始化（5 块 / p 块活动 / 4 遮罩）',
+      // 逐项切块（2026-10-21）：紧列表拆 2 项 → 6 块 / 5 遮罩（p 块仍 idx 1）
+      s49Push('S49 初始化（6 块 / p 块活动 / 5 遮罩）',
         !!setup && setup.lines === 10 && setup.len === 47 && setup.activeIdx === 1, JSON.stringify(setup));
       if (setup) {
         // ① Ctrl+A：模型选区必须覆盖全篇（含首块；修复前锚点被钳到首块末，42/47 字符）
@@ -2632,8 +2686,8 @@ try {
           r0.from && r0.from.line === 0 && r0.from.ch === 0 && r0.to && r0.to.line === 9 && r0.to.ch === 5 && sel.selLen === 47,
           JSON.stringify(sel.ranges) + ' selLen=' + sel.selLen + '/47');
         const selMasks1 = (sel.masks || []).filter((m) => m.selected).length;
-        s49Push('全选时 4 个遮罩块全部挂选中着色类（跨块选区视觉）',
-          (sel.masks || []).length === 4 && selMasks1 === 4,
+        s49Push('全选时 5 个遮罩块全部挂选中着色类（跨块选区视觉；逐项后 4→5）',
+          (sel.masks || []).length === 5 && selMasks1 === 5,
           'masks=' + (sel.masks || []).length + ' selected=' + selMasks1);
 
         // ② 从活动块（Ctrl+A 后 head 在 quote → 活动块已切到 quote，行 9 为真实行）
@@ -2772,9 +2826,10 @@ try {
           return { value: cm.getValue(), cursor: cm.getCursor(), activeIdx: ed._wysiwygActiveIdx };
         });
         s50Push('400ms 延迟幽灵换行被吞（旧 300ms 窗口在此泄漏）', ghost.canceled === true, JSON.stringify(ghost));
-        s50Push('文档完好（无裸换行、光标留在 "3. 啊" 行、列表块仍活动）',
+        // 逐项切块（2026-10-21）：光标在 "3. 啊" 行 = 第三项块（idx 2）活动
+        s50Push('文档完好（无裸换行、光标留在 "3. 啊" 行、光标项块仍活动 idx 2）',
           s50a.value === '1. 第一项内容\n2. 第二项内容\n3. 啊\n\n段落内容测试。' &&
-          s50a.cursor.line === 2 && s50a.cursor.ch === 4 && s50a.activeIdx === 0,
+          s50a.cursor.line === 2 && s50a.cursor.ch === 4 && s50a.activeIdx === 2,
           JSON.stringify(s50a).slice(0, 200));
 
         // ③ 连续 IME 输入（每字后跟一个 400ms 延迟幽灵）→ 整行成文，不逐字打散
@@ -2803,7 +2858,7 @@ try {
         });
         s50Push('连续 IME 输入 + 逐字延迟幽灵：列表项一行成文（修复前打散竖排每字一行）',
           s50b.value === '1. 第一项内容\n2. 第二项内容\n3. 啊手动阀\n\n段落内容测试。' &&
-          s50b.cursor.line === 2 && s50b.cursor.ch === 7 && s50b.activeIdx === 0,
+          s50b.cursor.line === 2 && s50b.cursor.ch === 7 && s50b.activeIdx === 2,
           JSON.stringify(s50b).slice(0, 200));
 
         // ④ 输入停顿后的普通 Enter 仍正常续行 "4. "（守卫不过度吞合法换行：
@@ -2876,21 +2931,77 @@ try {
     const near = (a, b, d) => a != null && b != null && Math.abs(a - b) <= d;
     try {
       // 逐行滚动→即时量 rect→截图（防 scrollIntoView 后陈旧坐标扫错行，探针 v2 教训）
+      // 逐项切块（2026-10-21）：每项片段遮罩各含 1 个 li → 跨遮罩按文档序收集；
+      // cx/cy = li 中心（驱动逐项点入编辑态用）
       const scanRenderLines = async () => page.evaluate(async () => {
         const ed = window.__s51ed;
-        const mask = ed._wysiwygMarks.get(0).replacedWith;
-        const pre = mask.closest('pre.CodeMirror-line');
-        mask.scrollIntoView({ block: 'center' });
+        const nodes = [];
+        ed._wysiwygMarks.forEach((mark) => {
+          const node = mark && mark.replacedWith;
+          if (node && (node.querySelector(':scope > ul') || node.querySelector(':scope > ol'))) nodes.push(node);
+        });
+        // 文档序：FOLLOWING=0x04（b 在 a 之后 → a 先）。⚠️ 曾误用 PRECEDING(0x02) 位 →
+        // 逆序收集，点项 n 恒落镜像项（S46/S51 回归根因，2026-10-21 修）。
+        nodes.sort((a, b) => (a.compareDocumentPosition(b) & 4) ? -1 : 1);
+        const pre = nodes[0].closest('pre.CodeMirror-line');
+        nodes[0].scrollIntoView({ block: 'center' });
         await new Promise((r) => setTimeout(r, 80));
         const pr = pre.getBoundingClientRect();
-        const lis = Array.from(mask.querySelectorAll('li'));
         const out = [];
-        for (const li of lis) {
-          const b = li.getBoundingClientRect();
-          out.push({ x: pr.left, y: b.top, w: 120, h: b.height, cb: li.querySelector('input[type="checkbox"]') ? li.querySelector('input[type="checkbox"]').getBoundingClientRect().left - pr.left : null });
-        }
+        nodes.forEach((node) => {
+          Array.from(node.querySelectorAll(':scope > ul > li, :scope > ol > li')).forEach((li) => {
+            const b = li.getBoundingClientRect();
+            out.push({
+              x: pr.left, y: b.top, w: 120, h: b.height,
+              cb: li.querySelector('input[type="checkbox"]') ? li.querySelector('input[type="checkbox"]').getBoundingClientRect().left - pr.left : null,
+            });
+          });
+        });
         return out;
       });
+      // 逐项切块（2026-10-21）：第 n 项片段遮罩中心——按**当前滚动位置**现算
+      //（渲染态量得的坐标在后续滚动换位后已陈旧，直接复用会点空/点错项）。
+      // 定位按**行号查块表**取对应遮罩（marks 按块索引为键）：不能对「过滤后的遮罩数组」
+      // 按项号索引——活动项无遮罩，过滤数组缺项恒错位一项（点项 2 落到项 3，S51 回归根因
+      // 之一；另一根因是文档序误用 PRECEDING 位致逆序，已修）。活动项（已解罩）兜底：
+      // 点其源文行 pre 右缘 → CM 光标落行尾（与遮罩点击「光标落行尾」同口径，不污染墨迹）。
+      const itemMaskPoint = async (n) => page.evaluate((lineNo) => {
+        const ed = window.__s51ed;
+        const cm = ed.cm;
+        const blks = ed._wysiwygBlocks || [];
+        const idx = blks.findIndex((b) => b.start <= lineNo && lineNo < b.end);
+        let node = null;
+        if (idx >= 0 && ed._wysiwygMarks) {
+          const mk = ed._wysiwygMarks.get(idx);
+          node = mk && mk.replacedWith;
+        }
+        let target = node, atRight = false;
+        if (!target) {
+          target = cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[lineNo];
+          atRight = true;
+        }
+        if (!target) return null;
+        if (target.getBoundingClientRect().top > window.innerHeight) target.scrollIntoView({ block: 'center' });
+        const r = target.getBoundingClientRect();
+        if (atRight) return { x: r.x + r.width - 8, y: r.y + 8 };
+        // x 取 60px（正文区）：避开行首复选框（点中会触发勾选，不是点入编辑）
+        return { x: r.x + Math.min(60, r.width / 2), y: r.y + 8 };
+      }, n);
+      // 编辑态行几何：真实鼠标点该项遮罩 → 该行源文态 → 滚动居中 + 二次读 rect
+      const clickItemAndRect = async (pt, n) => {
+        await page.mouse.click(pt.x, pt.y);
+        await page.waitForTimeout(150);
+        await page.evaluate((lineNo) => {
+          const pre = window.__s51ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[lineNo];
+          pre.scrollIntoView({ block: 'center' });
+        }, n);
+        await page.waitForTimeout(60);
+        return page.evaluate((lineNo) => {
+          const pre = window.__s51ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[lineNo];
+          const b = pre.getBoundingClientRect();
+          return { x: b.left, y: b.top, w: 120, h: b.height };
+        }, n);
+      };
       const scanEditLines = async (count) => {
         const out = [];
         for (let i = 0; i < count; i++) {
@@ -2920,17 +3031,17 @@ try {
         ed.setWysiwygActiveBlock(-1); // 渲染态
       });
       await page.waitForTimeout(200);
+      const olR = await scanRenderLines();
       const olRender = [];
-      for (const r of await scanRenderLines()) olRender.push(await lineProfile(r, 150));
-      await page.evaluate(() => {
-        const ed = window.__s51ed, cm = ed.cm;
-        ed.setWysiwygActiveBlock(0); // 编辑态
-        cm.setCursor(0, cm.getLine(0).length);
-        cm.focus();
-      });
-      await page.waitForTimeout(250);
+      for (const r of olR) olRender.push(await lineProfile(r, 150));
+      // 编辑态：逐项点遮罩 → 该行源文态（光标落行尾 = 正文右侧，不污染序号/正文墨迹）
       const olEdit = [];
-      for (const r of await scanEditLines(3)) olEdit.push(await lineProfile(r, 150));
+      for (let i = 0; i < 3; i++) {
+        const pt = await itemMaskPoint(i);
+        if (!pt) { s51Push('S51 ol 第 ' + (i + 1) + ' 项遮罩未定位', false); olEdit.push([]); continue; }
+        const r3 = await clickItemAndRect(pt, i);
+        olEdit.push(await lineProfile(r3, 150));
+      }
       const olOk = [];
       for (let i = 0; i < 3; i++) {
         const R = inkRange(olRender[i], 24, 52), E = inkRange(olEdit[i], 24, 52);
@@ -2975,30 +3086,40 @@ try {
           return null;
         };
       });
-      const tkVertRender = await page.evaluate(() => {
+      const tkVertRender = await page.evaluate(async () => {
         const ed = window.__s51ed;
-        const mask = ed._wysiwygMarks.get(0).replacedWith;
-        const li = mask.querySelectorAll('li')[1];
+        // 逐项切块（2026-10-21）：跨片段遮罩取第二个 li
+        const nodes = [];
+        ed._wysiwygMarks.forEach((mark) => {
+          const node = mark && mark.replacedWith;
+          if (node && (node.querySelector(':scope > ul') || node.querySelector(':scope > ol'))) nodes.push(node);
+        });
+        // 文档序：FOLLOWING=0x04（b 在 a 之后 → a 先）。⚠️ 曾误用 PRECEDING(0x02) 位 →
+        // 逆序收集，点项 n 恒落镜像项（S46/S51 回归根因，2026-10-21 修）。
+        nodes.sort((a, b) => (a.compareDocumentPosition(b) & 4) ? -1 : 1);
+        const lis = [];
+        nodes.forEach((node) => Array.from(node.querySelectorAll(':scope > ul > li, :scope > ol > li')).forEach((li) => lis.push(li)));
+        const li = lis[1];
+        li.scrollIntoView({ block: 'center' });
+        await new Promise((r) => setTimeout(r, 60));
         const cb = li.querySelector('input[type="checkbox"]');
         return { box: cb.getBoundingClientRect().top, txt: window.__s51FirstTextTop(li) };
       });
-      await page.evaluate(() => {
-        const ed = window.__s51ed, cm = ed.cm;
-        ed.setWysiwygActiveBlock(0); // 编辑态
-        // ⚠️ 光标必须离开被测行（idx 1）：光标盒是整行高的墨迹，落在此行会把该行的
-        // 「正文墨迹顶边」量成行盒顶而非字形顶，两态同口径后差异被抹平（实测退化成
-        // render=-2 / edit=-2，缺陷漏判）。放第 3 行，被测行只留字形墨迹。
-        cm.setCursor(2, cm.getLine(2).length);
-        cm.focus();
-      });
-      await page.waitForTimeout(250);
-      const tkEditGeo = await scanEditLines(3);
+      // 编辑态：逐项点遮罩 → 该行源文态。光标落行尾 = 正文右侧（框在行首 24px 槽），
+      // 不污染框/正文墨迹（旧整块口径的光标放第 3 行问题同解）。
+      const tkEditGeo = [];
+      const tkSpans = [];
       const tkEdit = [];
-      for (const r of tkEditGeo) tkEdit.push(await lineProfile(r, 150));
-      // DOM 守卫：每行恰一个 24px 前缀槽（CM5 token 拆分成两个槽 → 双框/正文跳 80）
-      const tkSpans = await page.evaluate(() => {
-        const cm = window.__s51ed.cm;
-        return Array.from(cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')).slice(0, 3).map((pre) => {
+      for (let i = 0; i < 3; i++) {
+        const pt = await itemMaskPoint(i);
+        if (!pt) { s51Push('S51 task 第 ' + (i + 1) + ' 项遮罩未定位', false); tkEditGeo.push({ x: 0, y: 0, w: 120, h: 0 }); tkEdit.push([]); tkSpans.push({ prefix: 0, zero: 0, slotL: null, slotW: null, textL: null }); continue; }
+        const r3 = await clickItemAndRect(pt, i);
+        tkEditGeo.push(r3);
+        // ⚠️ 截图必须在本行仍为源文态时进行（下一轮点击会把本行重遮回渲染片段）
+        tkEdit.push(await lineProfile(r3, 150));
+        // DOM 守卫：每行恰一个 24px 前缀槽（CM5 token 拆分成两个槽 → 双框/正文跳 80）
+        tkSpans.push(await page.evaluate((n) => {
+          const pre = window.__s51ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[n];
           const sp = pre.querySelector('span.wysiwyg-task-prefix');
           const pr = pre.getBoundingClientRect();
           const t = pre.querySelector('span.wysiwyg-list-text');
@@ -3009,8 +3130,8 @@ try {
             slotW: sp ? sp.getBoundingClientRect().width : null,
             textL: t ? t.getBoundingClientRect().left - pr.left : null,
           };
-        });
-      });
+        }, i));
+      }
       s51Push('任务行恰 1 个 24px 前缀槽 + ≥1 个零宽槽（CM5 按 token 拆分下 24px 类只钉 bullet）',
         tkSpans.every((s) => s.prefix === 1 && s.zero >= 1) && tkSpans.every((s) => near(s.textL, 56, 0.5)),
         JSON.stringify(tkSpans));
@@ -3038,6 +3159,9 @@ try {
       //   · 两态同取「差值」，消掉行盒高度差（渲染 li 27.2px vs 编辑 pre 31.2~44.2px）。
       // 修复前实测（旧 top:0.3em=4.8px）：框顶−正文顶 编辑态 1.80px / 渲染态 4.00px，
       // 差 2.2px（= 4.8px 与 7px 之差），本断言判红；改 7px 后两态同为 4.00px。
+      // 逐项切块（2026-10-21）：前缀槽只存在于源文态行 → 先点第 2 项遮罩
+      const ptV = await itemMaskPoint(1);
+      if (ptV) { await page.mouse.click(ptV.x, ptV.y); await page.waitForTimeout(150); }
       const tkVertGeo = await page.evaluate(() => {
         const ed = window.__s51ed;
         const pre = ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[1];
@@ -3069,7 +3193,13 @@ try {
       // 即时取新 rect → 框周围 20×20 条带截图（clip 只依赖框坐标，不拼行盒 rect）。
       // 套件前面场景已把页面滚走，直接取 rect（可能为视口外负值）拼 clip 会让 16×16 采样区
       // 越界 → 整条剖面 NaN（2026-10-15 实测教训）。
-      const box16 = async (idx, kind) => {
+      // 逐项切块（2026-10-21）：edit 态前缀槽只存在于源文态行 → pt = 该项遮罩中心，
+      // 先点入再量（render 态 input 恒在遮罩内，pt 忽略）
+      const box16 = async (idx, kind, pt) => {
+        if (kind === 'edit' && pt) {
+          await page.mouse.click(pt.x, pt.y);
+          await page.waitForTimeout(150);
+        }
         await page.evaluate(({ idx, kind }) => {
           const ed = window.__s51ed;
           const el = kind === 'render'
@@ -3149,27 +3279,26 @@ try {
       await page.mouse.move(5, 5); // 归位：box16(1) 滚动换位后旧鼠标点不得压到新框上
       const tbRBox = { u: tbR0.px, c: (await box16(1, 'render')).px };
       // —— 编辑态：computed 口径 + 16×16 框区域（框顶 = 槽顶 + ::before top）+ hover 边色 ——
-      await page.evaluate(() => {
-        const ed = window.__s51ed, cm = ed.cm;
-        ed.setWysiwygActiveBlock(0);
-        cm.setCursor(2, cm.getLine(2).length); // 光标留第 3 行，不污染被测行
-        cm.focus();
+      // 逐项切块（2026-10-21）：前缀槽只存在于源文态行 → 逐项点入现读；
+      // 光标落点击行行尾（正文右侧），不污染行首 20×20 框区域
+      const tbE0 = await box16(0, 'edit', await itemMaskPoint(0));
+      const tbE0cs = await page.evaluate(() => {
+        const slot = window.__s51ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[0].querySelector('span.wysiwyg-task-prefix');
+        const csB = getComputedStyle(slot, '::before');
+        return { cursor: getComputedStyle(slot).cursor, opU: csB.opacity, tr: csB.transition };
       });
-      await page.waitForTimeout(250);
-      const tbEcs = await page.evaluate(() => {
-        const slots = [0, 1].map((i) =>
-          window.__s51ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[i].querySelector('span.wysiwyg-task-prefix'));
-        const csB0 = getComputedStyle(slots[0], '::before');
-        const csB1 = getComputedStyle(slots[1], '::before');
-        return { cursor: getComputedStyle(slots[0]).cursor, opU: csB0.opacity, opC: csB1.opacity, tr: csB0.transition };
-      });
-      const tbE0 = await box16(0, 'edit');
       await page.mouse.move(tbE0.boxL + 8, tbE0.boxT + 8);
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(300); // 等 0.15s transition 收敛
       const tbEHover = await page.evaluate(() =>
         getComputedStyle(window.__s51ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[0].querySelector('span.wysiwyg-task-prefix'), '::before').borderTopColor);
       await page.mouse.move(5, 5); // 归位：box16(1) 滚动换位后旧鼠标点不得压到新框上
-      const tbEBox = { u: tbE0.px, c: (await box16(1, 'edit')).px };
+      const tbE1 = await box16(1, 'edit', await itemMaskPoint(1));
+      const tbE1cs = await page.evaluate(() => {
+        const slot = window.__s51ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[1].querySelector('span.wysiwyg-task-prefix');
+        return { opC: getComputedStyle(slot, '::before').opacity };
+      });
+      const tbEcs = { cursor: tbE0cs.cursor, opU: tbE0cs.opU, opC: tbE1cs.opC, tr: tbE0cs.tr };
+      const tbEBox = { u: tbE0.px, c: tbE1.px };
       s51Push('复选框编辑态小手光标 ≡ 渲染态（cursor:pointer；修复前编辑态槽为 text 光标）',
         tbRcs.cursor === 'pointer' && tbEcs.cursor === tbRcs.cursor,
         'render=' + tbRcs.cursor + ' edit=' + tbEcs.cursor);
@@ -3196,6 +3325,9 @@ try {
       // → _wysiwygToggleTaskLine 回写源码（与渲染态共用口径）→ change 钩子重挂 checked 装饰。
       // 真实鼠标点第 1 行框（非光标行，避免光标态干扰），验证源码字符/checked 类/正文落点；
       // 再点一次验证反向。槽位几何两态不变，两次点击同一点。
+      // 逐项切块（2026-10-21）：先点第 1 项遮罩确保该行源文态（前缀槽才存在）
+      const ptB = await itemMaskPoint(0);
+      if (ptB) { await page.mouse.click(ptB.x, ptB.y); await page.waitForTimeout(150); }
       const boxPt = await page.evaluate(() => {
         const ed = window.__s51ed;
         const pre = ed.cm.getWrapperElement().querySelectorAll('pre.CodeMirror-line')[0];
@@ -3423,17 +3555,26 @@ try {
     if (setupA.err) {
       s54Push('S54 文档A 初始化', false, setupA.err);
     } else {
-      // ① 间隙对齐（列表对 = 14px）
+      // ① 间隙对齐：逐项切块（2026-10-21）后，同列表相邻项块间隙 = 4px（项间距，
+      // 片段几何与整块遮罩逐像素等价），不同列表/块之间 = 14px（margin 折叠值）
       const wA = setupA.wysGaps, rA = setupA.readGaps;
-      const gapPairsA = wA.filter((g) => g != null);
+      const pairsA = setupA.blocks || [];
+      let intra = 0, inter = 0; const badGap = []; const interGaps = [];
+      wA.forEach((g, i) => {
+        if (g == null) return;
+        const cont = pairsA[i] && pairsA[i + 1] && pairsA[i + 1][0] === pairsA[i][1]; // 同列表相邻项（行间无空行）
+        if (cont) { intra++; if (Math.abs(g - 4) > 1) badGap.push(g); }
+        else { inter++; interGaps.push(g); if (Math.abs(g - 14) > 1) badGap.push(g); }
+      });
       const gapPairsRA = rA.filter((g) => g != null);
-      s54Push('文档A：WYSIWYG 块间间隙全部 = 14px（= 阅读模式 ul/ol margin 折叠值）',
-        gapPairsA.length >= 4 && gapPairsA.every((g) => Math.abs(g - 14) <= 1), JSON.stringify(wA));
+      s54Push('文档A：WYSIWYG 间隙 = 跨块 14px / 列表内项距 4px（逐项口径，= 整块遮罩的 li 间距）',
+        intra >= 4 && inter >= 4 && badGap.length === 0,
+        'intra=' + intra + ' inter=' + inter + ' bad=' + JSON.stringify(badGap) + ' wys=' + JSON.stringify(wA));
       s54Push('文档A：阅读模式同文档间隙全部 = 14px（对照口径）',
         gapPairsRA.length >= 4 && gapPairsRA.every((g) => Math.abs(g - 14) <= 1), JSON.stringify(rA));
-      s54Push('文档A：WYSIWYG 间隙 ≡ 阅读模式间隙（逐对 Δ≤1px）',
-        wA.length === rA.length && wA.every((g, i) => g == null || rA[i] == null || Math.abs(g - rA[i]) <= 1),
-        'wys=' + JSON.stringify(wA) + ' read=' + JSON.stringify(rA));
+      s54Push('文档A：WYSIWYG 跨列表间隙 ≡ 阅读模式间隙（逐对 Δ≤1px；列表内项距阅读态无对应物）',
+        interGaps.length === gapPairsRA.length && interGaps.every((g, i) => Math.abs(g - gapPairsRA[i]) <= 1),
+        'wys=' + JSON.stringify(interGaps) + ' read=' + JSON.stringify(gapPairsRA));
       // ② 点击行缝（文档A，14px mb 区）：不产生新行、不展开、无提示；光标落上一块
       if (setupA.click && setupA.click.x != null) {
         await page.evaluate((v) => { window.__gapClickAValue = v; }, setupA.value);
@@ -3444,12 +3585,16 @@ try {
           a.err == null && a.lineCount === setupA.lineCount && a.valueChanged === false,
           `lines=${setupA.lineCount}→${a.lineCount} ${a.err || ''}`);
         s54Push('文档A：点击行缝无「输入 / 可插入内容…」提示出现', a.err == null && (a.hints || 0) === 0, 'hints=' + a.hints);
-        s54Push('文档A：点击行缝光标落上一列表块内（遮罩接管，非空行）',
-          a.err == null && a.cursor && a.cursor.line >= 4 && a.cursor.line <= 6, JSON.stringify(a.cursor));
-        s54Push('文档A：S43 新口径——点击后活动块底 = 原遮罩底（Δ<0.5px，块下内容不跳）',
-          a.err == null && a.activeBottom != null && setupA.maskBottom1 != null &&
-          Math.abs(a.activeBottom - setupA.maskBottom1) < 0.5,
-          `遮罩底=${setupA.maskBottom1} 活动底=${a.activeBottom}`);
+        // 逐项切块（2026-10-21）：点击点（14px 缝中点）落在任务列表末项片段遮罩内
+        //（末项保留 14px mb 折叠区）→ 光标落任务列表（行 1-2），非下方 ol
+        s54Push('文档A：点击行缝光标落上一列表块内（遮罩接管，非空行；逐项后=任务列表行 1-2）',
+          a.err == null && a.cursor && a.cursor.line >= 1 && a.cursor.line <= 2, JSON.stringify(a.cursor));
+        // 2026-10-21 口径：相对间隙（活动块底→下一块顶）点击前后一致 = 解罩块高=遮罩高、
+        // 块下内容不跳（绝对底缘对比会被点击引发的块间空行光标行塌回整体位移干扰）
+        s54Push('文档A：S43 新口径——点击后相对间隙 = 点击前（Δ<0.5px，块下内容不跳）',
+          a.err == null && a.gapNext2 != null && setupA.gapNext1 != null &&
+          Math.abs(a.gapNext2 - setupA.gapNext1) < 0.5,
+          `点击前=${setupA.gapNext1} 点击后=${a.gapNext2}`);
       } else {
         s54Push('文档A：行缝点击点未定位', false);
       }
@@ -3460,8 +3605,13 @@ try {
     if (setupB.err) {
       s54Push('S54 文档B 初始化', false, setupB.err);
     } else {
-      s54Push('文档B：WYSIWYG 间隙 = 24px（= max(段落 mb 14, 标题 mt 24)，与阅读模式一致）',
-        setupB.wysGap != null && Math.abs(setupB.wysGap - 24) <= 1, 'wys=' + setupB.wysGap);
+      // 2026-10-21 口径：本场景光标落在块间空行（行 1，为保持无活动块所必需），
+      // 空行按修订口径呈全高（光标行灰底同态）而非塌缩 X=10px → 间隙 = 段落 mb(14)
+      // + 光标行全高(blankHBefore)，harness = 14+15=29（阅读模式 24 为无光标态基准）。
+      // 无光标态的 WYSIWYG≡阅读模式 等价性由文档A [14,14,14,14] 断言守护。
+      s54Push('文档B：WYSIWYG 间隙（光标在块间空行）= 段落 mb 14 + 光标行全高（2026-10-21 口径）',
+        setupB.wysGap != null && setupB.blankHBefore != null && Math.abs(setupB.wysGap - (14 + setupB.blankHBefore)) <= 1,
+        `wys=${setupB.wysGap} 期望=14+${setupB.blankHBefore}`);
       s54Push('文档B：阅读模式同口径 = 24px', setupB.readGap != null && Math.abs(setupB.readGap - 24) <= 1, 'read=' + setupB.readGap);
       if (setupB.click && setupB.click.x != null) {
         await page.evaluate((v) => { window.__gapClickBValue = v; }, setupB.value);
@@ -3473,7 +3623,7 @@ try {
           `lines=${setupB.lineCount}→${b.lineCount} ${b.err || ''}`);
         s54Push('文档B：点击空行本体光标落到该空行（行本身，非新行）',
           b.err == null && b.cursor && b.cursor.line === 1, JSON.stringify(b.cursor));
-        s54Push('文档B：空行点击后不展开（高度保持塌缩 X=10px，<20px）且无提示',
+        s54Push('文档B：空行点击后不产生新行、高度 <20px（光标行全高，2026-10-21 口径）且无提示',
           b.err == null && b.blankHAfter != null && b.blankHAfter < 20 && (b.hints || 0) === 0,
           `h=${setupB.blankHBefore}→${b.blankHAfter} hints=${b.hints}`);
       } else {
@@ -3603,8 +3753,9 @@ try {
     if (st.err) {
       s57Push('S57 文档初始化', false, st.err);
     } else {
-      s57Push('块表 = ul[0,3) ol[4,8) 任务+ul 合并块[9,19)（CommonMark：空行只松散、不拆块）',
-        JSON.stringify(st.blocks) === JSON.stringify([[0, 3], [4, 8], [9, 19]]), JSON.stringify(st.blocks));
+      // 逐项切块（2026-10-21）：两个紧列表拆逐项块；任务+ul 合并块含空行（松散）→ 不拆
+      s57Push('块表 = ul 逐项[0,1)[1,2)[2,3) + ol 逐项[4,5)…[7,8) + 任务+ul 松散合并块[9,19)（CommonMark：空行只松散、不拆块）',
+        JSON.stringify(st.blocks) === JSON.stringify([[0, 1], [1, 2], [2, 3], [4, 5], [5, 6], [6, 7], [7, 8], [9, 19]]), JSON.stringify(st.blocks));
       // ① 遮罩态（初始光标在块间空行，三块全遮罩）：黑点布局左缘
       const mTop = await page.evaluate(() => window.__s57maskDot('ul', { li: 0 }));
       const mMerged = await page.evaluate(() => window.__s57maskDot('ul', { task: true, li: 5 }));
@@ -3633,9 +3784,9 @@ try {
       s57Push('编辑态：顶部 ul 黑点与遮罩态同位（Δ≤0.5px，不再「进编辑态左移」）',
         !!(aTop && mTop && Math.abs(aTop.left - mTop.left) <= 0.5),
         'mask=' + (mTop && mTop.left) + ' active=' + (aTop && aTop.left));
-      // ③ 激活合并块（块 2，光标落 ul 段首行 15）：块内空行取 0 → 行距 = 遮罩/阅读
+      // ③ 激活合并块（块 7 = 松散列表不拆、仍为单块，光标落 ul 段首行 15）：块内空行取 0 → 行距 = 遮罩/阅读
       await page.evaluate(() => {
-        window.__s57ed.setWysiwygActiveBlock(2);
+        window.__s57ed.setWysiwygActiveBlock(7);
         window.__s57cm.setCursor(15, 1);
         window.__s57cm.focus();
       });
@@ -4205,16 +4356,20 @@ try {
       s61Push('光标行 pre 挂 wysiwyg-inline-cursor-line；非光标行不挂（JS 行类载体随光标）',
         r.l4.curLine === true && r.l2.curLine === false,
         JSON.stringify({ l4: r.l4.curLine, l2: r.l2.curLine, addonWrap: { l4: r.l4.active, l2: r.l2.active } }));
-      s61Push('非光标行（粗体）：** 标记 span 维持零宽透明（S58 口径不回归）',
-        r.l2.widths.length >= 2 && r.l2.widths.every((x) => x < 0.5)
-        && r.l2.colors.every((c) => c === 'rgba(0, 0, 0, 0)'),
-        JSON.stringify({ widths: r.l2.widths, color: r.l2.colors[0] }));
+      // 逐项切块（2026-10-21）：S61 列表为紧凑列表 → 行 2 是**兄弟项**（独立块、渲染遮罩），
+      // 非「活动块内非光标行」→ 无内联标记 span（遮罩行契约：widths 恒空，S58/S66 同口径）。
+      // 活动块内非光标行的零宽透明口径由 S58（松散列表整块活动）钉住，不在此重复。
+      s61Push('非光标行（粗体）：兄弟项保持渲染遮罩（无内联标记、非光标行类）',
+        r.l2.widths.length === 0 && r.l2.curLine === false,
+        JSON.stringify({ widths: r.l2.widths, curLine: r.l2.curLine }));
       s61Push('文本段渲染化不受影响（删除线文本 span 宽度 > 0）', r.l4TextW > 5, 'strikeW=' + r.l4TextW);
-      s61Push('光标移到粗体行后：可见性跟随（新光标行真宽、旧光标行回零宽）',
+      // 逐项切块（2026-10-21）：光标移到行 2 → 项①激活（源码、真宽标记），项③（行 4）
+      // 重新遮罩（遮罩行契约：无内联标记 span，非「回零宽」）
+      s61Push('光标移到粗体行后：可见性跟随（新光标行真宽、旧光标行重遮无标记）',
         !!(r.afterMove && r.afterMove.l2 && r.afterMove.l4)
         && r.afterMove.l2.curLine === true && r.afterMove.l4.curLine === false
         && r.afterMove.l2.widths.length && r.afterMove.l2.widths.every((x) => x > 0.5)
-        && r.afterMove.l4.widths.length && r.afterMove.l4.widths.every((x) => x < 0.5),
+        && r.afterMove.l4.widths.length === 0,
         JSON.stringify({ l2w: r.afterMove.l2.widths, l4w: r.afterMove.l4.widths, l2cls: r.afterMove.l2.curLine, l4cls: r.afterMove.l4.curLine }));
       // 几何护栏：短行光标行行数 = 遮罩行数（无标记宽撑折）；长行场景允许多折 ≤1 行
       const liLines = (h) => Math.max(1, Math.round(h / 27.2));
@@ -4602,10 +4757,12 @@ try {
       s66Push('S66 初始化', false, r0.err);
     } else {
       const st0 = await lineInfo66();
-      s66Push('进入 <ins> 行：该行标记真宽（源码），其余行零宽（渲染）',
+      // 逐项切块（2026-10-21）：只有光标行（第 2 项）源文态；兄弟项保持渲染遮罩
+      //（无 wysiwyg 内联标记 span，widths 为空）
+      s66Push('进入 <ins> 行：该行标记真宽（源码），兄弟项保持渲染遮罩（无内联标记）',
         st0.l1.widths.length >= 2 && st0.l1.widths.every((x) => x > 0.5)
-        && st0.l0.widths.length && st0.l0.widths.every((x) => x < 0.5)
-        && st0.l2.widths.length && st0.l2.widths.every((x) => x < 0.5)
+        && st0.l0.widths.length === 0
+        && st0.l2.widths.length === 0
         && st0.l1.curLine === true && st0.l0.curLine === false,
         JSON.stringify({ l0: st0.l0.widths, l1: st0.l1.widths, l2: st0.l2.widths }));
       // ① 同行内真实拖选（mousedown→move→读中途→mouseup）：选中期间源码保持
@@ -4634,9 +4791,9 @@ try {
         await page.mouse.click(st0.l2.rect.x + 50, st0.l2.rect.y + st0.l2.rect.h / 2);
         await new Promise((res) => setTimeout(res, 500));
         const st1 = await lineInfo66();
-        s66Push('点同列表下一行：<ins> 行立即回渲染（零宽）、新行显源码（用户反馈②）',
+        s66Push('点同列表下一行：<ins> 行立即回渲染（重遮、无内联标记）、新行显源码（用户反馈②）',
           !!(st1.l1 && st1.l2
-            && st1.l1.widths.length && st1.l1.widths.every((x) => x < 0.5)
+            && st1.l1.widths.length === 0
             && st1.l2.widths.length >= 2 && st1.l2.widths.every((x) => x > 0.5)
             && st1.l1.curLine === false && st1.l2.curLine === true
             && st1.cur.line === 2),
@@ -4650,12 +4807,474 @@ try {
         await page.mouse.up();
         await new Promise((res) => setTimeout(res, 450));
         const post2 = await lineInfo66();
-        s66Push('跨行拖选：中途起始行源码保持；释放后头行（行2）源码、其余回渲染',
+        s66Push('跨行拖选：中途起始行源码保持；释放后头行（行2）源码、其余回渲染（重遮、无内联标记）',
           !!(mid2.l0 && mid2.l0.widths.length && mid2.l0.widths.every((x) => x > 0.5)
             && post2.l2 && post2.l2.widths.length >= 2 && post2.l2.widths.every((x) => x > 0.5)
-            && post2.l0 && post2.l0.widths.length && post2.l0.widths.every((x) => x < 0.5)
+            && post2.l0 && post2.l0.widths.length === 0
             && post2.l2.curLine === true && post2.l0.curLine === false),
           JSON.stringify({ mid2l0: mid2.l0 && mid2.l0.widths, post2l0: post2.l0 && post2.l0.widths, post2l2: post2.l2 && post2.l2.widths }));
+      }
+    }
+  }
+
+  // ---------- S67：代码块编辑态整块灰盒（2026-10-18 用户要求：上下围栏都在灰框内）——
+  // 盒内每行（开围栏/内容/闭围栏）排版同参，盒总高 = 渲染态 pre 高 + 2×代码行高 ----------
+  {
+    console.log('\n=== S67：代码块编辑态整块灰盒（上下围栏在灰框内）===');
+    const cb = await page.evaluate(() => window.__runCodeBox());
+    if (cb.err || !cb.render) {
+      console.log('  ⚠ 场景失败: ' + (cb.err || '无渲染态测量'));
+      fail++;
+    } else {
+      console.log('  ' + JSON.stringify(cb));
+      const checks67 = [];
+      const r = cb.render;
+      const insetCount = (s) => (s && s.shadow ? (s.shadow.match(/inset/g) || []).length : 0);
+      checks67.push([`渲染态 pre 盒基准：四边 padding 16px + border 1px + 圆角 6px`,
+        r.padT === '16px' && r.padB === '16px' && r.padL === '16px' && r.padR === '16px'
+        && r.border.indexOf('1px') === 0 && r.radius === '6px']);
+      checks67.push([`渲染态基准：代码字号 14.4px（0.9×16 预览字号）/ .code-line 行盒 ${r.codeLineH}px（行高 1.8）`,
+        r.codeFs === '14.4px' && r.codeLineH > 20]);
+      const c1 = cb.lines && cb.lines.c1, cMid = cb.lines && cb.lines.cMid, cLast = cb.lines && cb.lines.cLast;
+      checks67.push([`编辑态内容行：wysiwyg-code-line 行类 + 字号/行盒/字族 = 渲染态（${c1 && c1.fs} / ${c1 && c1.lh} vs ${r.codeFs} / ${r.codeLineH}）`,
+        c1 && c1.cls === true && c1.fs === r.codeFs && Math.abs(+c1.lh.replace('px', '') - r.codeLineH) < 0.5 && c1.ff === r.codeFf
+        && cMid && cMid.cls === true && cLast && cLast.cls === true]);
+      checks67.push([`编辑态内距 = 行留白 + 渲染态分解（左右 65px=32行留白+1border+16pre+16hljs；首顶/末底 29px=1border+16pre+12hljs）`,
+        c1 && c1.padTLR === '29px/65px/65px/0px' && c1.padTop === true
+        && cMid && cMid.padTLR === '0px/65px/65px/0px'
+        && cLast && cLast.padTLR === '0px/65px/65px/29px' && cLast.padBottom === true]);
+      const open = cb.lines && cb.lines.open, close = cb.lines && cb.lines.close;
+      checks67.push([`围栏行在灰盒内（开/闭两行同挂灰底 + 代码排版行类；开=first 角、闭=last 角）`,
+        open && open.bg === true && open.cls === true && open.first === true && open.lastCls === false
+        && close && close.bg === true && close.cls === true && close.first === false && close.lastCls === true
+        && open.h != null && Math.abs(open.h - r.codeLineH) < 0.5 && Math.abs(close.h - r.codeLineH) < 0.5]);
+      // 2026-10-21：底色/描边/圆角全部移到 ::before 内缩盒（旧 inset shadow 全行宽，
+      // 编辑态灰盒比渲染态 pre 左右各宽一段行留白——用户截图反馈），linebackground 自身底色置空
+      checks67.push([`灰盒底色 = 渲染态 --code-bg（::before 内缩盒；linebackground 自身底色已置空）`,
+        cb.shadowFirst && cb.shadowFirst.before.bg === r.bg && cb.shadowMid && cb.shadowMid.before.bg === r.bg
+        && cb.shadowLast && cb.shadowLast.before.bg === r.bg
+        && cb.shadowFirst.bg === 'rgba(0, 0, 0, 0)' && cb.shadowMid.bg === 'rgba(0, 0, 0, 0)' && cb.shadowLast.bg === 'rgba(0, 0, 0, 0)']);
+      checks67.push([`灰盒描边（::before border，与 pre border 同色）：首/末行三边、中间行两边`,
+        cb.shadowFirst.before.bl === '1px' && cb.shadowFirst.before.br === '1px'
+        && cb.shadowMid.before.bl === '1px' && cb.shadowMid.before.br === '1px'
+        && cb.shadowMid.before.bt === '0px' && cb.shadowMid.before.bb === '0px'
+        && cb.shadowLast.before.bt === '0px' && cb.shadowLast.before.bb === '1px'
+        && cb.shadowFirst.before.bt === '1px']);
+      checks67.push([`灰盒圆角：首行上角 6px / 末行下角 6px（::before，与 pre 同角）`,
+        cb.shadowFirst.before.rtl === '6px' && cb.shadowLast.before.rbl === '6px'
+        && cb.shadowMid.before.rtl === '0px' && cb.shadowMid.before.rbl === '0px']);
+      // 2026-10-21 核心修复断言：编辑态灰盒横向范围 = 渲染态 pre 横向范围（逐缘 Δ<0.5px），
+      // 文本 x 两态对位（旧实现盒 = 整行宽含行留白、文本偏左一整段行留白）
+      const bf = cb.shadowFirst && cb.shadowFirst.before;
+      const px = (v) => parseFloat(v);
+      const boxX = bf ? +(bf.lbX + px(bf.left)).toFixed(2) : null;
+      const boxW = bf ? +(bf.lbW - px(bf.left) - px(bf.right)).toFixed(2) : null;
+      checks67.push([`核心(横)：灰盒 x/宽 = 渲染态 pre x/宽（${boxX}/${boxW} vs ${r.preX}/${r.preW}，内缩=${bf ? bf.left + '/' + bf.right : 'n/a'}）`,
+        boxX != null && Math.abs(boxX - r.preX) < 0.5 && Math.abs(boxW - r.preW) < 0.5]);
+      checks67.push([`核心(横)：编辑态代码首文本 x = 渲染态（${cb.editTextX} vs ${r.textX}）`,
+        cb.editTextX != null && r.textX != null && Math.abs(cb.editTextX - r.textX) < 0.5]);
+      checks67.push([`核心(横)：::before 内缩 = 行留白（left/right 相等，= 行基准留白）`,
+        bf && bf.left === bf.right && px(bf.left) > 0 && px(bf.left) < 100]);
+      checks67.push([`核心(纵)：灰盒总高 = 渲染态 pre 高 + 2×代码行高（${cb.boxH}px vs ${r.preH}+2×${r.codeLineH}px，Δ=${cb.boxDelta}px）`,
+        cb.boxDelta != null && Math.abs(cb.boxDelta) < 0.5]);
+      checks67.push([`背景层覆盖 pre padding 区（盒缘与 16px 内距对齐，Δ<0.5px）`,
+        cb.bgGeom && Math.abs(cb.bgGeom.bgH - cb.bgGeom.preH) < 0.5
+        && Math.abs(cb.bgGeom.topGap) < 0.5]);
+      for (const [label, ok] of checks67) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S68：嵌套列表两态一致（2026-10-17 用户截图：列表有嵌套子项时渲染态与
+  // 编辑态不一样）——各层文本 x / 圆点形态 / 有序括号 marker 对齐渲染态 ----------
+  {
+    console.log('\n=== S68：嵌套列表两态一致（每层 +24px + marker 按层）===');
+    const nl = await page.evaluate(() => window.__runNestedList());
+    if (nl.err || !nl.renderUl) {
+      console.log('  ⚠ 场景失败: ' + (nl.err || '无渲染态测量'));
+      fail++;
+    } else {
+      console.log('  ' + JSON.stringify(nl));
+      const checks68 = [];
+      const xClose = (a, b, tol) => a != null && b != null && Math.abs(a - b) <= (tol == null ? 0.5 : tol);
+      // ① 渲染态基准：li 文本 x = 56 + 24×(层-1)（逐项切块后，ul/ol 均激活「含嵌套子项」
+      // 的第二项块：ul = 第二项/子项A/子项B/更深层，ol = 然后/子步骤一/子步骤二）
+      const ulX = nl.renderUl.map((r) => r.x), olX = nl.renderOl.map((r) => r.x);
+      checks68.push([`渲染态基准：ul 各层文本 x = 56/80/104（实测 ${ulX.join(',')}）`,
+        ulX.length === 4 && xClose(ulX[0], 56) && xClose(ulX[1], 80) && xClose(ulX[3], 104)]);
+      checks68.push([`渲染态基准：ol 各层文本 x = 56/80（实测 ${olX.join(',')}）`,
+        olX.length === 3 && xClose(olX[0], 56) && xClose(olX[1], 80)]);
+      // ② 编辑态 ul：各层文本 x = 渲染态；lvl 行类；圆点形态 disc/circle/square
+      const eUl = nl.editUl;
+      checks68.push([`编辑态 ul：各层文本 x 对齐渲染态（${eUl.map((r) => r.textX).join(',')} vs ${ulX.join(',')}）`,
+        eUl.length === ulX.length && eUl.every((r, i) => xClose(r.textX, ulX[i]))]);
+      const rA = eUl.find((r) => r.text === '- 嵌套子项'), rC = eUl.find((r) => r.text === '- 更深层嵌');
+      checks68.push([`编辑态 ul：二级/三级行挂 lvl-2/lvl-3 行类`,
+        rA && rA.lvlCls.join(',') === 'lvl-2' && rC && rC.lvlCls.join(',') === 'lvl-3']);
+      const b1 = eUl[0] && eUl[0].bullet, b2 = rA && rA.bullet, b3 = rC && rC.bullet;
+      checks68.push([`编辑态 ul 圆点：各层同实心 disc（Edge 16px 下渲染 disc/circle/square 同为 ~6px 实心点）`,
+        b1 && b1.bg !== 'rgba(0, 0, 0, 0)' && b1.radius === '50%' && b1.w === '6px'
+        && b2 && b2.bg !== 'rgba(0, 0, 0, 0)' && b2.radius === '50%' && b2.w === '6px'
+        && b3 && b3.bg !== 'rgba(0, 0, 0, 0)' && b3.radius === '50%' && b3.w === '6px']);
+      // ③ 编辑态 ol：各层文本 x；二级「N)」：数字槽 padding 9.228px + 点 span 零宽 + ::after「)」
+      const eOl = nl.editOl;
+      checks68.push([`编辑态 ol：各层文本 x 对齐渲染态（${eOl.map((r) => r.textX).join(',')} vs ${olX.join(',')}）`,
+        eOl.length === olX.length && eOl.every((r, i) => xClose(r.textX, olX[i]))]);
+      const s1 = eOl.find((r) => r.text === '1. 子步骤');
+      checks68.push([`编辑态 ol 二级：lvl-2 行类 + 数字槽 padding-right 9.228px + 点 span 零宽 + ::after「)」`,
+        s1 && s1.lvlCls.join(',') === 'lvl-2' && s1.paren
+        && s1.paren.width === '0px' && s1.paren.afterContent === '")"'
+        && s1.olMarkPadR === '9.228px']);
+      const o1 = eOl[0];
+      checks68.push([`编辑态 ol 一级：无括号槽、保持源「N.」（padding-right 4.4px）`,
+        o1 && !o1.paren && o1.olMarkPadR === '4.4px']);
+      for (const [label, ok] of checks68) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S69：块间空行光标行灰底 + 连续回车不跳顶（2026-10-21 真机用户报
+  // demo.md「图片上方回车新增行无灰色指示 + 输入时页面乱跳到目录位置」）----------
+  {
+    console.log('\n=== S69：块间空行光标行灰底 + 连续回车不跳顶 ===');
+    const g = await page.evaluate(() => window.__runGapCursor2026());
+    if (g.err) {
+      console.log('  ⚠ 场景失败: ' + g.err);
+      fail++;
+    } else {
+      console.log('  ' + JSON.stringify(g));
+      const a = g.a || {}, a2 = g.a2 || {}, b = g.b || {}, c = g.c || {};
+      const checks69 = [];
+      // 阈值 10px：harness 用基础字体（全高空行 15px），真机预览字体 16px 下为 27.2px；
+      // 「未塌缩」的口径由 blank===false + inlineLH 为空承担（塌缩态 inline 行高=0px）
+      checks69.push([`光标在块间空行：光标行灰底（active-block）+ 全高（${a.h}px ≥ 10）+ 无空行类/无提示 + activeIdx=-1`,
+        a.gray === true && a.h != null && a.h >= 10 && a.blank === false && a.hint === false && a.activeIdx === -1 && a.cursorLine === g.gapLine]);
+      checks69.push([`光标离开块间空行：收回塌缩（高 ${a2.h}px < 20 或 inline 间隙恢复）+ 灰底撤销`,
+        a2.gray === false && ((a2.h != null && a2.h < 20) || !!(a2.inlineLH && a2.inlineLH !== ''))]);
+      checks69.push([`块间空行连续 4×Enter：Enter 全部生效（+${b.lineCountDelta} 行）`,
+        b.lineCountDelta === 4]);
+      // 阈值口径（2026-10-21 定案）：真实跳变检测器 = spikes（单步 ≥60px）+ 累计漂移
+      // <120 + 光标留视口；max|Δ| 放宽到 150——首个 Enter 的一次性锚定收敛（旧空行
+      // 塌回 + 新行结构重定位）实测可达 ~53px，属合法行为，不应与「乱跳」混淆。
+      checks69.push([`块间空行连续 4×Enter：无跳顶（max|Δtop|=${b.maxDelta}px < 150；${b.topBefore}→${b.topAfter}；尖峰 ${b.spikes} 次）+ 光标留在视口内`,
+        b.maxDelta != null && b.maxDelta < 150
+        && Math.abs((b.topAfter || 0) - (b.topBefore || 0)) < 120
+        && b.spikes === 0 && b.cursorVisible === true]);
+      checks69.push([`refresh×3：TOC 遮罩行记录行高保持实测值（${c.recTocBefore}→${c.recTocAfter}px，Δ≤5）+ scrollTop 不动（Δ≤20）`,
+        c.recTocBefore != null && c.recTocAfter != null
+        && Math.abs(c.recTocAfter - c.recTocBefore) <= 5
+        && Math.abs((c.topAfterRefresh || 0) - (c.topBeforeRefresh || 0)) <= 20]);
+      for (const [label, ok] of checks69) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S70：定义列表（dl/dt/dd）两态一致 + dd 行精确落行（2026-10-18 用户截图：
+  // 编辑态冒号裸露/无缩进/dt 不加粗，点 dd 行光标落 dt 行）----------
+  {
+    console.log('\n=== S70：定义列表编辑态 = 渲染态 + dd 行精确落行 ===');
+    const dl = await page.evaluate(() => window.__runDefList());
+    if (dl.err) {
+      console.log('  ⚠ 场景失败: ' + dl.err);
+      fail++;
+    } else {
+      console.log('  ' + JSON.stringify(dl));
+      const r = dl.render || {}, e = dl.edit || {};
+      const checks70 = [];
+      checks70.push([`渲染态基准：dt 粗 600 + 顶距 8px；dd 左缩进 24px + 底距 8px + 次级色（≠dt 色）`,
+        r.dtWeight === '600' && r.dtMt === '8px'
+        && r.ddMl === '24px' && r.ddMb === '8px'
+        && r.ddColor && r.dtColor && r.ddColor !== r.dtColor]);
+      // 文档行号（0-based）：5=TizuMark(dt) / 6=: 基于 Tauri…(dd)；点击点在 dd 行上半，
+      // 比例估算（分母=遮罩整高）在此位置会误落 dt 行——精确落行断言光标=6
+      checks70.push([`点 dd 行上半：光标精确落 dd 源行（行 ${dl.cursorLine}，非 dt 行 5）+ 活动块=TizuMark 项 + 块解罩`,
+        dl.cursorLine === 6 && dl.unmasked === true && dl.activeIdx === 2]);
+      checks70.push([`编辑态 dt 行：wysiwyg-dt-line 行类 + 粗 600 + 块首顶距 8px + 无 para-line`,
+        e.dtCls === true && e.dtWeight === '600' && e.dtPadT === '8px' && e.dtPara === false]);
+      checks70.push([`编辑态 dd 行：wysiwyg-dd-line 行类 + 左缩进 56px（行基准 32 + 24，同渲染 dd 相对 dt +24）+ 块末底距 16px + 颜色=渲染态 dd 色 + 无 para-line`,
+        e.ddCls === true && e.ddPadL === '56px' && e.ddPadB === '16px'
+        && e.ddColor === r.ddColor && e.ddPara === false]);
+      checks70.push([`编辑态 “: ” 前缀透明 span（真实宽度保留，光标测量不受影响）`,
+        e.colon && e.colon.color === 'rgba(0, 0, 0, 0)' && e.colon.w > 5]);
+      const ddxGap = r.dtX != null && r.ddX != null ? +(r.ddX - r.dtX).toFixed(2) : null;
+      const eddGap = e.dtX != null && e.ddX != null ? +(e.ddX - e.dtX).toFixed(2) : null;
+      checks70.push([`编辑态缩进差 = 渲染态缩进差（dd 相对 dt 均 +24px：${eddGap} vs ${ddxGap}）`,
+        ddxGap === 24 && eddGap === 24]);
+      checks70.push([`核心：编辑块高 = 渲染遮罩高（${e.blockH}px vs ${r.maskH}px，Δ=${dl.hDelta}px，折叠口径 8 顶 + 16 底）`,
+        dl.hDelta != null && Math.abs(dl.hDelta) < 0.5]);
+      for (const [label, ok] of checks70) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S71：切块页面位移（2026-10-21 用户反馈「点击某一行进入编辑态，再点击其他
+  // 行时，页面会往下移动一段距离」）：① h1–h6 活动态源行高 = 遮罩高（逐像素）；
+  // ② 点标题块进编辑态再点定义列表块：参照行顶边全程不动 + 标题行顶边落回遮罩顶边
+  //（点击锚点只补偿结构位移——旧口径把行顶钉到点击点，点行中部整页下移半个行高）----------
+  {
+    console.log('\n=== S71：切块页面位移（标题块高补齐 + 点击锚点只补偿结构位移）===');
+    const bs = await page.evaluate(() => window.__runBlockSwitch());
+    if (bs.err) {
+      console.log('  ⚠ 场景失败: ' + bs.err);
+      fail++;
+    } else {
+      console.log('  matrix: ' + JSON.stringify(bs.matrix));
+      console.log('  refTops: ' + JSON.stringify(bs.refTops)
+        + '  h2maskTop=' + bs.h2maskTop + '  h2lineTop=' + bs.h2lineTop);
+      const checks71 = [];
+      for (const row of (bs.matrix || [])) {
+        checks71.push([`标题 h${row.lvl}：活动态源行高 = 遮罩高（${row.src}px vs ${row.mask}px，Δ=${row.delta}px）`,
+          row.delta != null && Math.abs(row.delta) < 0.5]);
+      }
+      checks71.push([`切块位移：参照段落行顶边全程不动（点标题→点定义列表，maxShift=${bs.maxRefShift}px）`,
+        bs.maxRefShift != null && bs.maxRefShift < 0.5]);
+      checks71.push([`点击锚点：标题行顶边落回撤罩前遮罩顶边（${bs.h2lineTop}px vs ${bs.h2maskTop}px，不再钉到点击点）`,
+        bs.h2lineTop != null && bs.h2maskTop != null && Math.abs(bs.h2lineTop - bs.h2maskTop) < 0.5]);
+      for (const [label, ok] of checks71) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S72：列表按项显示源码（2026-10-21 用户反馈「光标在高亮标记这一行，插入内容
+  // 这一行也展示源码了，应该只显示光标所在行或者所在块的源码」）：点紧凑列表某项 → 只该
+  // 项源码，兄弟项保持渲染态；几何不跳（参照行顶不动 + 源行顶落回 li 顶）；li-mid 底距；
+  // ol 逐项片段序号不回位 1 ----------
+  {
+    console.log('\n=== S72：列表按项显示源码（紧凑列表点某项只该项源码）===');
+    const li = await page.evaluate(() => window.__runListItem());
+    if (li.err) {
+      console.log('  ⚠ 场景失败: ' + li.err);
+      fail++;
+    } else {
+      console.log('  initial: ' + JSON.stringify(li.initial));
+      console.log('  lines3: ' + JSON.stringify(li.lines3) + '  active3=' + JSON.stringify(li.active3));
+      console.log('  lines1: ' + JSON.stringify(li.lines1) + '  active1=' + JSON.stringify(li.active1));
+      const checks72 = [];
+      const ini = li.initial || {};
+      // ① 紧凑列表逐项切块：4 个项遮罩 + first/middle/middle/last 标签
+      const itemBlocks = (ini.blocks || []).filter((b) => b[2]);
+      checks72.push([`紧凑列表按项切块：4 项 → 4 个逐项块（first/middle/middle/last），共 ${itemBlocks.length} 个`,
+        itemBlocks.length === 4
+        && itemBlocks.map((b) => b[3]).join(',') === 'first,middle,middle,last'
+        && itemBlocks.map((b) => [b[0], b[1]]).join('|') === '2,3|3,4|4,5|5,6']);
+      checks72.push([`渲染态：4 个项各自一个遮罩（liMaskCount=${ini.liMaskCount}）`,
+        ini.liMaskCount === 4]);
+      // ② 点项③ → 只项③源码（①②④保持渲染态）
+      checks72.push([`点项③（==高亮标记==）：只该项源码，①②④保持渲染遮罩`,
+        li.onlyItem3Source === true && li.active3.cursor.line === 4]);
+      checks72.push([`非末项片段挂 li-mid（项间距底缘 4px），末项不挂（列表底距 14px 归末项）`,
+        li.liMidOnNonLast === true]);
+      checks72.push([`几何不变量：项③源行顶落回撤罩前 li 顶（Δ=${li.src3TopDelta}px < 0.5）`,
+        li.src3TopDelta != null && li.src3TopDelta < 0.5]);
+      // ③ 切项① → 项③重遮、参照段落行顶全程不动
+      checks72.push([`切项①：只项①源码，项③重新遮罩，光标落项①行`,
+        li.onlyItem1Source === true && li.active1.cursor.line === 2]);
+      checks72.push([`几何不变量：切项全程参照段落行顶不动（maxRefShift=${li.maxRefShift}px < 0.5）`,
+        li.maxRefShift != null && li.maxRefShift < 0.5]);
+      // ④ ol 逐项片段序号：第 2 项片段 <ol start="2">
+      checks72.push([`ol 逐项片段序号不回位 1（第 2 项片段 start="${li.olStart}"，文本「${li.olText}」）`,
+        li.olStart === '2' && li.olText === '然后做那件事情']);
+      for (const [label, ok] of checks72) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S73：WYSIWYG details 折叠（2026-10-21 用户反馈「折叠区块，在实时预览时，
+  // 没法折叠展开」）：点 summary → 原地折叠/展开（与阅读模式同口径：纯 DOM 瞬态、不回写
+  // 源码、重渲染后 normalizeDetails 恢复展开）；不撤罩、不动光标；折叠/展开后遮罩行盒
+  // 变高 → cm.refresh() 重测几何，块下段落行顶随高度差精确移动、再展开逐像素回位 ----------
+  {
+    console.log('\n=== S73：WYSIWYG details 折叠（点 summary 原地折叠/展开）===');
+    const d73doc = ['# T', '', '<details>', '<summary>点击展开</summary>', '', '<ul>', '<li>甲</li>', '<li>乙</li>', '</ul>', '', '</details>', '', '尾部参照段落。'].join('\n');
+    const d73setup = await page.evaluate((d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__d73cm = cm; window.__d73ed = ed;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      return new Promise((res) => setTimeout(() => {
+        cm.setCursor({ line: cm.lineCount() - 1, ch: 0 }, { scroll: false });
+        setTimeout(() => res(null), 400);
+      }, 400));
+    }, d73doc);
+    if (d73setup) {
+      console.log('  ⚠ 场景失败: ' + d73setup);
+      fail++;
+    } else {
+      const d73state = () => page.evaluate(() => {
+        const cm = window.__d73cm, ed = window.__d73ed;
+        const dm = Array.from(cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask')).find((m) => m.querySelector('details'));
+        const det = dm && dm.querySelector('details');
+        const refH = cm.getLineHandle(cm.lineCount() - 1);
+        let refPre = null;
+        for (const lv of cm.display.view) if (lv && lv.line === refH) {
+          const el = lv.node; refPre = el.tagName === 'PRE' ? el : el.querySelector('pre.CodeMirror-line');
+        }
+        return {
+          stillMasked: !!dm,
+          maskH: dm ? Math.round(dm.getBoundingClientRect().height * 100) / 100 : null,
+          open: det ? det.open : null,
+          refTop: refPre ? Math.round(refPre.getBoundingClientRect().top * 100) / 100 : null,
+          cursor: cm.getCursor(),
+          activeIdx: ed._wysiwygActiveIdx,
+          value: cm.getValue(),
+        };
+      });
+      const d73clickSummary = async () => {
+        const pt = await page.evaluate(() => {
+          const cm = window.__d73cm;
+          const dm = Array.from(cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask')).find((m) => m.querySelector('details'));
+          const sum = dm && dm.querySelector('summary');
+          if (!sum) return null;
+          const r = sum.getBoundingClientRect();
+          return { x: r.x + Math.min(40, r.width / 2), y: r.y + r.height / 2 };
+        });
+        if (!pt) return false;
+        await page.mouse.click(pt.x, pt.y);
+        await page.waitForTimeout(250);
+        return true;
+      };
+      const s0 = await d73state();
+      await d73clickSummary();
+      const s1 = await d73state();
+      await d73clickSummary();
+      const s2 = await d73state();
+      // 编辑他处 → 防抖重渲染 → normalizeDetails 恢复展开（与阅读模式同口径）
+      await page.evaluate(async () => {
+        const cm = window.__d73cm;
+        const last = cm.lineCount() - 1;
+        cm.focus();
+        cm.replaceRange(' X', { line: last, ch: cm.getLine(last).length });
+        await new Promise((res) => setTimeout(res, 600));
+      });
+      const s3 = await d73state();
+      const d73src = s0.value; // 折叠/展开全程源码不得被改写
+      const refDeltaErr = s0.refTop != null && s1.refTop != null
+        ? Math.abs((s0.refTop - s1.refTop) - (s0.maskH - s1.maskH)) : null;
+      const checks73 = [];
+      checks73.push([`遮罩态：details 渲染为展开（normalizeDetails 统一 open），参照行顶 ${s0.refTop}px`,
+        s0.open === true && s0.stillMasked === true && s0.maskH != null && s0.maskH > 60]);
+      checks73.push([`点 summary → 原地折叠：open=false，遮罩高缩到 summary 行（${s0.maskH}→${s1.maskH}px），块不撤罩、光标不动、活动块不变`,
+        s1.open === false && s1.stillMasked === true && s1.maskH != null && s1.maskH < s0.maskH - 40
+        && JSON.stringify(s1.cursor) === JSON.stringify(s0.cursor) && s1.activeIdx === s0.activeIdx]);
+      checks73.push([`折叠后块下段落行顶随高度差精确上移（行顶Δ与遮罩高差之差=${refDeltaErr == null ? 'n/a' : refDeltaErr.toFixed(2)}px < 0.5）：toggle 后 refresh 重测几何`,
+        refDeltaErr != null && refDeltaErr < 0.5]);
+      checks73.push([`再点 → 展开，遮罩高/参照行顶逐像素回位（Δ=${Math.abs(s2.maskH - s0.maskH).toFixed(2)}/${Math.abs(s2.refTop - s0.refTop).toFixed(2)}px < 0.5）`,
+        s2.open === true && Math.abs(s2.maskH - s0.maskH) < 0.5 && Math.abs(s2.refTop - s0.refTop) < 0.5]);
+      checks73.push([`折叠/展开全程不回写源码；编辑他处重渲染后恢复展开（与阅读模式同口径）`,
+        s1.value === d73src && s2.value === d73src && s3.value === d73src + ' X' && s3.open === true && s3.stillMasked === true]);
+      console.log('  state0: ' + JSON.stringify(s0));
+      console.log('  state1: ' + JSON.stringify(s1));
+      console.log('  state2: ' + JSON.stringify(s2));
+      for (const [label, ok] of checks73) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S74：WYSIWYG 代码块编辑态语法色 ≡ 渲染态（2026-10-21 用户截图反馈「代码块
+  // 编辑态文字高亮颜色与渲染态不一样，改为一样的」）：编辑态围栏 token（CM 内层模式
+  // cm-keyword/cm-def/…）重映射到 GitHub hljs 色板（styles.css wysiwyg-code-line span.cm-*
+  // 规则）——keyword/def/comment/number/string/基色 与渲染态遮罩 hljs span 逐色相等；
+  // 围栏标志行保持次级色（不被评论灰覆盖） ----------
+  {
+    console.log('\n=== S74：WYSIWYG 代码块编辑态语法色 ≡ 渲染态 ===');
+    const s74doc = [
+      '# T', '', '```javascript', '// 二分查找 - 经典算法实现',
+      'function binarySearch(arr, target) {', '  let left = 0;',
+      '  let right = arr.length - 1;', '  while (left <= right) {',
+      '    const mid = Math.floor((left + right) / 2);', '    const s = "字符串";',
+      '  }', '  return -1;', '}', '```', '', '尾部段落。',
+    ].join('\n');
+    const s74 = await page.evaluate(async (d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      await new Promise((res) => setTimeout(res, 400));
+      cm.setCursor({ line: 5, ch: 4 }, { scroll: false });
+      await new Promise((res) => setTimeout(res, 500));
+      const getPre = (n) => {
+        const h = cm.getLineHandle(n);
+        for (const lv of cm.display.view) if (lv && lv.line === h) {
+          const el = lv.node;
+          return el.tagName === 'PRE' ? el : el.querySelector('pre.CodeMirror-line');
+        }
+        return null;
+      };
+      const pick = (n, cls) => {
+        const pre = getPre(n);
+        const el = Array.from(pre.querySelectorAll('span')).find((s) => String(s.className).split(' ').includes(cls));
+        return el ? getComputedStyle(el).color : null;
+      };
+      const edit = {
+        keyword: pick(4, 'cm-keyword'),
+        def: pick(4, 'cm-def'),
+        comment: pick(3, 'cm-comment'),
+        number: pick(5, 'cm-number'),
+        string: pick(9, 'cm-string'),
+        base: getComputedStyle(getPre(5)).color,
+        fence: (function () {
+          const el = getPre(2).querySelector('[class*="wysiwyg-code-fence"]');
+          return el ? getComputedStyle(el).color : null;
+        })(),
+      };
+      cm.setCursor({ line: cm.lineCount() - 1, ch: 0 }, { scroll: false });
+      await new Promise((res) => setTimeout(res, 600));
+      const mask = cm.getWrapperElement().querySelector('.wysiwyg-block-mask pre');
+      if (!mask) return { err: '撤罩后未找到代码遮罩' };
+      const findHljs = (cls) => {
+        const el = Array.from(mask.querySelectorAll('span')).find((s) => String(s.className).split(' ').includes(cls));
+        return el ? getComputedStyle(el).color : null;
+      };
+      return {
+        edit,
+        render: {
+          keyword: findHljs('hljs-keyword'),
+          def: findHljs('function_'),
+          comment: findHljs('hljs-comment'),
+          number: findHljs('hljs-number'),
+          string: findHljs('hljs-string'),
+          base: getComputedStyle(mask.querySelector('.hljs') || mask).color,
+        },
+      };
+    }, s74doc);
+    if (s74.err) {
+      console.log('  ⚠ 场景失败: ' + s74.err);
+      fail++;
+    } else {
+      console.log('  edit: ' + JSON.stringify(s74.edit));
+      console.log('  render: ' + JSON.stringify(s74.render));
+      const checks74 = [
+        [`keyword（function/let/const…）≡ .hljs-keyword（${s74.edit.keyword}）`,
+          s74.edit.keyword !== null && s74.edit.keyword === s74.render.keyword],
+        [`函数名/声明名 ≡ .hljs-title.function_（${s74.edit.def}）`,
+          s74.edit.def === s74.render.def],
+        [`代码注释 ≡ .hljs-comment（${s74.edit.comment}）`,
+          s74.edit.comment === s74.render.comment],
+        [`数字 ≡ .hljs-number（${s74.edit.number}）`,
+          s74.edit.number === s74.render.number],
+        [`字符串 ≡ .hljs-string（${s74.edit.string}）`,
+          s74.edit.string === s74.render.string],
+        [`普通文本基色 ≡ .hljs 基色（${s74.edit.base}）`,
+          s74.edit.base === s74.render.base],
+        [`围栏标志行保持次级色、未被评论灰覆盖（${s74.edit.fence} ≠ ${s74.edit.comment}）`,
+          s74.edit.fence !== null && s74.edit.fence !== s74.edit.comment],
+      ];
+      for (const [label, ok] of checks74) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
       }
     }
   }

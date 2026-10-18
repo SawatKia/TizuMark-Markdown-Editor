@@ -35,6 +35,10 @@
   // 末行下缘做圆角 → 多行块看起来是一个圆角矩形，而非一排各自带角的小条。
   const ACTIVE_FIRST_CLASS = 'cm-wysiwyg-active-first';
   const ACTIVE_LAST_CLASS = 'cm-wysiwyg-active-last';
+  // 代码块灰盒描边类（2026-10-18 用户要求：上下围栏都在灰框内）：挂代码块**整块每行**
+  // （开围栏/内容/闭围栏），CSS 用 ::before 内缩盒画 --code-bg 底色 + 1px 边框
+  // （与 pre 的 border 同参 --border-color）；内容行另补 29px 顶/底内距（渲染态 pre 内距分解）。
+  const ACTIVE_CODE_BOX_CLASS = 'cm-wysiwyg-code-box';
   // 大文档虚拟遮罩：块数超过 maxBlocks 时渲染器只切边界不渲染（skipped），
   // 遮罩按视口 ±margin 行按需挂载（阶段3 计划项「大文档整合」的落地形式）
   const WYSIWYG_MAX_BLOCKS = 80;
@@ -156,6 +160,7 @@
       // 6) 列表（无序/有序/任务/嵌套）：连续列表行 + 其缩进续行
       if (RE.ul.test(cur) || RE.ol.test(cur) || RE.task.test(cur)) {
         i++;
+        let loose = false;
         while (i < total) {
           if (isBlank(arr[i])) {
             // 空行后若仍是列表项则属同一块（松散列表），否则结束
@@ -163,13 +168,43 @@
             while (k < total && isBlank(arr[k])) k++;
             const cont = k < total && (RE.ul.test(arr[k]) || RE.ol.test(arr[k]) || RE.task.test(arr[k]));
             if (!cont) break;
+            loose = true;
             i = k;
             continue;
           }
           if (RE.ul.test(arr[i]) || RE.ol.test(arr[i]) || RE.task.test(arr[i]) || listContinues(arr[i])) { i++; continue; }
           break;
         }
-        blocks.push({ start, end: i, lines: arr.slice(start, i) });
+        // 紧凑列表（块内无空行）按项切块（与 renderMarkdownBlocks 同一口径，2026-10-21
+        // 用户反馈：点列表项只该项显源码、兄弟项保持渲染）：项边界 = 下一个缩进 ≤ 当前项
+        // 缩进的标记行（同级/更浅标记开新项；更深标记行与缩进续行归当前项的嵌套行段）。
+        // 松散列表（有空行）保持整块；单项列表（含带嵌套子项的单项）也保持整块——孤项
+        // 即整列表，14px 列表底距归属它，拆不出「非末项」。
+        const itemStarts = [];
+        let s = start;
+        while (s < i) {
+          itemStarts.push(s);
+          const itemIndent = (arr[s].match(/^\s*/) || [''])[0].length;
+          s++;
+          while (s < i) {
+            const l = arr[s];
+            const m = RE.task.exec(l) || RE.ul.exec(l) || RE.ol.exec(l);
+            if (m && m[1].length <= itemIndent) break; // 同级/更浅标记行 = 新项
+            s++;
+          }
+        }
+        if (!loose && itemStarts.length > 1) {
+          itemStarts.forEach((st, k) => {
+            const en = k + 1 < itemStarts.length ? itemStarts[k + 1] : i;
+            blocks.push({
+              start: st, end: en, lines: arr.slice(st, en),
+              listItem: true,
+              listItemPos: (k === 0 ? 'first' : k === itemStarts.length - 1 ? 'last' : 'middle'),
+            });
+          });
+        } else {
+          blocks.push({ start, end: i, lines: arr.slice(start, i) });
+        }
         continue;
       }
 
@@ -514,7 +549,19 @@
     _wysiwygBlockIndexAtFresh(line) {
       let idx = this.wysiwygBlockIndexAt(line);
       if (idx < 0) {
-        try { this._wysiwygBlocks = this.computeWysiwygBlocks(true) || this._wysiwygBlocks; } catch (_) { /* 保留旧表 */ }
+        try {
+          const oldBlocks = this._wysiwygBlocks;
+          const fresh = this.computeWysiwygBlocks(true);
+          if (fresh) {
+            // ⚠️ 切块后必须立即把遮罩标记重键到新表：marks 键是**挂遮罩时那张表**的块索引，
+            // 结构变化（如列表内回车续出新项）后新表形状不同，调用方随后拿新表 idx 去
+            // setWysiwygActiveBlock → unmaskWysiwygBlock(新idx) 会命中**另一块**的旧键遮罩
+            // 撤掉它（2026-10-21 实测 S38：ol 项内回车后，下方引用块遮罩被误撤、源码裸露）。
+            // 与全量增量刷新同一口径重键（_wysiwygRekeyMarksToBlocks）；250ms 防抖刷新随后
+            // 照常跑，源匹配幂等（无副作用）。
+            this._wysiwygRekeyMarksToBlocks(oldBlocks || [], fresh);
+          }
+        } catch (_) { /* 保留旧表 */ }
         idx = this.wysiwygBlockIndexAt(line);
       }
       return idx;
@@ -589,8 +636,14 @@
       // TOC 判定在挂遮罩时刻取（闭包用）且必须先于普通文字判定：[TOC] 行在异步替换目录
       // 前遮罩就是单个 <p>，若先判普通文字会漏掉「删除」按钮。
       const isTocBlock = this._wysiwygBlockIsToc(b);
-      if (this._wysiwygBlockIsList(b)) node.classList.add('wysiwyg-mask-no-btn');
-      else if (this._wysiwygBlockIsHeading(b)) node.classList.add('wysiwyg-mask-no-btn-heading');
+      if (this._wysiwygBlockIsList(b)) {
+        node.classList.add('wysiwyg-mask-no-btn');
+        // 列表逐项块的非末项片段（2026-10-21 用户反馈：点列表项只该项显源码）：no-btn
+        // 规则恢复的内容元素 14px 底距是「列表底距」，只归属列表末项；非末项片段底缘
+        // 应 = 项间距 4px（li 自身 margin-bottom 折进遮罩底缘——把 ul/ol 底距清零即
+        // 得 4px，li 底距不会穿越 BFC 底缘外溢）→ 见 styles.css wysiwyg-mask-li-mid 规则。
+        if (b.listItem && b.listItemPos !== 'last') node.classList.add('wysiwyg-mask-li-mid');
+      } else if (this._wysiwygBlockIsHeading(b)) node.classList.add('wysiwyg-mask-no-btn-heading');
       else if (isTocBlock) this._addWysiwygTocDeleteButton(node);
       else if (this._wysiwygMaskIsPlainText(node)) node.classList.add('wysiwyg-mask-no-btn');
       else this._addWysiwygEditButton(node);
@@ -738,6 +791,25 @@
             self.toggleWysiwygTaskCheckbox(box);
             return;
           }
+          // 折叠区块（details/summary）：点 summary → 原地折叠/展开（与阅读模式行为一致，
+          // 2026-10-21 用户反馈「折叠区块在实时预览没法折叠展开」）。本 handler 顶部已
+          // stopPropagation + 上方已 preventDefault → CM 收不到按下、光标不动、块不撤罩
+          //（旧行为落入下方纵比映射 → 整块变源码，折叠框当场被拆）。return 放行原生
+          // click 完成 open 切换——**纯 DOM 瞬态，不回写源码**（与阅读模式同口径：渲染
+          // 管线 normalizeDetails 每次渲染统一展开，折叠态本就不入源）。⚠️ 切换后遮罩行
+          // 盒高度变了但没有 CM 操作 → 必须刷新重测，否则后续内容行位/滚动区错位；
+          // 用 toggle 事件（open 变化后触发，晚于 click 默认动作）而非 mousedown 时刻的
+          // setTimeout（计时器可能抢在 click 前跑、量到旧高度）。
+          const summaryEl = ev.target && ev.target.closest ? ev.target.closest('summary') : null;
+          if (summaryEl && summaryEl.closest) {
+            const detEl = summaryEl.closest('details');
+            if (detEl) {
+              detEl.addEventListener('toggle', () => {
+                try { cm.refresh(); } catch (_) { /* 刷新失败不阻断折叠动作 */ }
+              }, { once: true });
+              return;
+            }
+          }
           const r = mark && mark.find ? mark.find() : null;
           if (!r) return;
 
@@ -763,17 +835,23 @@
           // 行（= 块首行 + 行号 − 1；松散列表多段 li 点第二段落落该段自身行而非项首行）。
           // 仅列表项启用：代码块 pre 只标块首行号、表格格走上方就地编辑分支，比例对其更准。
           const liEl = ev.target && ev.target.closest ? ev.target.closest('li') : null;
+          // 定义列表精确落行（2026-10-18 用户反馈：点 dd 行落 dt 行）——dd 渲染为换行
+          // 行盒，比例估算（分母=遮罩整高）恒偏 dt。convertDefLists 给每个 dt/dd 标了
+          // 各自源行号（块切片内 1-based，同 remark 插件 li 标注机制）；<dl> 壳虽也标
+          // 了行号（= dt 行）但从点击点向上走总先命中 dt/dd，不会误落。
+          const dlEl = ev.target && ev.target.closest ? ev.target.closest('dt, dd') : null;
+          const exactHost = liEl || dlEl;
           let exactLine = false;
-          if (liEl && node.contains(liEl)) {
+          if (exactHost && node.contains(exactHost)) {
             let el2 = (ev.target && ev.target.nodeType === 1) ? ev.target : (ev.target ? ev.target.parentNode : null);
             let srcLine = null;
-            while (el2 && el2 !== liEl) {
+            while (el2 && el2 !== exactHost) {
               const v = el2.getAttribute ? el2.getAttribute('data-source-line') : null;
               if (v) { srcLine = parseInt(v, 10); break; }
               el2 = el2.parentNode;
             }
-            if (!srcLine && liEl.getAttribute) {
-              srcLine = parseInt(liEl.getAttribute('data-source-line'), 10) || null;
+            if (!srcLine && exactHost.getAttribute) {
+              srcLine = parseInt(exactHost.getAttribute('data-source-line'), 10) || null;
             }
             if (srcLine && isFinite(srcLine)) {
               target = r.from.line + Math.max(0, srcLine - 1);
@@ -809,7 +887,27 @@
           // 光标锚点补偿会与点击锚点双补偿，其中 operation 内的延迟补偿（setTimeout）
           // 在 _applyWysiwygClickAnchor 之后执行、把点击锚定的滚动冲掉（S43 段落 Δ104px）。
           const downX = ev.clientX, downY = ev.clientY;
-          self._wysiwygClickAnchor = { y: downY, line };
+          // 点击锚定参照（S71 2026-10-21 用户反馈「点某行进编辑态再点其他行，页面往下移动
+          // 一段距离」）：记录「被点源码行在撤罩前其行顶边的屏幕 y」——撤罩后该行顶边应落回
+          // 此处（净位移=真实结构差；块高逐像素一致时位移=0，视口完全不滚）。旧口径把行顶
+          // 钉到点击点：点行中部/多行块靠后行时，视口被滚走「点击点在行内的偏移」，表现为
+          // 每次点击整页下移一段。行顶的撤罩前位置按宿主取：
+          //  · 列表项/定义项：宿主框顶减自身 margin-top（dt 的 8px 顶距属于其源码行行首的
+          //    行内留白，行顶边在 dt 边框盒上方；dd/li 顶距为 0，不变）；
+          //  · 单行块：遮罩顶=行顶；
+          //  · 多行无宿主块（代码等，渲染行近似等高）：按行序均分遮罩高估算。
+          let refTop = null;
+          try {
+            if (exactHost && exactHost.getBoundingClientRect) {
+              const hmv = parseFloat(getComputedStyle(exactHost).marginTop) || 0;
+              refTop = exactHost.getBoundingClientRect().top - hmv;
+            } else if (rect && rect.height > 0 && r.to.line > r.from.line) {
+              refTop = rect.top + (line - r.from.line) * (rect.height / (r.to.line - r.from.line + 1));
+            } else if (rect) {
+              refTop = rect.top;
+            }
+          } catch (_) { /* 量不到时 _applyWysiwygClickAnchor 回退旧口径 */ }
+          self._wysiwygClickAnchor = { y: downY, line, refTop };
           self.setWysiwygActiveBlock(self._wysiwygBlockIndexAtFresh(line));
           // scroll:false，避免 ensureCursorVisible 抢先滚动导致锚定失效
           cm.setSelection({ line, ch: cm.getLine(line).length },
@@ -844,6 +942,12 @@
             document.removeEventListener('mouseup', onUp);
             if (self._wysiwygSelDragging) {
               self._wysiwygSelDragging = false;
+              // 释放后活动块归位到光标（选区头）所在块（2026-10-21 逐项切块后口径）：
+              // 冻结期 setWysiwygActiveBlock 被跳过，而 mouseup 时 CM 常无新选区变化
+              // （head 已在末次 move 落位）→ 无 cursorActivity 补同步，活动块会停在拖选
+              // 起始块——逐项语义下光标行的项被遮罩、源码不显示（违背「光标行显示源码」）。
+              // 此刻同步安全：拖拽已结束、几何稳定，锚点补偿照护块切换位移。
+              self.syncWysiwygActiveBlock();
               self._applyWysiwygSelectionMaskClasses();
             }
           };
@@ -1118,7 +1222,22 @@
       // [TOC]：阅读模式用 Rust generate_toc 生成整篇目录替换 [TOC] 段，遮罩同款
       //（整篇级 stage，不经 RenderPost，见其文件头注释）
       if (hasToc) {
-        this._wysiwygReplaceToc(node).then(() => { if (settled()) this._wysiwygRefreshAfterMaskChange(); });
+        // 2026-10-21「输入文字页面乱跳」主修：目录已生成且内容未变时**同步**注入缓存
+        // HTML——遮罩重渲染直接以目录全高落 DOM，不再出现「<p>[TOC]</p> 占位（41px）
+        // → 异步注入（632px）」的高度阶跃。实测该阶跃正是乱跳源：输入防抖重刷（无
+        // pending scroll 的普通操作）在操作末高度复测时按「记录值 631.9 − 占位 41.2」
+        // 补偿出 591px 跳顶，后续 refresh 的陈旧滚动重断言 + delta 二次补偿再把页面
+        // 甩到过冲位置（harness 实测 3161 → 2570 → 3752）。同步注入无阶跃 → 无跳变。
+        const tocCache = this._wysiwygToc;
+        if (tocCache && tocCache.html && tocCache.value === cm.getValue()) {
+          this._wysiwygApplyTocHtml(node, tocCache.html);
+          // flush 在挂遮罩操作之外（setTimeout 0），记录值还停在占位高度 → 必须立刻
+          // 刷新复测 + 滚动补偿（cm.refresh 的 pending 重断言已改为取真实滚动，见
+          // codemirror.js refresh 注释），否则下一次输入操作末才补出 591px 跳变
+          this._wysiwygRefreshAfterMaskChange();
+        } else {
+          this._wysiwygReplaceToc(node).then(() => { if (settled()) this._wysiwygRefreshAfterMaskChange(); });
+        }
       }
       // 代码块滚动条：RenderPost 共享 stage（条件唯一来源，与阅读模式同一函数）。
       // 本 pass 由 flush 在 DOM 落定后调用，scrollHeight 读取强制同步回流，高度是准的。
@@ -1134,6 +1253,25 @@
     //    （用户反馈「输入文字时失去焦点、打到一半跳到别处」的真凶：图片/Mermaid/TOC
     //    异步加载恰好在打字途中完成）。改为登记待刷新，格编辑结束后补跑（见
     //    _wysiwygEndCellEdit 末尾 _wysiwygFlushPendingMaskRefresh），几何补偿不丢。
+    // 漂移探针：取视口顶附近第一条「已渲染（有 node）且非 hidden」的行，返回其行号与
+    // 当前真实窗口 top。行本身的 DOM 盒就是该行在窗口里的真实位置——不依赖 CM 记录行高
+    //（记录值可能滞后于真实 DOM，如遮罩占位高度被记录、真实高度已变）。
+    // 返回 null = 量不到（调用方按不补偿处理）。
+    _wysiwygDomProbe(cm) {
+      try {
+        const scrollerTop = cm.getScrollerElement().getBoundingClientRect().top;
+        const view = cm.display.view;
+        for (let i = 0; i < view.length; i++) {
+          const lv = view[i];
+          if (!lv || lv.hidden || !lv.node || !lv.line) continue;
+          const box = lv.node.getBoundingClientRect();
+          if (!box || box.bottom < scrollerTop + 4) continue;
+          return { lineNo: lv.line.lineNo, top: box.top };
+        }
+      } catch (_) { /* 量不到就返回 null */ }
+      return null;
+    },
+
     _wysiwygRefreshAfterMaskChange() {
       try {
         const cm = this.cm;
@@ -1143,16 +1281,25 @@
           return;
         }
         const wrapper = cm.getWrapperElement();
-        const topY = wrapper.getBoundingClientRect().top + 2;
-        const anchor = cm.coordsChar({ left: 0, top: topY }, 'window');
-        if (!anchor) { cm.refresh(); return; }
-        const before = cm.charCoords(anchor, 'window').top;
+        // 2026-10-21「输入文字页面乱跳」补偿基准修复：改用「视口顶探针行的真实 DOM
+        // 窗口位置」测 refresh 前后（同一行的盒漂移 = 视口内容的真实漂移），弃用旧
+        // coordsChar/charCoords「记录行高」基准。旧基准在记录值滞后真实 DOM 时双重计入：
+        // 遮罩占位高度（41px）被记录、真实目录高度（631.9px）已落 DOM，浏览器原生滚动
+        // 锚定又已按真实变化移动过实际滚动 → charCoords 把「高度差 + 锚定位移」混进同一
+        // delta（实测 591px 过冲，最终位置偏一个目录高）；DOM 盒量的是行本身真实窗口
+        // 位置，按其漂移补偿精确、不重计。
+        const probe = this._wysiwygDomProbe(cm);
         cm.refresh();
-        const after = cm.charCoords(anchor, 'window').top;
-        const delta = after - before;
-        if (delta && Math.abs(delta) < (wrapper.clientHeight || 1e9)) {
-          const info = cm.getScrollInfo();
-          cm.scrollTo(info.left, info.top + delta);
+        if (probe) {
+          const info = cm.lineInfo(probe.lineNo);
+          if (info && info.node) {
+            const after = info.node.getBoundingClientRect();
+            const delta = after && isFinite(after.top) ? after.top - probe.top : null;
+            if (delta != null && delta && Math.abs(delta) < (wrapper.clientHeight || 1e9)) {
+              const sc = cm.getScrollInfo();
+              cm.scrollTo(sc.left, sc.top + delta);
+            }
+          }
         }
       } catch (_) { /* 刷新失败无妨，下次输入会重建遮罩 */ }
     },
@@ -1177,19 +1324,34 @@
       }
       return this._wysiwygToc.promise.then((tocHtml) => {
         if (!tocHtml) return;
-        for (const p of ps) {
-          if (!p.isConnected) continue;
-          const line = p.getAttribute('data-source-line');
-          const wrap = document.createElement('div');
-          wrap.className = 'toc-wrapper';
-          if (line) wrap.setAttribute('data-source-line', line);
-          wrap.innerHTML = tocHtml;
-          p.replaceWith(wrap);
-        }
+        // 记住已解析的目录 HTML：后续遮罩重渲染且内容未变时同步注入（见
+        // _wysiwygPostProcessAsync 的 hasToc 分支），消除占位→异步的高度阶跃
+        // （2026-10-21「输入文字页面乱跳」主修）。
+        const cache = this._wysiwygToc;
+        if (cache && cache.value === content) cache.html = tocHtml;
+        this._wysiwygApplyTocHtml(node, tocHtml);
       }).catch((e) => {
         this._wysiwygToc = null; // 失败不缓存：下次挂遮罩按新内容重试，保持 [TOC] 原文
         console.warn('[wysiwyg] TOC error:', e);
       });
+    },
+
+    // 把已生成的目录 HTML 注入遮罩节点内**所有**内容恰为 [TOC] 的 <p>
+    //（与阅读模式「逐个替换所有 [TOC] 段」的口径一致）。同步 DOM 操作，
+    // 调用方保证 tocHtml 非空；节点已摘除时静默跳过。
+    _wysiwygApplyTocHtml(node, tocHtml) {
+      if (!node || !node.querySelectorAll || !tocHtml) return;
+      const ps = Array.from(node.querySelectorAll('p'))
+        .filter((p) => /^\[TOC\]$/i.test((p.textContent || '').trim()));
+      for (const p of ps) {
+        if (!p.isConnected) continue;
+        const line = p.getAttribute('data-source-line');
+        const wrap = document.createElement('div');
+        wrap.className = 'toc-wrapper';
+        if (line) wrap.setAttribute('data-source-line', line);
+        wrap.innerHTML = tocHtml;
+        p.replaceWith(wrap);
+      }
     },
 
     // 所见即所得的编辑器外壳同步：
@@ -2323,7 +2485,9 @@
     // 块内其余行保持无底色的源文态；配合活动块源文态装饰，编辑态整体贴近渲染态）。
     // 容器块（代码围栏 / 表格）例外，保持「整块灰盒」：渲染态本身就是容器盒，编辑态也应
     // 是盒（灰盒观感是代码块活动态的既有设计）。先撤旧行号集合（编辑后行号可能已位移）
-    // 再按当前活动块重挂；_wysiwygActiveIdx 为 -1（光标在块间空行）或光标不在块内时只撤不挂。
+    // 再按当前活动块重挂；_wysiwygActiveIdx 为 -1（光标在块间空行）时给**光标行**挂
+    // 单行灰底（2026-10-21 用户要求：回车新增的块间空行需灰色指示当前编辑行；格编辑
+    // 例外不挂），光标不在任何块且非 wysiwyg 态时只撤不挂。
     // 调用点：setWysiwygActiveBlock（含同块光标移动路径 = 底色跟随光标）/
     // renderWysiwygMasks / refreshWysiwygBlocks / _refreshWysiwygFullIncremental /
     // clearWysiwygMasks（撤光）。
@@ -2339,6 +2503,7 @@
               cm.removeLineClass(h, 'background', ACTIVE_CLASS);
               cm.removeLineClass(h, 'background', ACTIVE_FIRST_CLASS);
               cm.removeLineClass(h, 'background', ACTIVE_LAST_CLASS);
+              cm.removeLineClass(h, 'background', ACTIVE_CODE_BOX_CLASS);
             }
           } catch (_) { /* 行已销毁（安全 no-op） */ }
         }
@@ -2346,15 +2511,49 @@
       this._wysiwygActiveLines = null;
       const idx = this._wysiwygActiveIdx;
       const b = (idx != null && idx >= 0 && this._wysiwygBlocks) ? this._wysiwygBlocks[idx] : null;
-      if (!b) return;
+      if (!b) {
+        // 光标在块间空行（idx=-1，2026-10-21 用户要求：图片上方回车新增的行没有灰色
+        // 明确指示当前编辑行）：光标行同样挂光标行底色——与块内非容器块同一口径
+        // （下方 lo=hi=head.line）。块间空行是真实行（可输入成段落、回车出新行），
+        // 光标所在就应显示灰底；同时 syncWysiwygActiveBlock / updateWysiwygBlankLines
+        // 把该行恢复全高（塌缩 0px 时灰底与光标不可见、cursorCoords 退化 → 锚定补偿
+        // 测出垃圾差值放大视口跳）。不显示空行提示（empty-hint.js 对块间空行的抑制
+        // 口径不变，2026-10-17）。
+        // ⚠️ 格编辑（idx 强制 -1、光标被钳在遮罩表格行内）不挂：光标行属遮罩块。
+        if (this.viewMode === 'wysiwyg' && !this._wysiwygCellEditing) {
+          let head = null;
+          try { head = cm.getCursor('head'); } catch (_) { /* 忽略 */ }
+          if (head && head.line >= 0 && head.line < cm.lineCount() && this.wysiwygBlockIndexAt(head.line) < 0) {
+            try {
+              const h = cm.getLineHandle(head.line);
+              if (h) {
+                this._wysiwygActiveLines = [h];
+                cm.addLineClass(h, 'background', ACTIVE_CLASS);
+                // 单行：同一行挂三个类 = 四角全圆（与下方单行路径同口径）
+                cm.addLineClass(h, 'background', ACTIVE_FIRST_CLASS);
+                cm.addLineClass(h, 'background', ACTIVE_LAST_CLASS);
+              }
+            } catch (_) { /* 行已销毁 */ }
+          }
+        }
+        return;
+      }
       const total = cm.lineCount();
       if (b.start >= total) return;
       const last = Math.min(b.end, total) - 1;
-      // 容器块整块灰盒；其余块只光标行（选区头行，钳进块内）
+      // 代码围栏：整块灰盒（2026-10-18 用户要求：上下围栏都在灰框内）——开/闭围栏行与
+      // 内容行同挂灰底，围栏行另挂代码排版行类（_wysiwygApplyActiveDecor）、文字保持灰显
+      // 语法标志；内容行补 29px 顶/底内距 = 渲染态 pre 内距分解（见 styles.css 同名规则）。
+      // 未闭合围栏（无闭行）时 hi=last 即末内容行，盒收在末内容行。
+      // 表格：整块灰盒（容器观感，维持旧口径）；其余块只光标行（选区头行，钳进块内）。
       const first = cm.getLine(b.start);
-      const wholeBlock = RE.fence.test((first || '').trim()) || RE.table.test(first || '');
+      const isFence = RE.fence.test((first || '').trim());
+      const isTable = !isFence && RE.table.test(first || '');
       let lo = b.start, hi = last;
-      if (!wholeBlock) {
+      if (isFence) {
+        // 整块进盒（lo=b.start 含开围栏、hi=last 含闭围栏）：空代码块（仅开/闭两行）
+        // 也是两行灰盒，首/末角类由下方循环按 n===lo/hi 挂
+      } else if (!isTable) {
         let head = null;
         try { head = cm.getCursor('head'); } catch (_) { /* 忽略 */ }
         if (head && head.line >= b.start && head.line <= last) { lo = hi = head.line; }
@@ -2366,6 +2565,7 @@
           if (!h) continue;
           this._wysiwygActiveLines.push(h); // 记行对象（撤除处靠它跟住行位移）
           cm.addLineClass(h, 'background', ACTIVE_CLASS);
+          if (isFence) cm.addLineClass(h, 'background', ACTIVE_CODE_BOX_CLASS);
           // 单行：同一行挂三个类 = 四角全圆；容器整块：首行仅上角、末行仅下角
           if (n === lo) cm.addLineClass(h, 'background', ACTIVE_FIRST_CLASS);
           if (n === hi) cm.addLineClass(h, 'background', ACTIVE_LAST_CLASS);
@@ -2379,9 +2579,11 @@
     //   列表（ul/ol/task） ：• 圆点 / 数字序号 / ☐☑ 复选框 + 正文预览字族（.wysiwyg-list-*）。
     //                       源字符（-/*/+、[ ]/[x]）宽度收 0 并由 ::before 画出渲染符号
     //                       （光标仍按源字符定位，编辑语义不变：删掉标记字符即退出列表）
-    //   代码块（围栏）     ：首行 ```lang / 末行 ``` 灰显（.wysiwyg-code-fence）——
-    //                       「编辑态与渲染态的区别就是上下多了三个 `」；灰盒复用活动高亮
-    //                       （--code-bg + 首末行圆角，与渲染代码盒同色同角）
+    //   代码块（围栏）     ：首行 ```lang / 末行 ``` 灰显（.wysiwyg-code-fence），围栏行在
+    //                       灰盒外；内容行挂 wysiwyg-code-line 排版行类 + 活动高亮灰盒
+    //                       （2026-10-17 用户要求：编辑态灰盒与渲染态 pre 盒完全一致——
+    //                       同 --code-bg / 1px 边框 / 6px 圆角 / 16px 四边内距 / 0.9×预览
+    //                       字号 / 行高 1，仅前后多 ``` 围栏，见 styles.css 同名规则）
     //   引用（> 前缀）     ：> 前缀灰显 + 最外层 > 画左竖条（::before）+ 正文预览字体
     //                       （.wysiwyg-quote-*；删掉 > 即退出引用，与预览 blockquote 观感对齐）
     //   行内语法（通用）   ：粗体/斜体/行内代码/删除线/高亮/链接——标记字符透明（保留宽度）、
@@ -2411,6 +2613,12 @@
             if (h) {
               cm.removeLineClass(h, 'text', 'wysiwyg-plain-text');
               cm.removeLineClass(h, 'text', 'wysiwyg-para-line');
+              // 定义列表行类（2026-10-18）：同 para-line 先清后挂
+              cm.removeLineClass(h, 'text', 'wysiwyg-dt-line');
+              cm.removeLineClass(h, 'text', 'wysiwyg-dd-line');
+              // 标题块高补齐行类（S71）：同 para-line 先清后挂（6 个级别类全撤）
+              cm.removeLineClass(h, 'text', 'wysiwyg-heading-line');
+              for (let n = 1; n <= 6; n++) cm.removeLineClass(h, 'text', 'wysiwyg-heading-line-' + n);
               cm.removeLineClass(h, 'text', 'wysiwyg-block-edge-top');
               cm.removeLineClass(h, 'text', 'wysiwyg-block-edge-bottom');
               // 引用行类（2026-10-20）：行改写成非引用（删掉 >）后须撤掉背景盒/竖条槽
@@ -2430,10 +2638,25 @@
               cm.removeLineClass(h, 'text', 'wysiwyg-list-line');
               cm.removeLineClass(h, 'text', 'wysiwyg-list-indent-ul');
               cm.removeLineClass(h, 'text', 'wysiwyg-list-indent-ol');
+              cm.removeLineClass(h, 'text', 'wysiwyg-list-cont');
+              for (let n = 2; n <= 6; n++) cm.removeLineClass(h, 'text', 'wysiwyg-list-lvl-' + n);
             }
           } catch (_) { /* 行已销毁（安全 no-op） */ }
         }
         this._wysiwygListLines = null;
+      }
+      // 代码块内容行排版行类（2026-10-17 编辑态灰盒=渲染态 pre 盒）同样先清后挂
+      if (this._wysiwygCodeLines) {
+        for (const h of this._wysiwygCodeLines) {
+          try {
+            if (h) {
+              cm.removeLineClass(h, 'text', 'wysiwyg-code-line');
+              cm.removeLineClass(h, 'text', 'wysiwyg-code-pad-top');
+              cm.removeLineClass(h, 'text', 'wysiwyg-code-pad-bottom');
+            }
+          } catch (_) { /* 行已销毁（安全 no-op） */ }
+        }
+        this._wysiwygCodeLines = null;
       }
       this._syncWysiwygTextSize();
       if (idx == null || idx < 0 || idx >= this._wysiwygBlocks.length) return;
@@ -2456,14 +2679,45 @@
           add(b.start, 0, m[0].length, 'wysiwyg-heading-hash');
           add(b.start, m[0].length, first.length, 'wysiwyg-heading-text wysiwyg-heading-text-' + level);
         }
+        // 块高补齐行类（S71 2026-10-21 用户反馈「点某行进编辑态再点其他行，页面往下移动
+        // 一段距离」）：行高 1.3 + 按级底距，活动标题块与遮罩逐像素等高（口径见
+        // styles.css 同名规则注释）。标题行同在 _wysiwygPlainLines 登记册（正文排版循环
+        // 也给它挂 wysiwyg-plain-text/边缘类）→ 清除时随册撤掉本类。
+        const hh = cm.getLineHandle(b.start);
+        if (hh) {
+          try {
+            cm.addLineClass(hh, 'text', 'wysiwyg-heading-line');
+            if (m) cm.addLineClass(hh, 'text', 'wysiwyg-heading-line-' + m[0].length);
+          } catch (_) { /* 忽略 */ }
+        }
       } else if (RE.fence.test(first.trim())) {
-        // —— 代码块：围栏行灰显（语法标志），盒由活动高亮提供 ——
+        // —— 代码块：整块进灰盒（2026-10-18 用户要求：上下围栏都在灰框内）。围栏行灰显
+        //    语法标志（wysiwyg-code-fence span）且同挂代码排版行类（wysiwyg-code-line：
+        //    0.9×预览字号 + 行高 1.8 + 左右内距，与内容行同参 → 盒内统一等宽排版）；
+        //    内容行同挂排版行类，首/末内容行补 29px 顶/底内距（渲染态 pre 内距分解，
+        //    见 styles.css 同名规则）。
         add(b.start, 0, first.length, 'wysiwyg-code-fence');
         const last = Math.min(b.end, cm.lineCount()) - 1;
-        if (last > b.start) {
-          const lastLine = cm.getLine(last);
-          if (/^(`{3,}|~{3,})\s*$/.test(lastLine.trim())) add(last, 0, lastLine.length, 'wysiwyg-code-fence');
+        const hasClose = last > b.start && /^(`{3,}|~{3,})\s*$/.test((cm.getLine(last) || '').trim());
+        if (hasClose) add(last, 0, (cm.getLine(last) || '').length, 'wysiwyg-code-fence');
+        const contentEnd = hasClose ? last - 1 : last;
+        this._wysiwygCodeLines = [];
+        const codeCls = (lineNo) => {
+          if (lineNo >= cm.lineCount()) return null;
+          const h = cm.getLineHandle(lineNo);
+          if (!h) return null;
+          cm.addLineClass(h, 'text', 'wysiwyg-code-line');
+          this._wysiwygCodeLines.push(h);
+          return h;
+        };
+        codeCls(b.start); // 开围栏行进盒
+        for (let lineNo = b.start + 1; lineNo <= contentEnd; lineNo++) {
+          const h = codeCls(lineNo);
+          if (!h) continue;
+          if (lineNo === b.start + 1) cm.addLineClass(h, 'text', 'wysiwyg-code-pad-top');
+          if (lineNo === contentEnd) cm.addLineClass(h, 'text', 'wysiwyg-code-pad-bottom');
         }
+        if (hasClose) codeCls(last); // 闭围栏行进盒
       } else if ((RE.ul.test(first) || RE.ol.test(first) || RE.task.test(first)) &&
                  !RE.hr.test(first.trim())) {
         // —— 列表：逐行处理（含嵌套缩进行、续行）——
@@ -2475,6 +2729,26 @@
         // 逐像素对齐；任务列表渲染 padding-left:0、复选框贴行首 → 不缩进）。
         const indentList = !RE.task.test(first) && (RE.ul.test(first) || RE.ol.test(first));
         const indentOlBlock = RE.ol.test(first);
+        // 嵌套层级（2026-10-17 用户截图：列表有嵌套子项时两态不一致）——渲染态每层多一圈
+        // padding-left:24px 且 marker 按层变（ul disc→circle→square→disc…；ol decimal
+        // 「N.」→ paren-decimal「N)」），编辑态按层跟随：
+        // ① 行前导缩进（源空格）→ 零宽槽 wysiwyg-list-space-zero（同 ol-space 机制）；
+        // ② 行类 wysiwyg-list-lvl-N（N=2..6）→ padding-left 按层加 24px（CSS 分 ul 项/
+        //    ol 续行/ol 项与任务行三口径）；
+        // ③ ol 二级 marker：源「.」透明 + ::after 画「）」（渲染 paren-decimal）；
+        //    三级 circled-decimal（①②…）暂不跟随（源数字无法按字形映射，保持源文）。
+        // 层级判定：块内条目行缩进的升序去重序列 = 层级（良构列表每层一个缩进档）。
+        const itemIndents = [];
+        for (let ln = b.start; ln < b.end; ln++) {
+          const l = cm.getLine(ln) || '';
+          const mm = RE.task.exec(l) || RE.ul.exec(l) || RE.ol.exec(l);
+          if (mm) itemIndents.push(mm[1].length);
+        }
+        itemIndents.sort((x, y) => x - y);
+        const lvlSeq = [];
+        for (const ind of itemIndents) if (lvlSeq[lvlSeq.length - 1] !== ind) lvlSeq.push(ind);
+        const levelOf = (ind) => lvlSeq.indexOf(ind) + 1;
+        let lastItemLvl = 1;
         for (let lineNo = b.start; lineNo < b.end; lineNo++) {
           if (lineNo >= cm.lineCount()) break;
           const line = cm.getLine(lineNo);
@@ -2482,6 +2756,10 @@
           const taskM = RE.task.exec(line);
           const ulM = taskM ? null : RE.ul.exec(line);
           const olM = (taskM || ulM) ? null : RE.ol.exec(line);
+          const indent = taskM ? taskM[1].length : ulM ? ulM[1].length : olM ? olM[1].length
+            : ((line.match(/^\s*/) || [''])[0]).length;
+          const lvl = (taskM || ulM || olM) ? levelOf(indent) : lastItemLvl;
+          if (taskM || ulM || olM) lastItemLvl = lvl;
           const lh = cm.getLineHandle(lineNo);
           if (lh) {
             try {
@@ -2493,9 +2771,16 @@
               // 用户反馈「有序列表点入编辑态有向右偏移」的根因之一（旧 +8px 按
               // 「1. 」≈16px 估算，实测 16.48px → 正文偏右 0.48px、序号偏左 ~4px）。
               else if (!taskM && !olM && indentList) {
-                // 续行：按块型跟随（渲染态续行正文在 li 内容缘，同缩进近似）
+                // 续行：按块型跟随（渲染态续行正文在 li 内容缘）
                 cm.addLineClass(lh, 'text', indentOlBlock ? 'wysiwyg-list-indent-ol' : 'wysiwyg-list-indent-ul');
               }
+              // 续行（无 marker）：正文直接落 li 内容缘 = 行基准 + 24×层
+              // （2026-10-17；前导缩进已零宽化，旧「+13/+8 + 源空格近似」废弃）
+              if (!taskM && !ulM && !olM) cm.addLineClass(lh, 'text', 'wysiwyg-list-cont');
+              // 嵌套层级行类（2026-10-17）：padding 按层固定 +24px/层，与源空格数无关
+              // （见 CSS wysiwyg-list-lvl-N / wysiwyg-list-cont 口径）
+              if (lvl > 1) cm.addLineClass(lh, 'text', 'wysiwyg-list-lvl-' + Math.min(lvl, 6));
+              if (indent > 0) add(lineNo, 0, indent, 'wysiwyg-list-space-zero');
               (this._wysiwygListLines = this._wysiwygListLines || []).push(lh);
             } catch (_) { /* 忽略单行失败 */ }
           }
@@ -2528,6 +2813,11 @@
             // 原生 outside marker 的右对齐口径一致（固定 24px 槽：多位数序号右缘对齐、
             // 正文恒 56px，长序号向左溢出行留白）。
             add(lineNo, numAt, numAt + olM[2].length + 1, 'wysiwyg-ol-marker');
+            // ol 二级（嵌套）marker：渲染态 paren-decimal「N)」——源「.」透明 + ::after 画「)」
+            // （2026-10-17；源本就是「)」时无需装饰）
+            if (lvl === 2 && olM[3] === '.') {
+              add(lineNo, numAt + olM[2].length, numAt + olM[2].length + 1, 'wysiwyg-ol-paren');
+            }
             add(lineNo, numAt + olM[2].length + 1,
               numAt + olM[2].length + 1 + olM[4].length, 'wysiwyg-ol-space');
             textStart = numAt + olM[2].length + 1 + olM[4].length;
@@ -2606,7 +2896,12 @@
               // 不用 cm-wysiwyg-active-first/last——那对非容器块只挂光标行（lo=hi），
               // 不是块边缘。标题/引用行虽也挂边类，但 CSS 不对其加距（边距参数不同）。
               if (lineNo === b.start) cm.addLineClass(h, 'text', 'wysiwyg-block-edge-top');
-              if (lineNo === b.end - 1) cm.addLineClass(h, 'text', 'wysiwyg-block-edge-bottom');
+              // 列表逐项块（2026-10-21）：14px 列表底距（edge-bottom → pb 14）只归属列表
+              // **末项**；非末项底缘 = 项间距 4px（wysiwyg-list-line 默认底距）。非末项若
+              // 挂 edge-bottom，其编辑态源行比遮罩片段高 10px → 切项解/挂遮罩时页面跳 10px。
+              if (lineNo === b.end - 1 && !(b.listItem && b.listItemPos !== 'last')) {
+                cm.addLineClass(h, 'text', 'wysiwyg-block-edge-bottom');
+              }
               // S43（2026-10-15 用户截图：点块进编辑「内容向上动一下」）：遮罩高度含
               // 渲染元素自身 margin-bottom（ul/ol/p = 14px；> *:last-child 清零规则
               // 被 block-edit-btn 按钮占了 last-child 位而失效）+ 遮罩 padding 1+2 +
@@ -2616,6 +2911,20 @@
               // +17px（底）补齐，活动块与遮罩逐像素等高。标题（24/12 边距）/引用块
               // 参数不同，不在本次范围。
               const content = cm.getLine(lineNo) || '';
+              // 定义列表（2026-10-18 用户截图：编辑态 `: ` 冒号裸露、无缩进、dt 不加粗、
+              // 点 dd 行落 dt 行）：行首 `: `/孤 `:` = dd 行（同 unified-renderer
+              // convertDefLists 口径），非 dd 行且下一行是 dd = dt 行。行类复现渲染态
+              // 指标（见 styles.css 同名规则）：dt 粗 600 + 块首行 8px 顶距，dd 24px 左
+              // 缩进 + 次级色 + 8px 底距（块末行 16px）；`: ` 前缀透明 span（保留真实
+              // 宽度，光标测量精准，同列表符号教训）。
+              const isDd = /^(: |:$)/.test(content);
+              const isDt = !isDd && content.trim() !== ''
+                && /^(: |:$)/.test(lineNo + 1 < cm.lineCount() ? (cm.getLine(lineNo + 1) || '') : '');
+              if (isDt) cm.addLineClass(h, 'text', 'wysiwyg-dt-line');
+              if (isDd) {
+                cm.addLineClass(h, 'text', 'wysiwyg-dd-line');
+                add(lineNo, 0, content.charAt(1) === ' ' ? 2 : 1, 'wysiwyg-dd-colon');
+              }
               // 列表行判定直接读 CM5 行对象真实属性（line.textClass，见 codemirror.js
               // addLineClass/changeLine）：上方列表分支刚挂的 wysiwyg-list-line（含续行）
               // 就在本行对象上。旧按行号查 _wysiwygListLines 在分行/位移后失配（2026-10-17
@@ -2623,6 +2932,7 @@
               // 抛错被吞（2026-10-15 实测：para-line 全漏挂）。
               const isListLine = (h.textClass || '').indexOf('wysiwyg-list-line') !== -1;
               if (!isListLine
+                  && !isDt && !isDd
                   && !RE.heading.test(content)
                   && !RE.quote.test(content.trimStart())
                   && !RE.setext.test(content)
@@ -2814,7 +3124,9 @@
       // ⚠️ ②只在选区**非折叠**时冻：普通单击的 mousedown→mouseup 窗口内 selectingText
       // 同样非空，但选区是折叠的——照常同步才能让光标行的灰底/高亮跟着点（S14 回归点）；
       // 跨块拖选必然产生非折叠选区，冻结条件天然成立。释放后选区即用户意图，活动块
-      // 保持原块；下次点击/打字 cursorActivity 正常接管。
+      // 归位到光标（选区头）所在块（2026-10-21 逐项切块后口径：「光标行显示源码」）：
+      // ① 由遮罩 mousedown 的 onUp 同步、② 由 _ensureWysiwygSelEndSync 的 pointerup
+      // 延时同步——两条路径释放时 CM 都无新选区变化，不补同步活动块会停在拖选起始行。
       // 拖选冻结前先登记「释放后归位」（2026-07-13）：跨行拖选 mouseup 时 CM 常无新
       // 选区变化（head 已在末次 move 落位）→ 无末次 cursorActivity → 行内标记行类会
       // 停在拖选起始行（S66 跨行拖选断言抓出）。
@@ -2831,16 +3143,24 @@
       if (this._wysiwygCellEditing) { this._restoreWysiwygAnchor(); return; }
       if (!this._wysiwygBlocks) this._wysiwygBlocks = this.computeWysiwygBlocks();
       const line = this.cm.getCursor().line;
-      // 光标落在空行（2026-10-17 两级语义）：
+      // 光标落在空行（2026-10-17 两级语义，2026-10-21 修订）：
       //  · 块内空行（活动块内部，如松散列表项间）：临时恢复全高（光标与「输入 /
-      //    可插入内容…」提示需要可见），离开后由下一次 cursorActivity / 防抖刷新
-      //    收回塌缩态；
-      //  · 块间独立空行：保持塌缩（不展开、无提示）——点击行与行之间的缝隙不允许
-      //    出现「新行」观感，回车才出新行（2026-10-17 用户要求）。
+      //    可插入内容…」提示需要可见），离开后收回塌缩态；
+      //  · 块间独立空行：光标**不在其上**时保持塌缩（点击行与行之间的缝隙不允许出现
+      //    「新行」——不创建行，行计数不变，回车才出新行，2026-10-17）；光标**在其上**
+      //    时同样恢复全高（2026-10-21 用户要求：图片上方回车新增的行需要灰色明确指示
+      //    当前编辑行——0px 塌缩态灰底/光标不可见、cursorCoords 退化，锚定补偿会测出
+      //    垃圾差值放大视口跳）。两种空行的光标行都不显示空行提示（empty-hint.js 口径不变）。
       const prevCur = this._wysiwygBlankCurLine;
       if (prevCur != null && prevCur !== line) {
         const blanks = this._wysiwygBlankLines;
-        this._setWysiwygBlankClass(prevCur, !!(blanks && blanks.has(prevCur)));
+        // 光标行因「光标例外」不在集合里（updateWysiwygBlankLines 现算时排除当前光标行）
+        // → 集合成员判定恒 false，离开后该行会一直展开到下次输入防抖。补「现在仍是空行」
+        // 判定：光标离开即收回塌缩（类 + 间隙表 inline，下方照旧）；期间被输入成非空行
+        // 则不收回（已是正文行）。
+        let recollapse = !!(blanks && blanks.has(prevCur));
+        if (!recollapse) { try { recollapse = this._isWysiwygBlankLine(prevCur); } catch (_) { recollapse = false; } }
+        this._setWysiwygBlankClass(prevCur, recollapse);
         // 间隙表 inline 高度随光标离开恢复（2026-10-20）：光标在块内空行上时该行的
         // inline 高度被清除（恢复全高）；离开时按间隙表恢复（块内列表 0px / 块间 Xpx）
         //——间隙表只在输入防抖重算，纯光标移动必须在此落地（渲染行已物化，恒等匹配取 pre）
@@ -2852,7 +3172,10 @@
         }
       }
       const lineBlockIdx = this.wysiwygBlockIndexAt(line);
-      if (this._isWysiwygBlankLine(line) && lineBlockIdx >= 0) {
+      // 块内/块间空行同口径（2026-10-21 修订）：光标所在空行即恢复全高（原
+      // lineBlockIdx >= 0 限制只豁免块内空行，块间空行光标行停在 0px 塌缩态 → 无灰底
+      // 指示、光标坐标退化，2026-10-21 用户报「图片上方回车新增行没有灰色明确指示」）
+      if (this._isWysiwygBlankLine(line)) {
         this._setWysiwygBlankClass(line, false);
         // 进入即清除 inline 高度：此刻间隙表仍是旧值（光标行在表内可能残留 0px 条目，
         // 下次输入防抖重算才会按光标例外摘除）→ 不摘 inline 光标会落在 0px 行里不可见
@@ -2969,7 +3292,15 @@
       const onUp = () => {
         document.removeEventListener('pointerup', onUp);
         self._wysiwygSelEndSyncBound = false;
-        setTimeout(() => self._applyWysiwygInlineCurLine(), 0);
+        setTimeout(() => {
+          self._applyWysiwygInlineCurLine();
+          // 释放后活动块归位到光标（选区头）所在块（2026-10-21 逐项切块后口径）：
+          // CM 原生拖选（mousedown 落在真实行/行缘 margin 区）释放时 CM 无新选区变化
+          // → 无 cursorActivity 补同步，活动块会停在拖选起始行——逐项语义下光标行
+          // （head）的项被遮罩、源码不显示（违背「光标行显示源码」）。此刻 selectingText
+          // 已清、拖拽结束、几何稳定，完整同步 + 锚点补偿照护块切换位移。
+          self.syncWysiwygActiveBlock();
+        }, 0);
       };
       document.addEventListener('pointerup', onUp);
     },
@@ -3025,7 +3356,13 @@
         const localY = click.y - wrapTop;
         const c = cm.charCoords(pos, 'window');
         if (!c || !isFinite(c.top)) return;
-        const delta = c.top - wrapTop - localY; // >0：行顶已下移过点击处
+        // S71：补偿量 = 结构位移 = 撤罩后行顶的实际屏幕位置 − 撤罩前该行行顶的屏幕位置
+        //（refTop，mousedown 时捕获，与 c.top 同为窗口坐标、wrapper 顶相互抵消）。块高
+        // 逐像素一致时 delta≈0 → 不滚、页面不动；其他块重挂遮罩产生高度差时，回滚该纯
+        // 位移、被点文本恒留在鼠标下。缺 refTop 时回退旧口径（行顶回点击处）。
+        const delta = (click.refTop != null && isFinite(click.refTop))
+          ? (c.top - click.refTop)
+          : (c.top - wrapTop - localY); // >0：行顶已下移过点击处（旧口径）
         if (!delta || !isFinite(delta)) return;
         // 差值过大说明发生了结构级变化，此时补偿反而更糟，放弃
         if (vh && Math.abs(delta) > vh) return;
@@ -3280,19 +3617,26 @@
         self._applyWysiwygActiveHighlight();
         self._wysiwygApplyActiveDecor(self._wysiwygActiveIdx);
         self._applyWysiwygSelectionMaskClasses();
+        // 2026-10-21「输入文字页面乱跳」：兜底同步冲刷——遮罩重渲染（占位高度）与 TOC
+        // 同步注入 + 刷新补偿必须在**同一任务**内完成，否则「占位 → 真实高度」的阶跃被
+        // 浏览器绘制一帧（实测 591px 朝目录跳一帧）。updateWysiwygViewportMasks 内已有
+        // 一次同步冲刷；此处再补一次兜底节点此刻仍未入 DOM 而被跳过的情况（幂等廉价）。
+        self.flushWysiwygAsyncPasses();
       }, 250);
     },
 
-    // 全量模式增量刷新：重切块边界（仅解析），源文未变的块保留旧 markText 标记
-    //（CM 标记在编辑后自动跟随文本，marker.find() 为实时位置；节点、实测行高不动），
-    // 仅重挂变化/新增/分裂/合并的块——零闪烁、无全量重渲染（2026-10-09）。
-    _refreshWysiwygFullIncremental() {
+    // ---------------- 块表重切后的遮罩重键（公共口径） ----------------
+    // 块表被替换（防抖增量刷新 / 防抖窗口内 _wysiwygBlockIndexAtFresh 的即时切块）后，
+    // marks 的键仍是**旧表**的块索引：调用方若直接拿新表 idx 操作遮罩
+    //（setWysiwygActiveBlock → unmaskWysiwygBlock(新idx)），会命中**另一块**的旧键遮罩并
+    // 撤掉它（2026-10-21 实测 S38：ol 项内回车续行后，下方引用块遮罩被误撤、源码裸露）。
+    // 本方法把现有遮罩按「源文本相同 + 文档顺序」重键到新表：未匹配的旧遮罩撤除，
+    // 变化/新增/分裂/合并的块重挂（活动块保持源码态）；活动块索引按光标行现算
+    //（与旧 marks 配套的钳制判定同原 _refreshWysiwygFullIncremental 注释）。
+    // 虚拟（大文档）模式只重键不补挂——视口窗内挂撤归 updateWysiwygViewportMasks，
+    // 全量补挂会破坏窗口（窗外遮罩不该存在）。
+    _wysiwygRekeyMarksToBlocks(oldBlocks, newBlocks) {
       const cm = this.cm;
-      if (!cm) return;
-      const oldBlocks = this._wysiwygBlocks || [];
-      const newBlocks = this.computeWysiwygBlocks(true) || [];
-      // 行数可能变化：重设全量视图驻留
-      try { cm.options.viewportMargin = cm.lineCount() + 100; } catch (_) { /* 忽略 */ }
       // 源文本 → 新块索引队列（同源多块按文档顺序匹配）
       const srcQueue = new Map();
       for (let i = 0; i < newBlocks.length; i++) {
@@ -3319,14 +3663,30 @@
           try { if (mark.replacedWith) mark.replacedWith.setAttribute('data-block-index', String(ni)); } catch (_) { /* 忽略 */ }
         }
       }
-      // 未匹配旧遮罩撤除（源文变化/分裂/合并/删除）
       const keptSet = new Set(nextMarks.values());
       this._wysiwygBlocks = newBlocks;
       // 格编辑中例外（同 refreshWysiwygBlocks 注释）；「钳光标在遮罩块」判定传旧表
       // （与此刻仍有效的旧 marks 配套；swap 在下方 operation 内，见 _wysiwygActiveIdxFromCursor）
-      this._wysiwygActiveIdx = this._wysiwygCellEditing ? -1 : this._wysiwygActiveIdxFromCursor(oldBlocks);
+      const active = this._wysiwygCellEditing ? -1 : this._wysiwygActiveIdxFromCursor(oldBlocks);
+      this._wysiwygActiveIdx = active;
+      // 格编辑块的索引位移按范围平移（表块不会被拆/并）：不平移则 unmaskWysiwygBlock 的
+      // 提交守卫 blockIdx===idx 失配 → 撤罩静默丢掉正在编辑的格内容
+      if (this._wysiwygCellEditing && this._wysiwygCellEditing.blockIdx != null) {
+        const ob = oldBlocks[this._wysiwygCellEditing.blockIdx];
+        if (ob) {
+          for (let k = 0; k < newBlocks.length; k++) {
+            const b = newBlocks[k];
+            if (b.start <= ob.start && ob.end - 1 < b.end) {
+              if (this._wysiwygCellEditing.blockIdx !== k) this._wysiwygCellEditing.blockIdx = k;
+              break;
+            }
+          }
+        }
+      }
+      if (!cm) return active;
       try {
         cm.operation(() => {
+          // 未匹配旧遮罩撤除（源文变化/分裂/合并/删除）
           for (const mark of Array.from(this._wysiwygMarks.values())) {
             if (!keptSet.has(mark)) {
               try { mark.clear(); } catch (_) { /* 已销毁 */ }
@@ -3335,12 +3695,32 @@
           }
           this._wysiwygMarks = nextMarks;
           // 重挂缺口的块（变化/新增/分裂/合并；活动块保持源码态）
-          for (let k = 0; k < newBlocks.length; k++) {
-            if (k === this._wysiwygActiveIdx || nextMarks.has(k)) continue;
-            this.maskWysiwygBlock(k);
+          if (!this._wysiwygVirtual) {
+            for (let k = 0; k < newBlocks.length; k++) {
+              if (k === active || nextMarks.has(k)) continue;
+              this.maskWysiwygBlock(k);
+            }
           }
         });
-      } catch (e) { console.error('[wysiwyg] 全量增量刷新失败:', e); }
+      } catch (e) { console.error('[wysiwyg] 块重键重挂失败:', e); }
+      return active;
+    },
+
+    // 全量模式增量刷新：重切块边界（仅解析），源文未变的块保留旧 markText 标记
+    //（CM 标记在编辑后自动跟随文本，marker.find() 为实时位置；节点、实测行高不动），
+    // 仅重挂变化/新增/分裂/合并的块——零闪烁、无全量重渲染（2026-10-09）。
+    _refreshWysiwygFullIncremental() {
+      const cm = this.cm;
+      if (!cm) return;
+      const oldBlocks = this._wysiwygBlocks || [];
+      const newBlocks = this.computeWysiwygBlocks(true) || [];
+      // 行数可能变化：重设全量视图驻留
+      try { cm.options.viewportMargin = cm.lineCount() + 100; } catch (_) { /* 忽略 */ }
+      this._wysiwygRekeyMarksToBlocks(oldBlocks, newBlocks);
+      // 2026-10-21「输入文字页面乱跳」：同步冲刷异步 pass（同 updateWysiwygViewportMasks
+      // 与防抖回调的兜底冲刷）——变化块重挂后的「占位 → 真实高度」阶跃（TOC/图片/Mermaid）
+      // 与补偿须在同一任务内落定，避免浏览器绘制一帧阶跃态（跳顶闪烁）。
+      this.flushWysiwygAsyncPasses();
       this.updateWysiwygBlankLines();
       this._applyWysiwygActiveHighlight();
       this._wysiwygApplyActiveDecor(this._wysiwygActiveIdx);
@@ -3889,25 +4269,31 @@
 
     // 全量重算空行塌缩集合（diff 增量挂类，避免整篇 addLineClass 重刷）。
     // 调用时机：进入模式的全量重建 + 输入后的防抖补齐。
-    // 光标所在空行（2026-10-17 两级语义）：块内空行（活动块内部，如松散列表项间）
-    // 临时恢复全高（光标与「输入 / 可插入内容…」提示需要可见）；块间独立空行
-    // 保持塌缩不展开、不显示提示（用户要求：点击行与行之间的缝隙不允许出现新行，
-    // 回车才出新行）。
+    // 光标所在空行（2026-10-17 两级语义，2026-10-21 修订）：光标行（块内或块间）
+    // 临时恢复全高——光标与灰底指示需要可见（2026-10-21 用户要求：图片上方回车新增
+    // 的块间空行需灰色明确指示当前编辑行）；无光标的块间独立空行保持塌缩（点击行与
+    // 行之间的缝隙不出现「新行」观感——不创建行，回车才出新行，2026-10-17），均不显示
+    // 空行提示（empty-hint.js 口径不变）。
     updateWysiwygBlankLines() {
       const cm = this.cm;
       if (this.viewMode !== 'wysiwyg' || !cm) return;
       const curLine = cm.getCursor().line;
-      const curInBlock = this.wysiwygBlockIndexAt(curLine) >= 0;
       const next = new Set();
       const total = cm.lineCount();
       for (let i = 0; i < total; i++) {
         if (cm.getLine(i).trim() !== '') continue;
-        if (i === curLine && curInBlock) continue; // 光标所在块内空行：例外，恢复全高
+        if (i === curLine) continue; // 光标所在空行：例外，恢复全高（块内/块间同口径）
         next.add(i);
       }
       const prev = this._wysiwygBlankLines;
       // 单 operation 批量挂/摘类：全量模式下空行可达数千，逐行独立操作 =
-      // 数千次全视口 display 更新（万行文档进入/离开时卡数秒，2026-10-09 实测风险）
+      // 数千次全视口 display 更新（万行文档进入/离开时卡数秒，2026-10-09 实测风险）。
+      // 间隙表 inline 高度写入也在同一 operation（2026-10-21 修复）：原先类 diff 在
+      // operation 内、inline 高度在 operation 外写 → CM5 记录的行高（全高 ~27px）与
+      // DOM（0px 间隙）失步，下一次编辑操作末 updateHeightsInViewport 按陈旧差值一次性
+      // 补偿 scroller.scrollTop（视口上方 95 条空行 × 27.2px ≈ 2571px = 跳到文档顶）
+      // ——2026-10-21 用户报「输入文字时页面乱跳、滚动到目录的位置」。同 operation 内
+      // 写入让 CM 同趟重测记录，差值为 0，mustScroll 不再爆炸。
       cm.operation(() => {
         if (prev) {
           for (const i of prev) if (!next.has(i)) this._setWysiwygBlankClass(i, false);
@@ -3915,10 +4301,10 @@
         } else {
           for (const i of next) this._setWysiwygBlankClass(i, true);
         }
+        this._wysiwygBlankLines = next;
+        this._wysiwygBlankCurLine = this._isWysiwygBlankLine(curLine) ? curLine : null;
+        this._updateWysiwygBlankGap();
       });
-      this._wysiwygBlankLines = next;
-      this._wysiwygBlankCurLine = (this._isWysiwygBlankLine(curLine) && curInBlock) ? curLine : null;
-      this._updateWysiwygBlankGap();
     },
 
     clearWysiwygMasks() {
@@ -3980,6 +4366,7 @@
                   cm.removeLineClass(h, 'background', ACTIVE_CLASS);
                   cm.removeLineClass(h, 'background', ACTIVE_FIRST_CLASS);
                   cm.removeLineClass(h, 'background', ACTIVE_LAST_CLASS);
+                  cm.removeLineClass(h, 'background', ACTIVE_CODE_BOX_CLASS);
                 }
               } catch (_) { /* 行已销毁（安全 no-op） */ }
             }
@@ -4009,10 +4396,25 @@
                   cm.removeLineClass(h, 'text', 'wysiwyg-list-line');
                   cm.removeLineClass(h, 'text', 'wysiwyg-list-indent-ul');
                   cm.removeLineClass(h, 'text', 'wysiwyg-list-indent-ol');
+                  cm.removeLineClass(h, 'text', 'wysiwyg-list-cont');
+                  for (let n = 2; n <= 6; n++) cm.removeLineClass(h, 'text', 'wysiwyg-list-lvl-' + n);
                 }
               } catch (_) { /* 行已销毁（安全 no-op） */ }
             }
             this._wysiwygListLines = null;
+          }
+          // 代码块内容行排版行类同批撤（2026-10-17）
+          if (this._wysiwygCodeLines) {
+            for (const h of this._wysiwygCodeLines) {
+              try {
+                if (h) {
+                  cm.removeLineClass(h, 'text', 'wysiwyg-code-line');
+                  cm.removeLineClass(h, 'text', 'wysiwyg-code-pad-top');
+                  cm.removeLineClass(h, 'text', 'wysiwyg-code-pad-bottom');
+                }
+              } catch (_) { /* 行已销毁（安全 no-op） */ }
+            }
+            this._wysiwygCodeLines = null;
           }
         });
       } catch (_) {
@@ -4036,6 +4438,7 @@
       this._wysiwygBlankGapHandler = null;
       this._wysiwygActiveLines = null;
       this._wysiwygPlainLines = null;
+      this._wysiwygCodeLines = null;
       this._wysiwygClickAnchor = null;
       this._wysiwygVirtual = false;
       // 离开全量视图驻留：恢复 CM 默认视口余量（整篇驻留只服务于所见即所得；

@@ -43,29 +43,54 @@ test('相邻标题与段落：无空行也要各自成块', () => {
 
 // ---------- 列表：整体一块（含任务列表、嵌套） ----------
 
-test('无序列表：连续列表项切为一块', () => {
+// 2026-10-21 用户反馈：点列表项应只显示**光标所在列表项**的源码、兄弟项保持渲染态
+// → 紧凑列表（块内无空行）按项切块，每项一个块（listItem/listItemPos 标签供遮罩
+// 片段底距与活动块 edge-bottom 判定用）；松散列表（项间空行）保持整块——空行是真实
+// 源行，拆项会把它裸露成可见行、渲染间距改变。
+
+test('无序列表（紧凑）：连续列表项按项切块（每项一块）', () => {
   const md = ['- a', '- b', '- c'].join('\n');
-  assert.deepStrictEqual(split(md), [['- a', '- b', '- c']]);
+  assert.deepStrictEqual(split(md), [['- a'], ['- b'], ['- c']]);
 });
 
-test('有序列表：连续列表项切为一块', () => {
+test('有序列表（紧凑）：连续列表项按项切块（每项一块）', () => {
   const md = ['1. a', '2. b', '3. c'].join('\n');
-  assert.deepStrictEqual(split(md), [['1. a', '2. b', '3. c']]);
+  assert.deepStrictEqual(split(md), [['1. a'], ['2. b'], ['3. c']]);
 });
 
-test('任务列表：整体一块（不按 - [ ] 拆）', () => {
+test('任务列表（紧凑）：按项切块（不按 - [ ] 拆项内容）', () => {
   const md = ['- [ ] a', '- [x] b', '- [ ] c'].join('\n');
-  assert.deepStrictEqual(split(md), [['- [ ] a', '- [x] b', '- [ ] c']]);
+  assert.deepStrictEqual(split(md), [['- [ ] a'], ['- [x] b'], ['- [ ] c']]);
 });
 
-test('嵌套列表：缩进子项归属同一块', () => {
+test('紧凑列表按项切块：listItem/listItemPos 标签（first/middle/last）', () => {
+  const bs = splitBlocks(['- a', '- b', '- c']);
+  assert.deepStrictEqual(bs.map(b => [b.start, b.end]), [[0, 1], [1, 2], [2, 3]]);
+  assert.ok(bs.every(b => b.listItem === true), '逐项块必须带 listItem 标签');
+  assert.deepStrictEqual(bs.map(b => b.listItemPos), ['first', 'middle', 'last']);
+});
+
+test('紧凑列表带嵌套子项：子项归属父项块（整棵子树 = 一项），同级项另起块', () => {
+  const md = ['- a', '  - b', '  - c', '- d'].join('\n');
+  assert.deepStrictEqual(split(md), [['- a', '  - b', '  - c'], ['- d']]);
+});
+
+test('嵌套列表（单项+深层子项）：单项即整列表，保持一块', () => {
   const md = ['- a', '    - b', '        - c'].join('\n');
   assert.deepStrictEqual(split(md), [['- a', '    - b', '        - c']]);
 });
 
-test('列表与后续正文分开（空行分隔）', () => {
+test('松散列表（项间空行）：保持整块（空行在块内，不拆项、无 listItem 标签）', () => {
+  const lines = ['- a', '', '- b', '', '- c'];
+  const bs = splitBlocks(lines);
+  assert.strictEqual(bs.length, 1, JSON.stringify(bs));
+  assert.deepStrictEqual(bs[0].lines, lines, '松散列表整块必须含项间空行');
+  assert.ok(!bs[0].listItem, '松散列表不按项切块');
+});
+
+test('列表与后续正文分开（空行分隔；紧凑列表按项切）', () => {
   const md = ['- a', '- b', '', '后续正文'].join('\n');
-  assert.deepStrictEqual(split(md), [['- a', '- b'], ['后续正文']]);
+  assert.deepStrictEqual(split(md), [['- a'], ['- b'], ['后续正文']]);
 });
 
 // ---------- 引用块 / callout ----------
@@ -144,7 +169,8 @@ test('混合文档：逐块切分正确（覆盖典型场景）', () => {
     ['# 标题'],
     ['正文段落'],
     ['## 子标题'],
-    ['- 列表A', '- 列表B'],
+    ['- 列表A'],
+    ['- 列表B'],
     ['| 表头 | 二 |', '| --- | --- |', '| 1 | 2 |'],
     ['> [!WARNING]', '> 注意'],
     ['```py', 'print(1)', '```'],
@@ -195,7 +221,7 @@ test('remark 切块：`1.` 独立行 + 缩进内容必须是一个有序列表�
   assert.doesNotMatch(html, /<li>\s*<\/li>/, '不得出现空列表项（只剩序号的空行）');
 });
 
-test('remark 切块：表格含对齐行整体一块，标题/段落/列表各自成块，空行不归属', () => {
+test('remark 切块：表格含对齐行整体一块，标题/段落/表格各自成块，紧凑列表按项切块，空行不归属', () => {
   const md = [
     '# 标题',
     '',
@@ -211,11 +237,40 @@ test('remark 切块：表格含对齐行整体一块，标题/段落/列表各�
     '结尾',
   ].join('\n');
   const blocks = renderMarkdownBlocks(md, {});
-  assert.strictEqual(blocks.length, 5, '标题/段落/列表/表格/段落各一块，实际 ' + blocks.length);
-  assert.deepStrictEqual(blocks.map(b => [b.start, b.end]), [[0, 1], [2, 3], [4, 6], [7, 10], [11, 12]]);
-  const table = blocks[3];
+  assert.strictEqual(blocks.length, 6, '标题/段落/列表两项/表格/段落各一块，实际 ' + blocks.length);
+  assert.deepStrictEqual(blocks.map(b => [b.start, b.end]), [[0, 1], [2, 3], [4, 5], [5, 6], [7, 10], [11, 12]]);
+  const table = blocks[4];
   assert.match(table.html, /<table/, '表格整体渲染（含分隔行与数据行）');
   for (const b of blocks) assert.ok(b.html && b.html.trim(), '每个内容块都应有渲染 html');
+  assert.ok(blocks[2].listItem && blocks[2].listItemPos === 'first', '首个列表项块应带 listItem/first 标签');
+  assert.ok(blocks[3].listItem && blocks[3].listItemPos === 'last', '末个列表项块应带 listItem/last 标签');
+});
+
+test('remark 切块：紧凑有序列表按项切块，逐项片段 <ol start=N>（序号与源一致，不回位 1）', () => {
+  const md = ['1. 甲', '2. 乙', '3. 丙'].join('\n');
+  const blocks = renderMarkdownBlocks(md, {});
+  assert.deepStrictEqual(blocks.map(b => [b.start, b.end]), [[0, 1], [1, 2], [2, 3]]);
+  assert.ok(blocks.every(b => b.listItem), '紧凑有序列表必须按项切块');
+  assert.match(blocks[1].html, /<ol start="2"[^>]*>/, '第 2 项片段须带 start="2"（否则序号回位 1）');
+  assert.match(blocks[2].html, /<ol start="3"[^>]*>/, '第 3 项片段须带 start="3"');
+  assert.doesNotMatch(blocks[0].html, /start="[23]"/, '首项片段不得带后项序号');
+  assert.match(blocks[1].html, /乙/, '逐项片段不得丢内容');
+});
+
+test('remark 切块：紧凑列表带嵌套子项——父项含子项行段为一块，同级项另起块', () => {
+  const md = ['- a', '  - b', '- c'].join('\n');
+  const blocks = renderMarkdownBlocks(md, {});
+  assert.deepStrictEqual(blocks.map(b => [b.start, b.end]), [[0, 2], [2, 3]]);
+  assert.match(blocks[0].html, /<ul [^>]*>\s*<li [^>]*>a\s*<ul [^>]*>\s*<li [^>]*>b/, '父项片段须含嵌套子列表（与整列表渲染同构）');
+});
+
+test('remark 切块：松散列表（项间空行）保持一块（无 listItem 标签，块内含空行）', () => {
+  const md = ['- a', '', '- b'].join('\n');
+  const blocks = renderMarkdownBlocks(md, {});
+  assert.strictEqual(blocks.length, 1, '松散列表不得拆项：' + JSON.stringify(blocks.map(b => [b.start, b.end])));
+  assert.strictEqual(blocks[0].start, 0);
+  assert.strictEqual(blocks[0].end, 3);
+  assert.ok(!blocks[0].listItem, '松散列表不按项切块');
 });
 
 test('remark 切块：围栏代码块内部空行/井号不切断，HTML 注释单块', () => {
@@ -235,15 +290,22 @@ test('remark 切块：围栏代码块内部空行/井号不切断，HTML 注释�
   assert.strictEqual(blocks[1].start, 6);
 });
 
-test('remark 切块：块边界与阅读模式一致（逐块 html 与整篇渲染同构）', () => {
+test('remark 切块：块边界与阅读模式一致（逐块 html 与整篇渲染同构；逐项列表片段各重发列表容器标签）', () => {
   const md = ['## 小节', '', '段落文本', '', '1. 甲', '2. 乙'].join('\n');
   const { renderMarkdown } = require('../src/unified-renderer.js');
   const blocks = renderMarkdownBlocks(md, {});
-  // 逐块渲染的标签序列应与整篇渲染一致（同一套 remark 解析的必然结果）
+  // 逐块渲染的标签序列应与整篇渲染一致（同一套 remark 解析的必然结果）；唯一例外：
+  // 紧凑列表按项切块后，每个项片段自带一个 <ol>/<ul> 容器（n 项 → n 个开标签，整篇为 1）
   const tagsOf = (h) => (h.match(/<(h\d|p|ol|ul|li|table)[ >]/g) || []).join(',');
   const whole = tagsOf(renderMarkdown(md, {}));
   const byBlocks = blocks.map(b => tagsOf(b.html)).join(',');
-  assert.strictEqual(byBlocks, whole, '逐块渲染的标签序列应与整篇一致');
+  const itemBlocks = blocks.filter(b => b.listItem);
+  const count = (t, tag) => (t.split(',').filter(x => x === tag).length);
+  const norm = (t) => t.split(',').filter(x => x !== '<ol ' && x !== '<ul ').join(',');
+  assert.strictEqual(norm(byBlocks), norm(whole), '除逐项列表容器标签外，逐块渲染应与整篇一致');
+  assert.strictEqual(count(byBlocks, '<ol '), count(whole, '<ol ') + Math.max(0, itemBlocks.length - 1),
+    '逐项列表片段每项重发一个 <ol> 容器（n 项 → n 个开标签）');
+  assert.strictEqual(count(byBlocks, '<li '), count(whole, '<li '), 'li 数量须与整篇一致');
 });
 
 test('remark 切块：多行展示公式内含独占一行的 `=`（setext 下划线）必须整块且渲染为公式而非巨型 h1', () => {

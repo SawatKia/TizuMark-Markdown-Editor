@@ -1,14 +1,19 @@
-// 文件树拖放移动（2026-10-21）：拖动文件/文件夹到目录上完成移动。
-// 设计：dragstart 写「剪切」剪贴板（快照拖拽前的剪贴板/上下文），drop 复用
-// fileTreePaste({source:'drag'}) 管线（目标解析/自身子目录守卫/(n) 后缀/movePath/tab 同步）。
+// 文件树拖放移动（2026-10-21 功能；2026-10-22 指针事件重构）：拖动文件/文件夹到目录上完成移动。
+// 重构原因：Tauri v2 默认 dragDropEnabled=true，wry 在 WebView2 子窗口注册原生 IDropTarget，
+// 对页面内部 HTML5 拖拽回 DROPEFFECT_NONE（OS 层拒绝 drop）→ 原生 DnD 在应用内不可用。
+// 改用指针事件（与标签页拖拽 initTabDragEvents 同口径）：
+//   mousedown 记起点 → mousemove 超 5px 阈值激活（写「剪切」剪贴板，快照拖拽前状态）
+//   → elementFromPoint 解析落点（行高亮/光标表态）→ mouseup 复用
+//   fileTreePaste({source:'drag'}) 管线（目标解析/自身子目录守卫/(n) 后缀/movePath/tab 同步）。
 // 断言重点：
-//   - 取消拖拽（无 drop 直接 dragend）必须恢复拖拽前的剪贴板与上下文
-//   - 非法目标（自身/子目录/拖回自身父目录）不发起 movePath，不产生「name (1)」副本
-//   - 成功移动走 TauriApi.movePath、状态文案为「已移动」、打开中的 tab 同步新路径
+//   - 激活写「剪切」剪贴板、挂 dragging 类、生成拖拽影子；取消（ESC/放到无效处）恢复拖拽前剪贴板
+//   - 非法目标（自身/子目录/拖回自身父目录）不发起 movePath，光标 not-allowed
+//   - 成功移动走 TauriApi.movePath、状态文案「已移动」、打开中的 tab 同步新路径
 //   - 树空白区 = 工作区根目录
+//   - 未越阈的普通点击不启动拖拽；拖拽结束后的 click 被抑制一次
 //
-// jsdom 无原生 DragEvent/DataTransfer：用普通 Event + 手动挂 dataTransfer 桩，
-// 直接 dispatchEvent 触发 handler（与真实浏览器同一套监听器）。
+// jsdom 无真实命中测试：mock document.elementFromPoint（与 tab-drag.test.cjs 同款做法），
+// 真实 MouseEvent 派发走与生产同一套监听器。
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -29,14 +34,18 @@ function stubUi(ed, opts = {}) {
   ed.saveSession = () => {};
 }
 
-// 构造带 dataTransfer 桩的拖拽事件（jsdom 无 DragEvent）
-function dragEvent(w, type, dataTransfer) {
-  const ev = new w.Event(type, { bubbles: true, cancelable: true });
-  if (dataTransfer !== undefined) ev.dataTransfer = dataTransfer;
-  return ev;
+function mouse(w, type, el, x, y, extra = {}) {
+  el.dispatchEvent(new w.MouseEvent(type, Object.assign(
+    { button: 0, clientX: x, clientY: y, bubbles: true, cancelable: true }, extra
+  )));
 }
-function dtStub() {
-  return { effectAllowed: '', dropEffect: '', setData() {}, getData() { return ''; } };
+
+// 完整拖拽：mousedown(起点) → mousemove(超阈激活+更新) → 返回已激活的会话状态
+function dragTo(w, ed, sourceRow, targetEl, at = [60, 60]) {
+  w.document.elementFromPoint = () => targetEl;
+  mouse(w, 'mousedown', sourceRow, 10, 10);
+  mouse(w, 'mousemove', w.document, at[0], at[1]);
+  return at;
 }
 
 // 建工作区 + mock listDir + 渲染真实文件树
@@ -48,7 +57,7 @@ async function setupTree(ed, w, listings) {
 }
 const rowOf = (w, path) => w.document.querySelector(`#folder-tree .tree-node[data-path="${path}"] > .tree-row`);
 
-test('dnd: dragstart 写「剪切」剪贴板并挂 dragging 类；取消拖拽恢复拖拽前剪贴板', async () => {
+test('dnd: 激活写「剪切」剪贴板并挂 dragging 类与影子；ESC 取消恢复拖拽前剪贴板', async () => {
   const { w, ed } = await makeEditor();
   try {
     stubUi(ed);
@@ -63,16 +72,21 @@ test('dnd: dragstart 写「剪切」剪贴板并挂 dragging 类；取消拖拽�
 
     const row = rowOf(w, '/root/a.md');
     assert.ok(row, 'a.md 行应渲染出来');
-    row.dispatchEvent(dragEvent(w, 'dragstart', dtStub()));
-    assert.strictEqual(ed._fileClipboard.op, 'cut', 'dragstart 应写剪切剪贴板');
+    dragTo(w, ed, row, row);
+    assert.strictEqual(ed._fileClipboard.op, 'cut', '激活应写剪切剪贴板');
     assert.strictEqual(ed._fileClipboard.path, '/root/a.md');
     assert.ok(row.classList.contains('dragging'), '拖拽源行应挂 dragging 类');
+    assert.ok(w.document.querySelector('.tree-drag-ghost'), '激活应生成拖拽影子');
+    assert.strictEqual(w.document.body.style.cursor, 'not-allowed', '悬停源行（自身父目录）应为禁止光标');
 
-    // 未 drop 直接 dragend（模拟 ESC 取消）
-    row.dispatchEvent(dragEvent(w, 'dragend'));
+    // ESC 取消
+    w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     assert.strictEqual(ed._fileClipboard.op, 'copy', '取消拖拽应恢复拖拽前剪贴板');
     assert.strictEqual(ed._fileClipboard.path, '/root/keep.md');
-    assert.ok(!row.classList.contains('dragging'), 'dragend 应摘掉 dragging 类');
+    assert.ok(!row.classList.contains('dragging'), '取消应摘掉 dragging 类');
+    assert.strictEqual(w.document.querySelector('.tree-drag-ghost'), null, '取消应移除影子');
+    assert.strictEqual(w.document.body.style.cursor, '', '取消应还原光标');
+    assert.strictEqual(ed._treeDragActive, false, '取消应清会话标志');
   } finally { cleanup(w); }
 });
 
@@ -95,16 +109,11 @@ test('dnd: 文件拖到文件夹 → movePath(from,to=文件夹/文件名)，状
 
     const fileRow = rowOf(w, '/root/a.md');
     const dirRow = rowOf(w, '/root/docs');
-    fileRow.dispatchEvent(dragEvent(w, 'dragstart', dtStub()));
-
-    // 悬停目标文件夹：允许 drop + 高亮
-    const hover = dragEvent(w, 'dragover', dtStub());
-    dirRow.dispatchEvent(hover);
-    assert.strictEqual(hover.dataTransfer.dropEffect, 'move', '合法目标 dropEffect 应为 move');
+    dragTo(w, ed, fileRow, dirRow);
     assert.ok(dirRow.classList.contains('drop-target'), '合法目标应高亮');
-    assert.strictEqual(hover.defaultPrevented, true, 'dragover 应 preventDefault（允许 drop）');
+    assert.strictEqual(w.document.body.style.cursor, 'move', '合法目标应为 move 光标');
 
-    dirRow.dispatchEvent(dragEvent(w, 'drop', dtStub()));
+    mouse(w, 'mouseup', w.document, 60, 60);
     await delay(80);
     assert.strictEqual(calls.length, 1, '应经 TauriApi.movePath 移动一次');
     assert.strictEqual(calls[0].from, '/root/a.md');
@@ -113,10 +122,20 @@ test('dnd: 文件拖到文件夹 → movePath(from,to=文件夹/文件名)，状
     assert.strictEqual(ed._fileClipboard, null, '剪切粘贴成功后剪贴板应清空');
     assert.strictEqual(ed.tabs[0].filePath, '/root/docs/a.md', '打开中的 tab 应同步新路径');
     assert.strictEqual(toasts.length, 0, '成功路径不应有错误 toast');
+    assert.strictEqual(w.document.querySelector('.tree-drag-ghost'), null, '结束应移除影子');
+    assert.strictEqual(w.document.body.style.cursor, '', '结束应还原光标');
+    assert.ok(!dirRow.classList.contains('drop-target') || !dirRow.isConnected, '结束应清掉目标高亮');
+    assert.strictEqual(ed._treeDragSuppressClick, true, '拖拽结束后应置 click 抑制');
 
-    dirRow.dispatchEvent(dragEvent(w, 'dragend'));
-    assert.strictEqual(ed._fileClipboard, null, '成功 drop 后 dragend 不应恢复旧剪贴板');
-    assert.ok(!dirRow.classList.contains('drop-target'), 'dragend 应清掉目标高亮');
+    // 抑制生效：紧随的 click 被吞（用 docs 行：第一次 click 不应更新 _fileTreeCtx，
+    // 第二次 click 恢复正常行为）。mock listDir 是静态列表，不反映移动结果，故不在此查 a.md 新位置。
+    const docsRow2 = rowOf(w, '/root/docs');
+    assert.ok(docsRow2, '重渲染后 docs 行仍在根目录');
+    assert.strictEqual(ed._fileTreeCtx, null, '粘贴完成后上下文应已清空');
+    docsRow2.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+    assert.strictEqual(ed._fileTreeCtx, null, '拖拽后第一次 click 应被抑制（上下文不更新）');
+    docsRow2.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+    assert.ok(ed._fileTreeCtx && ed._fileTreeCtx.path === '/root/docs', '第二次 click 恢复正常行为');
   } finally { cleanup(w); }
 });
 
@@ -140,17 +159,13 @@ test('dnd: 文件夹拖到自身子目录 → 非法，不发起 movePath', asyn
     const projRow = rowOf(w, '/root/proj');
     const subRow = rowOf(w, '/root/proj/sub');
     assert.ok(projRow && subRow, 'proj 与其子目录 sub 应渲染出来');
-    projRow.dispatchEvent(dragEvent(w, 'dragstart', dtStub()));
-
-    const hover = dragEvent(w, 'dragover', dtStub());
-    subRow.dispatchEvent(hover);
-    assert.strictEqual(hover.dataTransfer.dropEffect, 'none', '拖到自身子目录应为禁止态');
+    dragTo(w, ed, projRow, subRow);
     assert.ok(subRow.classList.contains('drop-invalid'), '非法目标应挂 drop-invalid');
+    assert.strictEqual(w.document.body.style.cursor, 'not-allowed', '非法目标应为禁止光标');
 
-    subRow.dispatchEvent(dragEvent(w, 'drop', dtStub()));
+    mouse(w, 'mouseup', w.document, 60, 60);
     await delay(50);
     assert.strictEqual(calls.length, 0, '非法目标不应发起 movePath');
-    projRow.dispatchEvent(dragEvent(w, 'dragend'));
     assert.strictEqual(ed._fileClipboard, null, '非法 drop 后恢复拖拽前剪贴板（原本为空）');
   } finally { cleanup(w); }
 });
@@ -169,11 +184,9 @@ test('dnd: 文件拖回自身父目录（放到同级兄弟文件上）→ 无�
     });
     const aRow = rowOf(w, '/root/a.md');
     const bRow = rowOf(w, '/root/b.md');
-    aRow.dispatchEvent(dragEvent(w, 'dragstart', dtStub()));
-    const hover = dragEvent(w, 'dragover', dtStub());
-    bRow.dispatchEvent(hover);
-    assert.strictEqual(hover.dataTransfer.dropEffect, 'none', '拖回自身父目录应为禁止态');
-    bRow.dispatchEvent(dragEvent(w, 'drop', dtStub()));
+    dragTo(w, ed, aRow, bRow);
+    assert.ok(bRow.classList.contains('drop-invalid'), '拖回自身父目录应为禁止态');
+    mouse(w, 'mouseup', w.document, 60, 60);
     await delay(50);
     assert.strictEqual(calls.length, 0, '无意义移动不应发起 movePath（避免误产生 a (1).md）');
   } finally { cleanup(w); }
@@ -192,12 +205,11 @@ test('dnd: 根目录文件夹拖到树空白区（= 自身父目录=根）→ �
       '/root/docs': [],
     });
     const docsRow = rowOf(w, '/root/docs');
-    docsRow.dispatchEvent(dragEvent(w, 'dragstart', dtStub()));
     const treeEl = w.document.getElementById('folder-tree');
-    const hover = dragEvent(w, 'dragover', dtStub());
-    treeEl.dispatchEvent(hover);
-    assert.strictEqual(hover.dataTransfer.dropEffect, 'none', '拖回根目录（自身父目录）应为禁止态');
-    treeEl.dispatchEvent(dragEvent(w, 'drop', dtStub()));
+    dragTo(w, ed, docsRow, treeEl);
+    assert.ok(treeEl.classList.contains('tree-drop-root'), '空白区落点应整块树区域描边');
+    assert.strictEqual(w.document.body.style.cursor, 'not-allowed', '拖回根目录（自身父目录）应为禁止态');
+    mouse(w, 'mouseup', w.document, 60, 60);
     await delay(50);
     assert.strictEqual(calls.length, 0, '不应发起 movePath（避免误产生 docs (1)）');
   } finally { cleanup(w); }
@@ -221,11 +233,9 @@ test('dnd: 子目录文件拖到树空白区 → 移动到工作区根目录', a
     });
     const xRow = rowOf(w, '/root/docs/x.md');
     const treeEl = w.document.getElementById('folder-tree');
-    xRow.dispatchEvent(dragEvent(w, 'dragstart', dtStub()));
-    const hover = dragEvent(w, 'dragover', dtStub());
-    treeEl.dispatchEvent(hover);
-    assert.strictEqual(hover.dataTransfer.dropEffect, 'move', '子目录文件拖到根目录是合法移动');
-    treeEl.dispatchEvent(dragEvent(w, 'drop', dtStub()));
+    dragTo(w, ed, xRow, treeEl);
+    assert.strictEqual(w.document.body.style.cursor, 'move', '子目录文件拖到根目录是合法移动');
+    mouse(w, 'mouseup', w.document, 60, 60);
     await delay(80);
     assert.strictEqual(calls.length, 1);
     assert.strictEqual(calls[0].from, '/root/docs/x.md');
@@ -250,10 +260,39 @@ test('dnd: 目标目录已有同名文件 → 复用粘贴管线的 (n) 后缀',
     });
     const aRow = rowOf(w, '/root/a.md');
     const dirRow = rowOf(w, '/root/docs');
-    aRow.dispatchEvent(dragEvent(w, 'dragstart', dtStub()));
-    dirRow.dispatchEvent(dragEvent(w, 'drop', dtStub()));
+    dragTo(w, ed, aRow, dirRow);
+    mouse(w, 'mouseup', w.document, 60, 60);
     await delay(80);
     assert.strictEqual(calls.length, 1);
     assert.strictEqual(calls[0].to, '/root/docs/a (1).md', '同名冲突应加 (1) 后缀');
+  } finally { cleanup(w); }
+});
+
+test('dnd: 未越阈的普通点击不启动拖拽；中键 mousedown 不启动拖拽', async () => {
+  const { w, ed } = await makeEditor();
+  try {
+    stubUi(ed);
+    await setupTree(ed, w, {
+      '/root': [
+        { name: 'a.md', path: '/root/a.md', is_dir: false },
+        { name: 'docs', path: '/root/docs', is_dir: true },
+      ],
+      '/root/docs': [],
+    });
+    const row = rowOf(w, '/root/a.md');
+
+    // 普通点击：mousedown + 微小移动 + mouseup（未越 5px 阈值）
+    mouse(w, 'mousedown', row, 10, 10);
+    mouse(w, 'mousemove', w.document, 12, 11);
+    assert.ok(ed._treeDragState, 'mousedown 应记录待激活会话');
+    assert.strictEqual(ed._treeDragState.active, false, '未越阈不应激活');
+    mouse(w, 'mouseup', w.document, 12, 11);
+    assert.strictEqual(ed._treeDragState, null, '纯点击后待激活状态应清空');
+    assert.strictEqual(ed._fileClipboard, null, '纯点击不应写剪贴板');
+    assert.strictEqual(w.document.querySelector('.tree-drag-ghost'), null, '纯点击不应有影子');
+
+    // 中键 mousedown 不启动拖拽
+    mouse(w, 'mousedown', row, 10, 10, { button: 1 });
+    assert.strictEqual(ed._treeDragState, null, '中键不应启动拖拽');
   } finally { cleanup(w); }
 });
