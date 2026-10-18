@@ -2066,6 +2066,15 @@ body.is-resizing .side-btn {
   border: 1px solid var(--border-color);
 }
 
+/* 折叠区块小三角（2026-10-22 用户要求「鼠标放到折叠区块的小三角时要显示小手」，并确认
+   阅读模式同样生效）：实测 2026-10-22 阅读/WYSIWYG 遮罩态 summary 的 cursor 均为 text
+   （无 CSS 规则、无小手）。阅读预览与 WYSIWYG 遮罩共用 .preview-content 类，一条规则
+   双覆盖；仅 summary（含小三角区）改 pointer，details 正文点击行为由 wysiwyg.js
+   遮罩 mousedown 分支管（点文字不进编辑态）。 */
+.preview-content summary {
+  cursor: pointer;
+}
+
 .preview-content.code-wrap pre {
   white-space: pre-wrap;
   word-break: break-word;
@@ -3125,6 +3134,25 @@ body.is-resizing .side-btn {
   border-bottom: 1px solid var(--border-color);
   border-radius: 6px;
 }
+/* 代码块编辑态块底槽位（2026-10-22 用户要求「两个代码块挨着时，第一个进编辑态底部
+   与第二个紧密连在一起」）：渲染态遮罩是 flow-root BFC，pre 的 16px 底边距被收进遮罩高
+   （实测两态遮罩间 16px 白槽）；编辑态活动块原来没有这 16px 槽位 → 灰盒底缘贴着下一块。
+   末行（闭围栏行；未闭合围栏时为末内容行，与 pad-bottom 同行）补 16px 底内距，::before
+   内缩盒底缘上移 16px（盒底边/下圆角仍在文本底缘）→ 槽位在盒外，编辑态盒底↔下一块间距
+   ≡ 渲染态（16px）。单行块（开闭围栏同行挂 first+last 两类）同口径生效。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-slot-bottom {
+  padding-bottom: 16px;
+}
+/* 未闭合围栏：末内容行与闭围栏行不同行——pad-bottom（29px 内容内距）与 slot（16px 块底
+   槽）落在同一行，两条规则特异性相同、后写覆盖前写，直接挂 slot 会吞掉 29px 内容内距
+   （灰盒盒内底内距比渲染态 pre 少 29px）。同身时改叠加：29+16=45px，盒内底内距 29 ≡
+   渲染态，盒外槽 16 ≡ 渲染态。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-code-pad-bottom.wysiwyg-code-slot-bottom {
+  padding-bottom: 45px;
+}
+.editor-container.wysiwyg-mode .CodeMirror div.CodeMirror-linebackground.cm-wysiwyg-code-box.cm-wysiwyg-active-last::before {
+  bottom: 16px;
+}
 
 /* 表格单元格源码编辑态（Phase 2 / R5，2026-10-13）：点渲染表格的格子 → 该格
    contenteditable 显示原始源码文本；浅底色 + 主题色描边标示「正在编辑这一格」，
@@ -3401,8 +3429,9 @@ body.is-resizing .side-btn {
    相邻 dd(mb 8) 与下一 dt(mt 8) 折叠 = 8px；块末 dd(mb 8) 与 dl(mb 16) 折叠 = 16px。
    编辑态 padding 不折叠，按折叠后净距逐行补齐：块首 dt 行 +8 顶（edge-top 类）、
    非末 dd 行 +8 底、块末 dd 行 +16 底（edge-bottom 类，覆盖 8px）→ 纯 dl 块（任意
-   dt/dd 对数）与遮罩逐像素等高（S70 断言 Δ<0.5px）。`: ` 前缀透明化保持源宽
-   （同列表符号教训：不可 width:0，光标测量与行尾 caret 锚定依赖真实宽度）。 */
+   dt/dd 对数）与遮罩逐像素等高（S70 断言 Δ<0.5px）。`: ` 前缀 span 保留源宽（透明化已废弃
+   2026-10-22 起颜色改次级色可见，同标题 # 前缀口径；不可 width:0，光标测量与
+   行尾 caret 锚定依赖真实宽度）。 */
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-dt-line {
   font-weight: 600;
 }
@@ -3420,7 +3449,20 @@ body.is-resizing .side-btn {
   padding-bottom: 16px;
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-dd-colon {
-  color: transparent;
+  /* 2026-10-22 用户要求「定义列表编辑态要把 : 显示出来，参考标题的编辑态显示方式」：
+     同 wysiwyg-heading-hash（# 前缀）口径——span 保留真实宽度（光标测量不变，
+     S70 断言口径不动），颜色由透明改次级色、可见不抢正文。 */
+  color: var(--text-secondary);
+}
+/* 折叠区块编辑态灰盒（2026-10-22 用户要求「进入编辑态时要在灰色块中进行编辑，可参考
+   代码块」）：整块源行（<details>…</details>）挂 cm-wysiwyg-code-box 背景类（JS 在
+   _applyWysiwygActiveHighlight 把 details 块按容器块处理，首/末行挂 active-first/last
+   角类），复用代码盒 ::before 内缩盒（--code-bg 底色 + 1px 描边 + 6px 圆角）。源文行
+   另加 12px 左右内距（在 32px 行基准上叠加，同 dd 行 calc 口径），源码文字不贴盒竖边。
+   与代码盒的差异：不挂 wysiwyg-code-line（源文保持默认正文字族/字号，非等宽代码排版）。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-details-line {
+  padding-left: calc(var(--wysiwyg-line-inset, 32px) + 12px);
+  padding-right: calc(var(--wysiwyg-line-inset, 32px) + 12px);
 }
 /* 源字符保持真实宽度（光标测量精准），仅透明化；渲染符号由 ::before 绝对定位覆盖。
    ⚠️ 不可用 width:0 + overflow:hidden——会连 ::before 符号一起裁掉（2026-10-14 截图实测）。 */

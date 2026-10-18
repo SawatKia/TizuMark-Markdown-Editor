@@ -8,7 +8,9 @@
   const mixin = {
       // ===== slash 命令面板（输入 / 触发的可插入语法快捷选择）=====
       // 按重度编辑用户的使用频率排序：高频块级语法置顶，结构化/边缘语法沉底；
-      // 关键字含中/英/拼音以便过滤。上标/下标为纯 HTML 边缘标签，从面板移除（手写即可）。
+      // 关键字含中/英/拼音以便过滤。2026-10-22 全量比对补齐（渲染器支持而面板遗漏的
+      // 内容类型，见 SLASH_NEW_ACTIONS；上标/下标动作早已实现、一并恢复进面板）——
+      // 新项默认隐藏（DEFAULT_SLASH_HIDDEN），在设置「快捷插入排序」里按需开启。
       _buildSlashCommands() {
         if (this._slashCommands) return this._slashCommands;
         const base = [
@@ -46,6 +48,21 @@
           { action: 'insert-h4', label: '标题 4', hint: '####', keywords: ['h4', 'heading', 'title', 'biaoti', '4', 'siji'] },
           { action: 'insert-h5', label: '标题 5', hint: '#####', keywords: ['h5', 'heading', 'title', 'biaoti', '5', 'wuji'] },
           { action: 'insert-h6', label: '标题 6', hint: '######', keywords: ['h6', 'heading', 'title', 'biaoti', '6', 'liuji'] },
+          // 低频：内容类型补齐（2026-10-22 全量比对新增；默认不启用 = DEFAULT_SLASH_HIDDEN）
+          { action: 'insert-dl', label: '定义列表', hint: '术语 : 释义', keywords: ['dl', 'definition', 'definition list', 'dingyi', 'liebiao', 'list'] },
+          { action: 'insert-details', label: '折叠区块', hint: '<details>', keywords: ['details', 'summary', 'collapsible', 'zhedie', 'zhediekuaiqu', 'fold'] },
+          { action: 'insert-footnote', label: '脚注', hint: '[^1]', keywords: ['footnote', 'jiaozhu', 'note', 'annotation'] },
+          { action: 'insert-progress', label: '进度条', hint: '<progress>', keywords: ['progress', 'jindu', 'jindutiao', 'bar'] },
+          { action: 'insert-center', label: '居中块', hint: '<center>', keywords: ['center', 'juzhong', 'centering', 'aligned'] },
+          { action: 'insert-u', label: '下划线文本', hint: '<u>', keywords: ['u', 'underline', 'xiashuxian', 'underlined'] },
+          { action: 'insert-ins', label: '插入内容', hint: '<ins>', keywords: ['ins', 'inserted', 'ruchong', 'insert line'] },
+          { action: 'insert-del', label: '删除内容', hint: '<del>', keywords: ['del', 'deleted', 'shanchu', 'deleted line'] },
+          { action: 'insert-figure', label: '图注', hint: '<figure>', keywords: ['figure', 'figcaption', 'tuzhu', 'caption', 'image caption'] },
+          { action: 'insert-kbd', label: '按键标签', hint: '<kbd>', keywords: ['kbd', 'key', 'anyaojian', 'keyboard', 'key label'] },
+          { action: 'insert-abbreviation', label: '缩写词', hint: '<abbr>', keywords: ['abbr', 'abbreviation', 'suoxie', 'suoxieci'] },
+          { action: 'insert-ruby', label: '注音', hint: '<ruby>', keywords: ['ruby', 'zhuyin', 'pinyin', 'annotation', 'phonetic'] },
+          { action: 'insert-superscript', label: '上标', hint: '<sup>', keywords: ['sup', 'superscript', 'shangbiao'] },
+          { action: 'insert-subscript', label: '下标', hint: '<sub>', keywords: ['sub', 'subscript', 'xiabiao'] },
         ];
         this._slashBaseCatalog = base;
         this._slashCommands = this._applySlashLayout(base);
@@ -55,7 +72,10 @@
       // 新命令（不在 order 中）自动补到末尾，order 中的陈旧 id 忽略。纯函数式，便于测试。
       _applySlashLayout(catalog) {
         const order = this.settings.slashOrder || [];
-        const hidden = new Set(this.settings.slashHidden || []);
+        // 无保存值（用户从未来过快捷插入排序）→ 落默认隐藏集（字体类 + 2026-10-22 新增
+        // 14 项默认不启用），与排序对话框草稿口径（下方 _openSlashOrder）一致；
+        // 有保存值时以用户选择为准（新增项对已保存用户可见、可一键隐藏）。
+        const hidden = new Set(this.settings.slashHidden || DEFAULT_SLASH_HIDDEN);
         const byId = new Map();
         for (const c of catalog) byId.set(c.action, c);
         const seen = new Set();
@@ -267,6 +287,8 @@
       _buildSlashBaseCatalogIds() {
         // 与 _buildSlashCommands 的基础目录保持一致（仅取 action 顺序）。
         // 默认顺序：前置高频项 → 其余项（保持原相对顺序）→ 字体类置底（默认隐藏）。
+        // ⚠️ 新增面板项必须同步进本清单（2026-10-22 曾漏：14 个内容类型项只进了面板
+        // 目录，排序对话框草稿取自这里 → 对话框里看不到新项的开关）。
         const all = [
           'insert-h1', 'insert-h2', 'insert-h3',
           'insert-ul', 'insert-ol', 'insert-task',
@@ -276,13 +298,17 @@
           'insert-callout-note', 'insert-callout-tip', 'insert-callout-warning', 'insert-callout-important', 'insert-callout-caution',
           'insert-strikethrough', 'insert-highlight',
           'insert-h4', 'insert-h5', 'insert-h6',
+          // 2026-10-22 内容类型补齐（与面板目录同批，默认隐藏 = DEFAULT_SLASH_HIDDEN）
+          'insert-dl', 'insert-details', 'insert-footnote', 'insert-progress',
+          'insert-center', 'insert-u', 'insert-ins', 'insert-del', 'insert-figure', 'insert-kbd',
+          'insert-abbreviation', 'insert-ruby', 'insert-superscript', 'insert-subscript',
         ];
         const front = SLASH_FRONT_ACTIONS.filter((id) => all.includes(id));
         const font = SLASH_FONT_ACTIONS.filter((id) => all.includes(id));
         const middle = all.filter((id) => !front.includes(id) && !font.includes(id));
         return [...front, ...middle, ...font];
       },
-      // 完整基础目录（含所有 28 项，供对话框渲染标签/hint，不受隐藏影响）
+      // 完整基础目录（含全部 42 项：28 项 + 2026-10-22 内容类型补齐 14 项，供对话框渲染标签/hint，不受隐藏影响）
       _slashBaseCatalogFull() {
         if (!this._slashBaseCatalog) this._buildSlashCommands();
         return this._slashBaseCatalog;

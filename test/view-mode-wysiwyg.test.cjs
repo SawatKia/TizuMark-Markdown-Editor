@@ -710,10 +710,11 @@ test('活动块源文态装饰：标题#前缀/列表符号/代码围栏 + 应�
   const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   assert.match(wsrc, /_wysiwygApplyActiveDecor\(idx\) \{/, '缺 _wysiwygApplyActiveDecor');
   const dIdx = wsrc.indexOf('_wysiwygApplyActiveDecor(idx) {');
-  // 窗口 6500→8000→11500（2026-10-17：函数头新增代码行排版行类先清后挂块 + 围栏分支扩为
+  // 窗口 6500→8000→11500→12500（2026-10-17：函数头新增代码行排版行类先清后挂块 + 围栏分支扩为
   // 「内容行排版行类」挂法，列表分支被顶后 ~1400 字符；同日列表分支头部再插入嵌套层级
-  // 计算 ~1400 字符，ol-paren 标记装饰距函数头 ~10072 字符 → 扩至 11500 覆盖）
-  const dBlk = wsrc.slice(dIdx, dIdx + 11500);
+  // 计算 ~1400 字符，ol-paren 标记装饰距函数头 ~10072 字符 → 扩至 11500 覆盖；
+  // 2026-10-22 围栏分支加块底槽位 + details 块判定/行类 ~370 字符 → 扩至 12500 覆盖）
+  const dBlk = wsrc.slice(dIdx, dIdx + 12500);
   assert.match(dBlk, /add\(b\.start, 0, m\[0\]\.length, 'wysiwyg-heading-hash'\);/, '# 前缀段缺失（应小灰显示）');
   assert.match(dBlk, /wysiwyg-heading-text wysiwyg-heading-text-' \+ level/, '正文段缺失（应渲染尺寸显示）');
   assert.match(dBlk, /b\.end - b\.start === 1 && RE\.heading\.test\(first\)/, '标题分支未按单行块判定');
@@ -2661,7 +2662,8 @@ test('S70 定义列表：编辑态=渲染态 + dd 行精确落行（2026-10-18 �
     '缺 dd 排版（行基准留白 + 24px 左缩进 + 8px 底距 + 次级色，同渲染 dd）');
   assert.match(css, /pre\.wysiwyg-dd-line\.wysiwyg-block-edge-bottom \{[\s\S]{0,80}padding-bottom: 16px;/,
     '缺块末 dd 底距 16px（dd mb 8 与 dl mb 16 折叠口径）');
-  assert.match(css, /\.wysiwyg-dd-colon \{[\s\S]{0,60}color: transparent;/, '缺 `: ` 冒号透明化');
+  // 2026-10-22 起冒号由透明改次级色可见（用户要求编辑态把 : 显示出来，同标题 # 前缀口径）
+  assert.match(css, /\.wysiwyg-dd-colon \{[\s\S]{0,400}?color: var\(--text-secondary\);/, '缺 `: ` 冒号可见（次级色）');
   // ⑤ 回归接线：harness 场景（TizuMark 文档 + 点 dd 行上半）+ 驱动断言块
   assert.match(harness, /window\.__runDefList = async function \(\)/, 'harness 缺 S70 场景');
   assert.match(harness, /'TizuMark'[\s\S]{0,300}基于 Tauri/, 'S70 文档缺用户原样定义列表项');
@@ -2788,4 +2790,127 @@ test('S74 代码块编辑态语法色重映射到 GitHub hljs 色板（≡ 渲�
   assert.match(driver, /S74：WYSIWYG 代码块编辑态语法色 ≡ 渲染态/, '驱动缺 S74 场景');
   assert.match(driver, /keyword（function\/let\/const…）≡ \.hljs-keyword/, '驱动缺 keyword 逐色断言');
   assert.match(driver, /围栏标志行保持次级色、未被评论灰覆盖/, '驱动缺围栏标志行排除断言');
+});
+
+// ---------- 2026-10-22 用户截图四项：① 定义列表冒号可见 + 面板内容比对补齐；
+// ② 折叠区块交互（点文字不进编辑/灰盒内编辑/小三角小手）；③ 相邻代码块间距两态一致 ----------
+
+test('S75 快捷插入面板补齐 14 个渲染器支持项（全进排序、默认不启用）', () => {
+  const cs = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'constants.js'), 'utf8');
+  const slash = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'slash.js'), 'utf8');
+  const app = fs.readFileSync(path.join(ROOT, 'src', 'app.js'), 'utf8');
+  const ids = ['insert-dl', 'insert-details', 'insert-footnote', 'insert-progress',
+    'insert-center', 'insert-u', 'insert-ins', 'insert-del', 'insert-figure', 'insert-kbd',
+    'insert-abbreviation', 'insert-ruby', 'insert-superscript', 'insert-subscript'];
+  // ① 常量：SLASH_NEW_ACTIONS 全量 14 项；DEFAULT_SLASH_HIDDEN = 字体类 + 新增项
+  assert.match(cs, /const SLASH_NEW_ACTIONS = \[[\s\S]{0,600}?'insert-dl'[\s\S]{0,600}?/);
+  for (const id of ids) assert.ok(cs.includes("'" + id + "'"), 'SLASH_NEW_ACTIONS 缺 ' + id);
+  assert.match(cs, /DEFAULT_SLASH_HIDDEN = SLASH_FONT_ACTIONS\.concat\(SLASH_NEW_ACTIONS\)/,
+    'DEFAULT_SLASH_HIDDEN 未并入 SLASH_NEW_ACTIONS（新增项须默认隐藏）');
+  // ② 面板目录：14 项全在（label 与动作一一对应）
+  const pairs = [
+    ['insert-dl', '定义列表'], ['insert-details', '折叠区块'], ['insert-footnote', '脚注'],
+    ['insert-progress', '进度条'], ['insert-center', '居中块'], ['insert-u', '下划线文本'],
+    ['insert-ins', '插入内容'], ['insert-del', '删除内容'], ['insert-figure', '图注'],
+    ['insert-kbd', '按键标签'], ['insert-abbreviation', '缩写词'], ['insert-ruby', '注音'],
+    ['insert-superscript', '上标'], ['insert-subscript', '下标'],
+  ];
+  for (const [id, label] of pairs) {
+    assert.match(slash, new RegExp("action: '" + id + "', label: '" + label + "'"),
+      '面板目录缺 ' + id + '（' + label + '）');
+  }
+  // ③ 新用户（无保存值）落默认隐藏集，与排序对话框草稿口径一致
+  assert.ok(slash.includes('this.settings.slashHidden || DEFAULT_SLASH_HIDDEN'),
+    '_applySlashLayout 新用户未落 DEFAULT_SLASH_HIDDEN（新增项默认不启用失效）');
+  // ④ app.js：12 个新动作（sup/sub 早已存在）全部接上
+  const appCases = [
+    ['insert-dl', "this.insertBlock('术语\\n: 释义', 2)"],
+    ['insert-details', "this.insertBlock('<details>\\n<summary>点击展开</summary>\\n\\n内容\\n\\n</details>', 35)"],
+    ['insert-footnote', "this.insertBlock('[^1]: 脚注内容', 6)"],
+    ['insert-progress', "this.insertBlock('<progress value=\"70\" max=\"100\"></progress>', 17)"],
+    ['insert-center', "this.insertBlock('<center>\\n居中显示的文本\\n</center>', 9)"],
+    ['insert-u', "this.wrapSelection('<u>', '</u>')"],
+    ['insert-ins', "this.wrapSelection('<ins>', '</ins>')"],
+    ['insert-del', "this.wrapSelection('<del>', '</del>')"],
+    ['insert-figure', "this.insertBlock('<figure>\\n  <img src=\"图片地址\" alt=\"图片描述\">\\n  <figcaption>图注文字</figcaption>\\n</figure>', 21)"],
+    ['insert-kbd', "this.wrapSelection('<kbd>', '</kbd>')"],
+    ['insert-abbreviation', "this.wrapSelection('<abbr title=\"完整词\">', '</abbr>')"],
+    ['insert-ruby', "this.insertBlock('<ruby>文字<rt>拼音</rt></ruby>', 6)"],
+  ];
+  for (const [id, call] of appCases) {
+    assert.ok(app.includes("case '" + id + "': " + call), 'app.js 缺 ' + id + ' 动作实现');
+  }
+});
+
+test('S76 折叠区块：点文字不进编辑态 / 编辑按钮进灰盒 / 小三角小手', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 遮罩 mousedown：details 正文点击吞掉（summary 分支之后、比例映射之前）
+  assert.match(wys, /const detHost = ev\.target && ev\.target\.closest \? ev\.target\.closest\('details'\) : null;[\s\S]{0,120}?if \(detHost && node\.contains\(detHost\)\) return;/,
+    '缺 details 正文点击 no-op 分支（点文字仍会进编辑态）');
+  // ② 活动块高亮：details 按容器块处理，整块挂代码盒背景类
+  assert.match(wys, /const isDetails = !isFence && !isTable && \/\^\\s\*<details\[\\s>\]\/i\.test\(first \|\| ''\)/,
+    '缺 isDetails 判定（details 块未按容器块处理）');
+  assert.ok(wys.includes('if (isFence || isDetails) cm.addLineClass(h, \'background\', ACTIVE_CODE_BOX_CLASS);'),
+    'details 块未挂 ACTIVE_CODE_BOX_CLASS（灰盒画不出）');
+  // ③ 源文行左右内距（源码不贴盒竖边）+ 行类先清后挂（装饰段 + 全量清除两处撤）
+  assert.ok(css.includes('pre.CodeMirror-line.wysiwyg-details-line'), '缺 wysiwyg-details-line 行类规则');
+  assert.ok(css.includes('padding-left: calc(var(--wysiwyg-line-inset, 32px) + 12px);'), 'details 行左右内距不是 32+12 口径');
+  assert.ok(wys.includes("cm.addLineClass(h, 'text', 'wysiwyg-details-line')"), '装饰段未挂 wysiwyg-details-line');
+  assert.ok((wys.match(/cm\.removeLineClass\(h, 'text', 'wysiwyg-details-line'\);/g) || []).length >= 2,
+    'wysiwyg-details-line 清除不足（须装饰段 + 全量清除两处先清后挂）');
+  // ④ 小三角小手：阅读/WYSIWYG 遮罩共用 preview-content，一条规则双覆盖
+  assert.match(css, /\.preview-content summary \{\s*cursor: pointer;\s*\}/, '缺 .preview-content summary 小手规则（阅读+WYSIWYG 双覆盖）');
+  // ⑤ 回归接线：驱动 S76 场景
+  assert.match(driver, /S76：WYSIWYG details（点文字不进编辑态 \/ 编辑按钮进灰盒 \/ 小三角小手）/, '驱动缺 S76 场景');
+  assert.match(driver, /summary 计算 cursor=pointer/, '驱动缺小三角小手断言');
+  assert.match(driver, /点 details 正文文字：不进编辑态/, '驱动缺点文字不进编辑态断言');
+  assert.match(driver, /整块灰盒/, '驱动缺整块灰盒断言');
+  assert.match(driver, /44px=32\+12/, '驱动缺 details 行内距断言');
+});
+
+test('S77 定义列表编辑态冒号可见（次级色，同标题 # 前缀口径）', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // 冒号 span 改可见：var(--text-secondary)，且旧透明规则不得残留
+  assert.match(css, /\.editor-container\.wysiwyg-mode \.CodeMirror \.wysiwyg-dd-colon \{[\s\S]{0,400}?color: var\(--text-secondary\);\s*\}/,
+    'wysiwyg-dd-colon 未改为 var(--text-secondary) 可见');
+  assert.ok(!/wysiwyg-dd-colon \{[^}]*color: transparent/.test(css), 'wysiwyg-dd-colon 仍残留 transparent 规则');
+  // span 宽度保持（不可 width:0——光标测量依赖真实宽度，S70 断言口径不动）
+  assert.ok(!/wysiwyg-dd-colon[^{]*\{[^}]*width:\s*0/.test(css), 'wysiwyg-dd-colon 被设 width:0（光标测量会失真）');
+  // 回归接线：S70 冒号断言改为次级色实测值（亮态 #666d79 = rgb(102,109,121)）
+  assert.match(driver, /e\.colon\.color === 'rgb\(102, 109, 121\)'/, 'S70 冒号断言未更新为次级色实测值');
+});
+
+test('S78 相邻代码块：编辑态块底 16px 槽位（盒底↔下一块 ≡ 渲染态）', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const harness = fs.readFileSync(path.join(ROOT, '_wysiwyg_compare.html'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 槽位行：末行（闭围栏行）16px 底内距
+  assert.match(css, /\.editor-container\.wysiwyg-mode \.CodeMirror pre\.CodeMirror-line\.wysiwyg-code-slot-bottom \{\s*padding-bottom: 16px;\s*\}/,
+    '缺 wysiwyg-code-slot-bottom 16px 底内距规则');
+  // ② 灰盒 ::before 底缘上移 16px（盒底边/下圆角仍在文本底缘，槽位在盒外）
+  assert.match(css, /cm-wysiwyg-code-box\.cm-wysiwyg-active-last::before \{\s*bottom: 16px;\s*\}/,
+    '缺 ::before bottom:16px（灰盒底缘未上移，槽位在盒内则两态不等价）');
+  // ①b 未闭合围栏：pad-bottom 与 slot 同行 → 叠加 29+16=45（否则 slot 覆盖 pad-bottom，
+  // 盒内底内距比渲染态少 29px）
+  assert.match(css, /wysiwyg-code-pad-bottom\.wysiwyg-code-slot-bottom \{\s*padding-bottom: 45px;\s*\}/,
+    '缺未闭合围栏 pad-bottom+slot 叠加规则（45px）');
+  // ③ JS：围栏分支挂槽位类（闭围栏行；未闭合围栏时末内容行同位）+ 两处先清后挂
+  assert.match(wys, /const slotH = cm\.getLineHandle\(last\);[\s\S]{0,80}?cm\.addLineClass\(slotH, 'text', 'wysiwyg-code-slot-bottom'\)/,
+    '围栏分支未挂 wysiwyg-code-slot-bottom');
+  assert.ok((wys.match(/cm\.removeLineClass\(h, 'text', 'wysiwyg-code-slot-bottom'\);/g) || []).length >= 2,
+    'wysiwyg-code-slot-bottom 清除不足（须装饰段 + 全量清除两处先清后挂）');
+  // ④ harness：lineInfo 量槽位类与底内距
+  assert.ok(harness.includes("slot: (pre.className || '').indexOf('wysiwyg-code-slot-bottom') >= 0"), 'harness lineInfo 缺 slot 字段');
+  assert.ok(harness.includes('padB: cs.paddingBottom'), 'harness lineInfo 缺 padB 字段');
+  // ⑤ 回归接线：驱动 S78 场景 + S67 口径更新
+  assert.match(driver, /S78：相邻代码块 渲染态≡编辑态 间距（块底 16px 槽位）/, '驱动缺 S78 场景');
+  assert.match(driver, /渲染态基准：两代码块遮罩间间距 = 16px/, '驱动缺渲染态 16px 基准断言');
+  assert.match(driver, /编辑态灰盒底↔下一代码块 = 渲染态 16px/, '驱动缺编辑态盒底间距断言');
+  assert.match(driver, /灰盒绘制高不变 = 渲染态 pre 高 \+ 2×代码行高/, '驱动缺灰盒绘制高不变断言');
+  assert.match(driver, /Math\.abs\(cb\.boxDelta - 16\) < 0\.5/, 'S67 块总高口径未更新（含 16px 底槽）');
+  assert.match(driver, /close\.slot === true && close\.padB === '16px'/, 'S67 缺闭围栏行槽位断言');
 });

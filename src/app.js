@@ -309,6 +309,20 @@ class MarkdownEditor {
       case 'insert-highlight': this.wrapSelection('==', '=='); break;
       case 'insert-superscript': this.wrapSelection('<sup>', '</sup>'); break;
       case 'insert-subscript': this.wrapSelection('<sub>', '</sub>'); break;
+      // 内容类型补齐（2026-10-22 全量比对新增，面板默认不启用）：光标偏移=插入文本内
+      // 待填位置（insertBlock 口径），wrapSelection 空选区时插入空壳、光标落壳内。
+      case 'insert-dl': this.insertBlock('术语\n: 释义', 2); break;
+      case 'insert-details': this.insertBlock('<details>\n<summary>点击展开</summary>\n\n内容\n\n</details>', 35); break;
+      case 'insert-footnote': this.insertBlock('[^1]: 脚注内容', 6); break;
+      case 'insert-progress': this.insertBlock('<progress value="70" max="100"></progress>', 17); break;
+      case 'insert-center': this.insertBlock('<center>\n居中显示的文本\n</center>', 9); break;
+      case 'insert-u': this.wrapSelection('<u>', '</u>'); break;
+      case 'insert-ins': this.wrapSelection('<ins>', '</ins>'); break;
+      case 'insert-del': this.wrapSelection('<del>', '</del>'); break;
+      case 'insert-figure': this.insertBlock('<figure>\n  <img src="图片地址" alt="图片描述">\n  <figcaption>图注文字</figcaption>\n</figure>', 21); break;
+      case 'insert-kbd': this.wrapSelection('<kbd>', '</kbd>'); break;
+      case 'insert-abbreviation': this.wrapSelection('<abbr title="完整词">', '</abbr>'); break;
+      case 'insert-ruby': this.insertBlock('<ruby>文字<rt>拼音</rt></ruby>', 6); break;
 
       case 'insert-h1': this.applyHeadingLevel(1); break;
       case 'insert-h2': this.applyHeadingLevel(2); break;

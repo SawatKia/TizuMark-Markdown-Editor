@@ -4844,10 +4844,14 @@ try {
         && cMid && cMid.padTLR === '0px/65px/65px/0px'
         && cLast && cLast.padTLR === '0px/65px/65px/29px' && cLast.padBottom === true]);
       const open = cb.lines && cb.lines.open, close = cb.lines && cb.lines.close;
-      checks67.push([`围栏行在灰盒内（开/闭两行同挂灰底 + 代码排版行类；开=first 角、闭=last 角）`,
+      // 2026-10-22：闭围栏行加 16px 块底槽位（wysiwyg-code-slot-bottom，盒底↔下一块间距
+      // ≡ 渲染态 16px 底边距槽，见 S78）→ 闭围栏行高 = 代码行高 + 16px
+      checks67.push([`围栏行在灰盒内（开/闭两行同挂灰底 + 代码排版行类；开=first 角、闭=last 角；闭围栏行含 16px 底槽）`,
         open && open.bg === true && open.cls === true && open.first === true && open.lastCls === false
         && close && close.bg === true && close.cls === true && close.first === false && close.lastCls === true
-        && open.h != null && Math.abs(open.h - r.codeLineH) < 0.5 && Math.abs(close.h - r.codeLineH) < 0.5]);
+        && close.slot === true && close.padB === '16px'
+        && open.h != null && Math.abs(open.h - r.codeLineH) < 0.5
+        && Math.abs(close.h - (r.codeLineH + 16)) < 0.5]);
       // 2026-10-21：底色/描边/圆角全部移到 ::before 内缩盒（旧 inset shadow 全行宽，
       // 编辑态灰盒比渲染态 pre 左右各宽一段行留白——用户截图反馈），linebackground 自身底色置空
       checks67.push([`灰盒底色 = 渲染态 --code-bg（::before 内缩盒；linebackground 自身底色已置空）`,
@@ -4875,8 +4879,10 @@ try {
         cb.editTextX != null && r.textX != null && Math.abs(cb.editTextX - r.textX) < 0.5]);
       checks67.push([`核心(横)：::before 内缩 = 行留白（left/right 相等，= 行基准留白）`,
         bf && bf.left === bf.right && px(bf.left) > 0 && px(bf.left) < 100]);
-      checks67.push([`核心(纵)：灰盒总高 = 渲染态 pre 高 + 2×代码行高（${cb.boxH}px vs ${r.preH}+2×${r.codeLineH}px，Δ=${cb.boxDelta}px）`,
-        cb.boxDelta != null && Math.abs(cb.boxDelta) < 0.5]);
+      // 2026-10-22 口径更新：块总高（行高之和）= 渲染态 pre 高 + 2×代码行高 + 16px 底槽
+      //（闭围栏行槽位在盒外，盒绘制高仍 = pre 高 + 2×代码行高，见 S78 盒底↔下一块间距断言）
+      checks67.push([`核心(纵)：块总高 = 渲染态 pre 高 + 2×代码行高 + 16px 底槽（${cb.boxH}px vs ${r.preH}+2×${r.codeLineH}+16，Δ=${cb.boxDelta}px）`,
+        cb.boxDelta != null && Math.abs(cb.boxDelta - 16) < 0.5]);
       checks67.push([`背景层覆盖 pre padding 区（盒缘与 16px 内距对齐，Δ<0.5px）`,
         cb.bgGeom && Math.abs(cb.bgGeom.bgH - cb.bgGeom.preH) < 0.5
         && Math.abs(cb.bgGeom.topGap) < 0.5]);
@@ -5000,8 +5006,10 @@ try {
       checks70.push([`编辑态 dd 行：wysiwyg-dd-line 行类 + 左缩进 56px（行基准 32 + 24，同渲染 dd 相对 dt +24）+ 块末底距 16px + 颜色=渲染态 dd 色 + 无 para-line`,
         e.ddCls === true && e.ddPadL === '56px' && e.ddPadB === '16px'
         && e.ddColor === r.ddColor && e.ddPara === false]);
-      checks70.push([`编辑态 “: ” 前缀透明 span（真实宽度保留，光标测量不受影响）`,
-        e.colon && e.colon.color === 'rgba(0, 0, 0, 0)' && e.colon.w > 5]);
+      // 2026-10-22 用户要求「定义列表编辑态要把 : 显示出来，参考标题的编辑态显示方式」：
+      // 冒号由透明改次级色可见（同标题 # 前缀口径），span 真实宽度保留不变
+      checks70.push([`编辑态 “: ” 前缀次级色可见 span（= --text-secondary rgb(102,109,121)，真实宽度保留，光标测量不受影响）`,
+        e.colon && e.colon.color === 'rgb(102, 109, 121)' && e.colon.w > 5]);
       const ddxGap = r.dtX != null && r.ddX != null ? +(r.ddX - r.dtX).toFixed(2) : null;
       const eddGap = e.dtX != null && e.ddX != null ? +(e.ddX - e.dtX).toFixed(2) : null;
       checks70.push([`编辑态缩进差 = 渲染态缩进差（dd 相对 dt 均 +24px：${eddGap} vs ${ddxGap}）`,
@@ -5275,6 +5283,257 @@ try {
       for (const [label, ok] of checks74) {
         console.log(`  ${ok ? '✓' : '✗'} ${label}`);
         if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S76：WYSIWYG details 交互与观感（2026-10-22 用户要求：① 折叠区块不允许点击
+  // 文字进入编辑态，需点后面的编辑按钮进入；② 进入编辑态要在灰色块中编辑（参考代码块）；
+  // ③ 小三角 hover 显示小手——阅读模式与 WYSIWYG 遮罩共用 preview-content，一条规则覆盖）
+  // ----------
+  {
+    console.log('\n=== S76：WYSIWYG details（点文字不进编辑态 / 编辑按钮进灰盒 / 小三角小手）===');
+    const s76doc = ['# T', '', '<details>', '<summary>点击展开：快捷键一览</summary>', '', '<ul>', '<li>保存文档</li>', '<li>查找内容</li>', '</ul>', '', '</details>', '', '尾部参照段落。'].join('\n');
+    const s76setup = await page.evaluate((d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s76cm = cm; window.__s76ed = ed;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      return new Promise((res) => setTimeout(() => {
+        cm.setCursor({ line: cm.lineCount() - 1, ch: 0 }, { scroll: false });
+        setTimeout(() => res(null), 400);
+      }, 400));
+    }, s76doc);
+    if (s76setup) {
+      console.log('  ⚠ 场景失败: ' + s76setup);
+      fail++;
+    } else {
+      const s76state = () => page.evaluate(() => {
+        const cm = window.__s76cm, ed = window.__s76ed;
+        const dm = Array.from(cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask')).find((m) => m.querySelector('details'));
+        const det = dm && dm.querySelector('details');
+        const sum = dm && dm.querySelector('summary');
+        const refH = cm.getLineHandle(cm.lineCount() - 1);
+        let refPre = null;
+        for (const lv of cm.display.view) if (lv && lv.line === refH) {
+          const el = lv.node; refPre = el.tagName === 'PRE' ? el : el.querySelector('pre.CodeMirror-line');
+        }
+        // 活动块源行行类（仅当 details 块是活动块时有意义）
+        const lines = [];
+        for (let n = 0; n < cm.lineCount(); n++) {
+          const h = cm.getLineHandle(n);
+          if (!h || !h.bgClass) continue;
+          const cls = String(h.bgClass);
+          let preCls = '';
+          let pEl = null;
+          for (const lv of cm.display.view) if (lv && lv.line === h) {
+            const el = lv.node;
+            const p = el && el.tagName === 'PRE' ? el : (el && el.querySelector ? el.querySelector('pre.CodeMirror-line') : null);
+            if (p) { preCls = String(p.className || ''); pEl = p; }
+            break;
+          }
+          if (cls.indexOf('cm-wysiwyg-code-box') >= 0 || preCls.indexOf('wysiwyg-details-line') >= 0) {
+            lines.push({
+              n,
+              box: cls.indexOf('cm-wysiwyg-code-box') >= 0,
+              first: cls.indexOf('cm-wysiwyg-active-first') >= 0,
+              last: cls.indexOf('cm-wysiwyg-active-last') >= 0,
+              dLine: preCls.indexOf('wysiwyg-details-line') >= 0,
+              padL: pEl ? getComputedStyle(pEl).paddingLeft : null,
+            });
+          }
+        }
+        return {
+          stillMasked: !!dm,
+          open: det ? det.open : null,
+          summaryCursor: sum ? getComputedStyle(sum).cursor : null,
+          refTop: refPre ? Math.round(refPre.getBoundingClientRect().top * 100) / 100 : null,
+          cursor: cm.getCursor(),
+          activeIdx: ed._wysiwygActiveIdx,
+          lines,
+        };
+      });
+      const s76pt = async (sel) => page.evaluate((s) => {
+        const cm = window.__s76cm;
+        const dm = Array.from(cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask')).find((m) => m.querySelector('details'));
+        const el = dm && dm.querySelector(s);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.x + Math.min(60, r.width / 2), y: r.y + r.height / 2 };
+      }, sel);
+      const s76click = async (pt) => {
+        if (!pt) return false;
+        await page.mouse.click(pt.x, pt.y);
+        await page.waitForTimeout(300);
+        return true;
+      };
+      const a0 = await s76state();
+      // ① 点 details 正文（li 文字）：不进编辑态
+      const pBody = await s76pt('details ul li');
+      await s76click(pBody);
+      const a1 = await s76state();
+      // ② 点 summary：原地折叠/展开 + 小手
+      const pSum = await s76pt('summary');
+      await s76click(pSum);
+      const a2 = await s76state();
+      // ③ 点编辑按钮：进编辑态（灰盒）
+      const pBtn = await s76pt('button.block-edit-btn');
+      await s76click(pBtn);
+      const a3 = await s76state();
+      const checks76 = [];
+      checks76.push([`小三角小手：summary 计算 cursor=pointer（WYSIWYG 遮罩与阅读预览共用 preview-content）`,
+        a0.summaryCursor === 'pointer']);
+      checks76.push([`点 details 正文文字：不进编辑态（仍遮罩、光标/活动块不变、无灰盒行）`,
+        a1.stillMasked === true && JSON.stringify(a1.cursor) === JSON.stringify(a0.cursor)
+        && a1.activeIdx === a0.activeIdx && a1.lines.length === 0]);
+      checks76.push([`点 summary：原地折叠（open=false），块不撤罩、光标不动（S73 口径保持）`,
+        a2.open === false && a2.stillMasked === true && JSON.stringify(a2.cursor) === JSON.stringify(a0.cursor)]);
+      const boxLines = a3.lines || [];
+      const firstLine = boxLines.find((l) => l.first), lastLine = boxLines.find((l) => l.last);
+      const nonBlank = boxLines.filter((l) => l.dLine);
+      checks76.push([`点编辑按钮：进编辑态且整块灰盒（details 块 7 个非空行全挂 code-box 背景，首/末行挂角类）`,
+        a3.stillMasked === false && boxLines.length >= 7
+        && boxLines.every((l) => l.box === true) && !!firstLine && !!lastLine]);
+      checks76.push([`灰盒内编辑：非空源行挂 wysiwyg-details-line（左右内距 44px=32+12，源码不贴盒竖边）`,
+        nonBlank.length >= 7 && nonBlank.every((l) => l.padL === '44px')]);
+      console.log('  state0: ' + JSON.stringify(a0));
+      console.log('  state1(点正文): ' + JSON.stringify(a1));
+      console.log('  state2(点summary): ' + JSON.stringify(a2));
+      console.log('  state3(编辑按钮): lines=' + JSON.stringify(boxLines));
+      for (const [label, ok] of checks76) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S78：相邻代码块 渲染态≡编辑态 间距（2026-10-22 用户要求「两个代码块挨着，
+  // 第一个进编辑态后底部与第二个紧密相连，不方便编辑和查看」）：渲染态遮罩是 flow-root BFC、
+  // 含 pre 的 16px 底边距槽（两遮罩间 16px 白槽）；编辑态活动块原无此槽 → 灰盒底缘贴下一块。
+  // 修法：闭围栏行挂 16px 底槽 + 灰盒 ::before 底缘上移 16px → 编辑态盒底↔下一块 ≡ 渲染态
+  // 16px；灰盒绘制高不变（= pre 高 + 2×代码行高） ----------
+  {
+    console.log('\n=== S78：相邻代码块 渲染态≡编辑态 间距（块底 16px 槽位）===');
+    const s78doc = ['### HTML / CSS', '', '```html', '<!DOCTYPE html>', '<html lang="zh-CN">', '<head>', '  <meta charset="UTF-8">', '  <title>示例页面</title>', '</head>', '<body>', '  <div class="wrap"></div>', '  <script>console.log(1);</script>', '</body>', '</html>', '```', '', '```css', '.container {', '  display: grid;', '  gap: 16px;', '}', '```', '', '尾部参照段落。'].join('\n');
+    const s78setup = await page.evaluate((d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s78cm = cm; window.__s78ed = ed;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      return new Promise((res) => setTimeout(() => {
+        cm.setCursor({ line: cm.lineCount() - 1, ch: 0 }, { scroll: false });
+        setTimeout(() => res(null), 400);
+      }, 400));
+    }, s78doc);
+    if (s78setup) {
+      console.log('  ⚠ 场景失败: ' + s78setup);
+      fail++;
+    } else {
+      const s78masks = () => page.evaluate(() => {
+        const cm = window.__s78cm;
+        // 视口归零：CM 内部滚动器在进编辑态时可能自动滚动（光标跟随），归零后
+        // 参照行顶边才是纯文档空间位移（否则混入视口滚动量，非块高差）
+        cm.scrollTo(null, 0);
+        const masks = Array.from(cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask'));
+        const hm = masks.find((m) => m.textContent.indexOf('DOCTYPE') >= 0);
+        const cm2 = masks.find((m) => m.textContent.indexOf('display: grid') >= 0);
+        const hp = hm && hm.querySelector('pre'), cp = cm2 && cm2.querySelector('pre');
+        const refH = cm.getLineHandle(cm.lineCount() - 1);
+        let refPre = null;
+        for (const lv of cm.display.view) if (lv && lv.line === refH) {
+          const el = lv.node; refPre = el.tagName === 'PRE' ? el : el.querySelector('pre.CodeMirror-line');
+        }
+        const codeLine = hm && hm.querySelector('.code-line');
+        return {
+          htmlPreH: hp ? Math.round(hp.getBoundingClientRect().height * 100) / 100 : null,
+          codeLineH: codeLine ? Math.round(codeLine.getBoundingClientRect().height * 100) / 100 : null,
+          renderGap: (hp && cp) ? Math.round((cp.getBoundingClientRect().top - hp.getBoundingClientRect().bottom) * 100) / 100 : null,
+          refTop: refPre ? Math.round(refPre.getBoundingClientRect().top * 100) / 100 : null,
+        };
+      });
+      const m0 = await s78masks();
+      // 进编辑态：点第一个代码块的「编辑」按钮（产品入口）
+      const pBtn = await page.evaluate(() => {
+        const cm = window.__s78cm;
+        const masks = Array.from(cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask'));
+        const hm = masks.find((m) => m.textContent.indexOf('DOCTYPE') >= 0);
+        const btn = hm && hm.querySelector('button.block-edit-btn');
+        if (!btn) return null;
+        const r = btn.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      });
+      if (pBtn) {
+        await page.mouse.click(pBtn.x, pBtn.y);
+        await page.waitForTimeout(300);
+      }
+      const e1 = await page.evaluate(() => {
+        const cm = window.__s78cm, ed = window.__s78ed;
+        cm.scrollTo(null, 0); // 同 s78masks：文档空间口径
+        const bIdx = (ed._wysiwygBlocks || []).findIndex((b) => /^```/.test(cm.getLine(b.start) || ''));
+        if (bIdx < 0) return { err: '未找到围栏块' };
+        const b = ed._wysiwygBlocks[bIdx];
+        const last = b.end - 1;
+        const lineEl = (n) => {
+          const h = cm.getLineHandle(n);
+          for (const lv of cm.display.view) if (lv && lv.line === h) {
+            const el = lv.node;
+            const pre = el.tagName === 'PRE' ? el : (el.querySelector ? el.querySelector('pre.CodeMirror-line') : null);
+            const bg = el.querySelector ? el.querySelector('div.CodeMirror-linebackground') : null;
+            return { pre, bg };
+          }
+          return { pre: null, bg: null };
+        };
+        const first = lineEl(b.start), close = lineEl(last);
+        if (!close.pre || !close.bg) return { err: '编辑态行未渲染' };
+        const cs = getComputedStyle(close.pre);
+        const pb = getComputedStyle(close.bg, '::before');
+        const lbR = close.bg.getBoundingClientRect();
+        const fFirst = lineEl(b.start);
+        const lbFirst = fFirst.bg ? fFirst.bg.getBoundingClientRect() : null;
+        const masks = Array.from(cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask'));
+        const cp = masks.find((m) => m.textContent.indexOf('display: grid') >= 0);
+        const cPre = cp && cp.querySelector('pre');
+        const refH = cm.getLineHandle(cm.lineCount() - 1);
+        let refPre = null;
+        for (const lv of cm.display.view) if (lv && lv.line === refH) {
+          const el = lv.node; refPre = el.tagName === 'PRE' ? el : el.querySelector('pre.CodeMirror-line');
+        }
+        const beforeTop = lbFirst ? parseFloat(getComputedStyle(fFirst.bg, '::before').top) : 0;
+        const boxTop = lbFirst ? lbFirst.top + beforeTop : null;
+        const boxBottom = lbR.top + lbR.height - 16; // ::before bottom:16px
+        return {
+          activeIdx: ed._wysiwygActiveIdx,
+          slotCls: (close.pre.className || '').indexOf('wysiwyg-code-slot-bottom') >= 0,
+          closePadB: cs.paddingBottom,
+          beforeBottom: pb.bottom,
+          drawnH: (boxTop != null) ? Math.round((boxBottom - boxTop) * 100) / 100 : null,
+          editGap: cPre ? Math.round((cPre.getBoundingClientRect().top - boxBottom) * 100) / 100 : null,
+          refTop: refPre ? Math.round(refPre.getBoundingClientRect().top * 100) / 100 : null,
+        };
+      });
+      if (e1.err) {
+        console.log('  ⚠ 场景失败: ' + e1.err);
+        fail++;
+      } else {
+        console.log('  render: ' + JSON.stringify(m0));
+        console.log('  edit: ' + JSON.stringify(e1));
+        const drawnDelta = (e1.drawnH != null && m0.htmlPreH != null && m0.codeLineH != null)
+          ? +(e1.drawnH - (m0.htmlPreH + 2 * m0.codeLineH)).toFixed(2) : null;
+        const refShift = (m0.refTop != null && e1.refTop != null) ? +(e1.refTop - m0.refTop).toFixed(2) : null;
+        const checks78 = [];
+        checks78.push([`渲染态基准：两代码块遮罩间间距 = 16px（pre 底边距槽，BFC 内收）（${m0.renderGap}px）`,
+          m0.renderGap != null && Math.abs(m0.renderGap - 16) < 0.5]);
+        checks78.push([`编辑态槽位：闭围栏行挂 wysiwyg-code-slot-bottom + 底内距 16px + 灰盒 ::before 底缘上移 16px`,
+          e1.slotCls === true && e1.closePadB === '16px' && e1.beforeBottom === '16px']);
+        checks78.push([`核心(纵)：灰盒绘制高不变 = 渲染态 pre 高 + 2×代码行高（${e1.drawnH}px vs ${m0.htmlPreH}+2×${m0.codeLineH}px，Δ=${drawnDelta}px）`,
+          drawnDelta != null && Math.abs(drawnDelta) < 0.5]);
+        checks78.push([`核心(间距)：编辑态灰盒底↔下一代码块 = 渲染态 16px（${e1.editGap}px）——不再紧密相连`,
+          e1.editGap != null && Math.abs(e1.editGap - 16) < 0.5]);
+        console.log(`  （信息）参照段落行顶位移 = ${refShift}px（= 活动块比遮罩多两行围栏行高 2×${m0.codeLineH}px 的块高增长；编辑按钮入口无点击锚点，若从遮罩点击进入则 S71 点击锚点保持被点行不动）`);
+        for (const [label, ok] of checks78) {
+          console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+          if (!ok) fail++;
+        }
       }
     }
   }

@@ -1789,6 +1789,8 @@
           padBottom: (pre.className || '').indexOf('wysiwyg-code-pad-bottom') >= 0,
           fs: cs.fontSize, lh: cs.lineHeight, ff: cs.fontFamily,
           padTLR: [cs.paddingTop, cs.paddingLeft, cs.paddingRight, cs.paddingBottom].join('/'),
+          padB: cs.paddingBottom,
+          slot: (pre.className || '').indexOf('wysiwyg-code-slot-bottom') >= 0,
           h: +pre.getBoundingClientRect().height.toFixed(2),
           bg: !!(h.bgClass && h.bgClass.indexOf('cm-wysiwyg-active-block') >= 0),
           box: !!(h.bgClass && h.bgClass.indexOf('cm-wysiwyg-code-box') >= 0),

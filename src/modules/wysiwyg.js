@@ -810,6 +810,12 @@
               return;
             }
           }
+          // 折叠区块正文（2026-10-22 用户要求「折叠区块不允许点击文字进入编辑态，需要
+          // 点击后面的编辑按钮进入」）：details 内除 summary（上方分支保留原地折叠/
+          // 展开）之外的文字点击一律吞掉——遮罩不撤、光标不动、块保持渲染态；进源码态
+          // 的唯一入口 = 块右上「编辑」按钮（其分支在上方已派发）。
+          const detHost = ev.target && ev.target.closest ? ev.target.closest('details') : null;
+          if (detHost && node.contains(detHost)) return;
           const r = mark && mark.find ? mark.find() : null;
           if (!r) return;
 
@@ -2549,11 +2555,16 @@
       const first = cm.getLine(b.start);
       const isFence = RE.fence.test((first || '').trim());
       const isTable = !isFence && RE.table.test(first || '');
+      // 折叠区块（2026-10-22 用户要求「进入编辑态时要在灰色块中进行编辑，可以参考代码块」）：
+      // 按容器块处理——整块同挂代码盒背景类（ACTIVE_CODE_BOX_CLASS 复用代码盒 ::before
+      // 内缩盒：--code-bg 底色 + 1px 描边 + 首/末角），源文行排版类见
+      // _wysiwygApplyActiveDecor 的 wysiwyg-details-line（左右 12px 内距，不贴盒竖边）。
+      const isDetails = !isFence && !isTable && /^\s*<details[\s>]/i.test(first || '');
       let lo = b.start, hi = last;
       if (isFence) {
         // 整块进盒（lo=b.start 含开围栏、hi=last 含闭围栏）：空代码块（仅开/闭两行）
         // 也是两行灰盒，首/末角类由下方循环按 n===lo/hi 挂
-      } else if (!isTable) {
+      } else if (!isTable && !isDetails) {
         let head = null;
         try { head = cm.getCursor('head'); } catch (_) { /* 忽略 */ }
         if (head && head.line >= b.start && head.line <= last) { lo = hi = head.line; }
@@ -2565,7 +2576,7 @@
           if (!h) continue;
           this._wysiwygActiveLines.push(h); // 记行对象（撤除处靠它跟住行位移）
           cm.addLineClass(h, 'background', ACTIVE_CLASS);
-          if (isFence) cm.addLineClass(h, 'background', ACTIVE_CODE_BOX_CLASS);
+          if (isFence || isDetails) cm.addLineClass(h, 'background', ACTIVE_CODE_BOX_CLASS);
           // 单行：同一行挂三个类 = 四角全圆；容器整块：首行仅上角、末行仅下角
           if (n === lo) cm.addLineClass(h, 'background', ACTIVE_FIRST_CLASS);
           if (n === hi) cm.addLineClass(h, 'background', ACTIVE_LAST_CLASS);
@@ -2613,6 +2624,8 @@
             if (h) {
               cm.removeLineClass(h, 'text', 'wysiwyg-plain-text');
               cm.removeLineClass(h, 'text', 'wysiwyg-para-line');
+              // 折叠区块行类（2026-10-22）：同 para-line 先清后挂
+              cm.removeLineClass(h, 'text', 'wysiwyg-details-line');
               // 定义列表行类（2026-10-18）：同 para-line 先清后挂
               cm.removeLineClass(h, 'text', 'wysiwyg-dt-line');
               cm.removeLineClass(h, 'text', 'wysiwyg-dd-line');
@@ -2653,6 +2666,7 @@
               cm.removeLineClass(h, 'text', 'wysiwyg-code-line');
               cm.removeLineClass(h, 'text', 'wysiwyg-code-pad-top');
               cm.removeLineClass(h, 'text', 'wysiwyg-code-pad-bottom');
+              cm.removeLineClass(h, 'text', 'wysiwyg-code-slot-bottom');
             }
           } catch (_) { /* 行已销毁（安全 no-op） */ }
         }
@@ -2718,6 +2732,13 @@
           if (lineNo === contentEnd) cm.addLineClass(h, 'text', 'wysiwyg-code-pad-bottom');
         }
         if (hasClose) codeCls(last); // 闭围栏行进盒
+        // 块底槽位（2026-10-22 用户要求「两个代码块挨着，第一个进编辑态底部与第二个紧密
+        // 连在一起」）：渲染态遮罩是 flow-root BFC、含 pre 的 16px 底边距槽；编辑态活动块
+        // 原无此槽 → 灰盒底缘贴下一块。块末行（闭围栏行；未闭合围栏时末内容行，与
+        // pad-bottom 同行）挂 16px 底内距类，灰盒 ::before 底缘同步上移 16px（styles.css
+        // wysiwyg-code-slot-bottom）→ 编辑态盒底↔下一块间距 ≡ 渲染态 16px。
+        const slotH = cm.getLineHandle(last);
+        if (slotH) cm.addLineClass(slotH, 'text', 'wysiwyg-code-slot-bottom');
       } else if ((RE.ul.test(first) || RE.ol.test(first) || RE.task.test(first)) &&
                  !RE.hr.test(first.trim())) {
         // —— 列表：逐行处理（含嵌套缩进行、续行）——
@@ -2867,6 +2888,10 @@
       const isFenceBlock = RE.fence.test(first.trim());
       const isTableBlock = !isFenceBlock && RE.table.test(first);
       const isFrontmatter = b.start === 0 && (first || '').trim() === '---';
+      // 折叠区块（2026-10-22）：整块灰盒见 _applyWysiwygActiveHighlight；源文行挂
+      // wysiwyg-details-line（左右 12px 内距，源码文字不贴盒竖边；不挂 code-line，
+      // 保持默认正文字族）。判定与高亮处同口径（块首行 <details 标签）。
+      const isDetailsBlock = !isFenceBlock && !isTableBlock && /^\s*<details[\s>]/i.test(first || '');
       if (!isFenceBlock && !isTableBlock && !isFrontmatter) {
         for (let lineNo = b.start; lineNo < b.end && lineNo < cm.lineCount(); lineNo++) {
           const line = cm.getLine(lineNo);
@@ -2890,6 +2915,7 @@
             const h = cm.getLineHandle(lineNo);
             if (h) {
               cm.addLineClass(h, 'text', 'wysiwyg-plain-text');
+              if (isDetailsBlock) cm.addLineClass(h, 'text', 'wysiwyg-details-line');
               this._wysiwygPlainLines.push(h);
               // 块边缘行类（S43 块高补齐用）：首/末行挂标记，CSS 给「14px 边距族」
               // （列表行/段落行）的边缘行加顶/底距，使活动块与遮罩逐像素等高。
@@ -4377,6 +4403,7 @@
               try {
                 if (h) {
                   cm.removeLineClass(h, 'text', 'wysiwyg-plain-text');
+                  cm.removeLineClass(h, 'text', 'wysiwyg-details-line');
                   cm.removeLineClass(h, 'text', 'wysiwyg-quote-line');
                   cm.removeLineClass(h, 'text', 'wysiwyg-quote-nested');
                 }
@@ -4411,6 +4438,7 @@
                   cm.removeLineClass(h, 'text', 'wysiwyg-code-line');
                   cm.removeLineClass(h, 'text', 'wysiwyg-code-pad-top');
                   cm.removeLineClass(h, 'text', 'wysiwyg-code-pad-bottom');
+                  cm.removeLineClass(h, 'text', 'wysiwyg-code-slot-bottom');
                 }
               } catch (_) { /* 行已销毁（安全 no-op） */ }
             }

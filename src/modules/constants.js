@@ -24,8 +24,15 @@
   //  - 其余项默认显示、保持原相对顺序排在中间。
   const SLASH_FONT_ACTIONS = ['insert-bold', 'insert-italic', 'insert-strikethrough', 'insert-highlight'];
   const SLASH_FRONT_ACTIONS = ['insert-inline-code', 'insert-hr', 'insert-quote', 'insert-code-block'];
-  // 默认隐藏集合 = 字体类（开关默认关闭）；其余开关默认开启
-  const DEFAULT_SLASH_HIDDEN = SLASH_FONT_ACTIONS.slice();
+  // 2026-10-22 全量比对补齐：渲染器实际支持、旧面板遗漏的内容类型（定义列表/折叠区块/
+  // 脚注/进度条/居中块/下划线/插入内容/删除内容/图注/按键标签/缩写词/注音）+ 恢复
+  // 历史上移出的上标/下标（动作早已实现，仅面板缺失）。全部进快捷插入排序，
+  // 但开关默认关闭（默认不启用，用户在设置里按需开启）。
+  const SLASH_NEW_ACTIONS = ['insert-dl', 'insert-details', 'insert-footnote', 'insert-progress',
+    'insert-center', 'insert-u', 'insert-ins', 'insert-del', 'insert-figure', 'insert-kbd',
+    'insert-abbreviation', 'insert-ruby', 'insert-superscript', 'insert-subscript'];
+  // 默认隐藏集合 = 字体类 + 新增项（开关默认关闭）；其余开关默认开启
+  const DEFAULT_SLASH_HIDDEN = SLASH_FONT_ACTIONS.concat(SLASH_NEW_ACTIONS);
 
   // 系统字体由 Rust 命令 list_system_fonts 精确枚举（fontdb，跨平台），
   // 不内置任何字体文件（等线/微软雅黑/苹方等版权字体绝不打包分发）。
@@ -131,6 +138,7 @@
     PREVIEW_WINDOW_LEAD,
     SLASH_FONT_ACTIONS,
     SLASH_FRONT_ACTIONS,
+    SLASH_NEW_ACTIONS,
     DEFAULT_SLASH_HIDDEN,
     SYSTEM_FONT_WHITELIST,
     SYSTEM_FONT_WHITELIST_SET,

@@ -64,19 +64,29 @@ test('slash: 空 query 显示全部命令', async () => withEditor({ captureInit
   assert.strictEqual(ed._slashFiltered.length, ed._buildSlashCommands().length, '空 query 应列出全部命令');
 }));
 
-test('slash: 列表已优选——上标/下标已移除，高频置顶', async () => withEditor({ captureInitErr: true }, async (w, ed) => {
+test('slash: 列表已优选——高频置顶、14 个内容类型补齐项默认不启用（2026-10-22）', async () => withEditor({ captureInitErr: true }, async (w, ed) => {
   const cmds = ed._buildSlashCommands();
-  // 上标/下标为纯 HTML 边缘标签，已从面板移除（手写即可）
-  assert.ok(!cmds.some((c) => c.action === 'insert-superscript'), '上标应已移除');
-  assert.ok(!cmds.some((c) => c.action === 'insert-subscript'), '下标应已移除');
-  assert.strictEqual(cmds.length, 28, '优选后应为 28 项，实际: ' + cmds.length);
+  const base = ed._slashBaseCatalog || [];
+  // 目录 = 28 项 + 内容类型补齐 14 项 = 42 项；默认隐藏 18 项（字体 4 + 新增 14）→ 面板显示 24 项
+  assert.strictEqual(base.length, 42, '基础目录应为 42 项，实际: ' + base.length);
+  assert.strictEqual(cmds.length, 24, '默认显示应为 24 项，实际: ' + cmds.length);
+  // 上标/下标已恢复进面板，但默认隐藏（用户在快捷插入排序里按需开启）
+  assert.ok(base.some((c) => c.action === 'insert-superscript'), '上标应已恢复进目录');
+  assert.ok(!cmds.some((c) => c.action === 'insert-superscript'), '上标应默认隐藏');
+  assert.ok(base.some((c) => c.action === 'insert-subscript'), '下标应已恢复进目录');
+  assert.ok(!cmds.some((c) => c.action === 'insert-subscript'), '下标应默认隐藏');
+  // 抽查新增项：在目录内、默认不显示
+  for (const id of ['insert-dl', 'insert-details', 'insert-footnote', 'insert-progress']) {
+    assert.ok(base.some((c) => c.action === id), '目录应含新增项 ' + id);
+    assert.ok(!cmds.some((c) => c.action === id), '新增项 ' + id + ' 应默认隐藏');
+  }
   // 高频块级语法置顶：标题1/2/3 → 无序/有序/任务列表
   const front = cmds.slice(0, 6).map((c) => c.action).join(',');
   assert.strictEqual(front, 'insert-h1,insert-h2,insert-h3,insert-ul,insert-ol,insert-task',
     '前 6 项应为高频标题与列表，实际: ' + front);
-  // 深层标题沉底
+  // 深层标题沉底（可见项末尾仍为 H4/H5/H6，新增项在其后且默认隐藏）
   const tail = cmds.slice(-3).map((c) => c.action).join(',');
-  assert.strictEqual(tail, 'insert-h4,insert-h5,insert-h6', '末尾应为 H4/H5/H6，实际: ' + tail);
+  assert.strictEqual(tail, 'insert-h4,insert-h5,insert-h6', '可见项末尾应为 H4/H5/H6，实际: ' + tail);
 }));
 
 test('slash: 方向键导航（含循环）', async () => withEditor({ captureInitErr: true }, async (w, ed) => {

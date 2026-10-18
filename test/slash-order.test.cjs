@@ -13,10 +13,18 @@ function typeSlash(ed, line, ch) {
   ed._maybeTriggerSlash(ed.cm, pos);
 }
 
-test('slash-order: _buildSlashBaseCatalogIds 含全部 28 项', async () => withEditor({ captureInitErr: true }, async (w, ed) => {
+test('slash-order: _buildSlashBaseCatalogIds 含全部 42 项', async () => withEditor({ captureInitErr: true }, async (w, ed) => {
   const ids = ed._buildSlashBaseCatalogIds();
-  assert.strictEqual(ids.length, 28, '基础目录应为 28 项，实际: ' + ids.length);
+  // 2026-10-22：28 项 + 内容类型补齐 14 项（定义列表/折叠区块/脚注/进度条/居中块/
+  // 下划线/插入/删除/图注/按键/缩写/注音/上标/下标）= 42 项
+  assert.strictEqual(ids.length, 42, '基础目录应为 42 项，实际: ' + ids.length);
   assert.ok(ids.includes('insert-h1') && ids.includes('insert-h6'), '应含首尾标题');
+  // 新增 14 项必须在排序对话框目录内（否则对话框看不到它们的开关）
+  for (const id of ['insert-dl', 'insert-details', 'insert-footnote', 'insert-progress', 'insert-center',
+    'insert-u', 'insert-ins', 'insert-del', 'insert-figure', 'insert-kbd',
+    'insert-abbreviation', 'insert-ruby', 'insert-superscript', 'insert-subscript']) {
+    assert.ok(ids.includes(id), '排序目录缺新增项 ' + id);
+  }
   // 默认顺序：前置高频项置顶
   assert.strictEqual(
     ids.slice(0, 4).join(','),
@@ -69,8 +77,8 @@ test('slash-order: _buildSlashCommands 反映自定义顺序与隐藏', async ()
   const actions = cmds.map((c) => c.action);
   assert.strictEqual(actions[0], 'insert-image', '首项应为 insert-image');
   assert.ok(!actions.includes('insert-table'), '隐藏的 insert-table 不应出现');
-  // 未列出的其余项按默认序补在后面，总数 = 28 - 1(隐藏) = 27
-  assert.strictEqual(cmds.length, 27, '总数应为 27，实际: ' + cmds.length);
+  // 未列出的其余项按默认序补在后面，总数 = 42(2026-10-22 含 14 新增项) - 1(隐藏) = 41
+  assert.strictEqual(cmds.length, 41, '总数应为 41，实际: ' + cmds.length);
 }));
 
 test('slash-order: _moveSlashOrderItem 在草稿内移动', async () => withEditor({ captureInitErr: true }, async (w, ed) => {
@@ -81,18 +89,20 @@ test('slash-order: _moveSlashOrderItem 在草稿内移动', async () => withEdit
   assert.strictEqual(ed._slashOrderDraft.join(','), 'd,b,c,a', '从 3 移到 0 应得 d,b,c,a，实际: ' + ed._slashOrderDraft);
 }));
 
-test('slash-order: showSlashOrderDialog 初始化草稿为全 28 项、对话框可见', async () => withEditor({ captureInitErr: true }, async (w, ed) => {
+test('slash-order: showSlashOrderDialog 初始化草稿为全 42 项、对话框可见', async () => withEditor({ captureInitErr: true }, async (w, ed) => {
   ed.settings.slashOrder = undefined;
   ed.settings.slashHidden = undefined;
   ed.showSlashOrderDialog();
   assert.strictEqual(ed._slashOrderOpen, true, '对话框应标记为打开');
-  assert.strictEqual(ed._slashOrderDraft.length, 28, '草稿应为 28 项');
-  // 默认仅字体类（加粗/斜体/删除线/高亮）隐藏，其余开关默认开启
-  assert.strictEqual(ed._slashHiddenDraft.size, 4, '默认仅字体类 4 项隐藏，实际: ' + ed._slashHiddenDraft.size);
+  // 2026-10-22：28 项 + 内容类型补齐 14 项 = 42 项（新项须出现在排序对话框）
+  assert.strictEqual(ed._slashOrderDraft.length, 42, '草稿应为 42 项');
+  // 默认隐藏：字体类 4 项 + 新增内容类型 14 项（默认不启用），其余开关默认开启
+  assert.strictEqual(ed._slashHiddenDraft.size, 18, '默认应隐藏 18 项（字体 4 + 新增 14），实际: ' + ed._slashHiddenDraft.size);
   assert.ok(ed._slashHiddenDraft.has('insert-bold'), '加粗应默认隐藏');
-  assert.ok(!ed._slashHiddenDraft.has('insert-h1'), '非字体项（如标题1）默认应显示');
+  assert.ok(ed._slashHiddenDraft.has('insert-dl'), '新增项（如定义列表）应默认隐藏');
+  assert.ok(!ed._slashHiddenDraft.has('insert-h1'), '非字体/非新增项（如标题1）默认应显示');
   const list = w.document.getElementById('slash-order-list');
-  assert.strictEqual(list.children.length, 28, '对话框应渲染 28 行，实际: ' + list.children.length);
+  assert.strictEqual(list.children.length, 42, '对话框应渲染 42 行，实际: ' + list.children.length);
   assert.strictEqual(w.document.getElementById('slash-order-dialog').classList.contains('hidden'), false, '对话框应可见');
 }));
 
@@ -147,8 +157,10 @@ test('slash-order: resetSlashOrder 恢复默认顺序与全显示', async () => 
   ed._slashHiddenDraft = new Set(['insert-h1']);
   ed.resetSlashOrder();
   assert.strictEqual(ed._slashOrderDraft.join(','), ed._buildSlashBaseCatalogIds().join(','), '应恢复默认顺序');
-  assert.strictEqual(ed._slashHiddenDraft.size, 4, '恢复默认应隐藏字体类 4 项，实际: ' + ed._slashHiddenDraft.size);
+  // 2026-10-22：默认隐藏 = 字体类 4 项 + 新增内容类型 14 项（默认不启用）
+  assert.strictEqual(ed._slashHiddenDraft.size, 18, '恢复默认应隐藏 18 项（字体 4 + 新增 14），实际: ' + ed._slashHiddenDraft.size);
   assert.ok(ed._slashHiddenDraft.has('insert-bold'), '恢复默认后加粗应隐藏');
+  assert.ok(ed._slashHiddenDraft.has('insert-details'), '恢复默认后新增项（折叠区块）应隐藏');
 }));
 
 // 锁住「快捷插入」分区设置弹窗 DOM：说明 hint 与管理按钮各占一个普通 .settings-row，
