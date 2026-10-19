@@ -1594,7 +1594,7 @@ test('活动块按光标行现算时「钳光标在遮罩块」判定须用与 m
   // ① 方法签名带 oldBlocks 参数：刷新路径的旧表 + 旧 marks 是配套键空间
   const idx = wsrc.indexOf('    _wysiwygActiveIdxFromCursor(oldBlocks) {');
   assert.ok(idx > 0, '_wysiwygActiveIdxFromCursor 缺 oldBlocks 参数');
-  const blk = wsrc.slice(idx, idx + 1200);
+  const blk = wsrc.slice(idx, idx + 1600);
   assert.match(blk, /this\.wysiwygBlockIndexAt\(line, oldBlocks\)/,
     '「钳光标」判定未用旧表查（新表索引 + 旧 marks = 索引撞车，空行新切出的标题块被误判已遮罩 → 重遮字号跳）');
   assert.match(blk, /this\._wysiwygMarks\.has\(obi\)/, '「钳光标」判定未查 marks');
@@ -2950,12 +2950,29 @@ test('S79 容器块编辑态 Enter：HTML 容器闭标签行回车不出盒（20
   // ④ Enter 接线：仅所见即所得模式挂钩，守卫处理则消费该键
   assert.match(fmt, /if \(this\.viewMode === 'wysiwyg' && this\._wysiwygEnterOnBlockCloseLine &&[\s\S]{0,120}?this\._wysiwygEnterOnBlockCloseLine\(cm\)\) return;/,
     'format.js Enter 链缺容器块结构行钩（末行回车跳出编辑态、行落块外）');
-  // ⑤ 回归接线：驱动 S79 场景（details 不出盒 + 代码/图表闭围栏下方新行）
+  // ⑤ 回归接线：驱动 S79 场景（details 不出盒 + 代码/图表闭围栏下方新行 + 跳出灰盒）
   assert.match(driver, /S79：WYSIWYG 容器块编辑态 Enter（块末结构行回车不出盒）/, '驱动缺 S79 场景');
   assert.match(driver, /② 编辑态保持/, '驱动缺 S79 编辑态保持断言');
-  assert.match(driver, /④ 代码块闭围栏行行尾回车：新空行插在闭围栏\*\*下方\*\*（块外）/, '驱动缺 S79 代码块闭围栏下方新行断言');
-  assert.match(driver, /⑤ mermaid 图表闭围栏行行尾回车：新空行插在闭围栏\*\*下方\*\*（块外）/, '驱动缺 S79 mermaid 图表断言');
+  assert.match(driver, /④ 代码块内末内容行回车：250ms 防抖窗口内即时采样，闭围栏已在灰盒内/, '驱动缺 S79 围栏闪出回归断言（④ 即时采样）');
+  assert.match(driver, /⑤ 代码块闭围栏行行尾回车：新空行在 \\`\\`\\` \*\*下方\*\*（块外），代码块重新遮罩（灰盒撤）/, '驱动缺 S79 代码块跳出灰盒断言（⑤）');
+  assert.match(driver, /⑥ mermaid 图表闭围栏行行尾回车：新空行在 \\`\\`\\` \*\*下方\*\*（块外），图表块重新遮罩/, '驱动缺 S79 mermaid 图表断言（⑥）');
   assert.match(driver, /③ 块外段落回车/, '驱动缺 S79 钩子无误伤断言');
+});
+
+test('S82 代码块内输入时闭围栏不闪出灰盒：行号增减即时修补块表（2026-10-25 用户截图「``` 跑到灰色代码块之外去闪一下然后又恢复」）', () => {
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  // ① 行号增减即时修补：change 钩子算 delta 并调修补（250ms 防抖窗口内灰盒不得按陈旧范围走）
+  assert.match(wys, /const delta = c\.text\.length - 1 - \(c\.to\.line - c\.from\.line\);[\s\S]{0,200}?_wysiwygPatchBlockTableForChange\(c, delta\)/,
+    'change 钩子缺行号 delta 计算与块表修补（防抖窗口内灰盒按陈旧范围走 → 闭围栏闪出盒）');
+  assert.match(wys, /_wysiwygPatchBlockTableForChange\(c, delta\) \{[\s\S]{0,300}?blk\.start \+= delta;[\s\S]{0,300}?extendEnd/,
+    '缺 _wysiwygPatchBlockTableForChange（块表行号修补：后续块位移 + 围栏块 end 扩展）');
+  // ② 围栏块 end 扩展边界：变更点在闭围栏行之前、或恰在闭围栏行行首（行首回车的新行属
+  // 围栏内容）才扩 end；闭围栏行行尾/行内的新行属块外（含尾部 ``` 下方回车的新行）不扩
+  assert.match(wys, /const extendEnd = c\.from\.line < blk\.end - 1 \|\| \(c\.from\.line === blk\.end - 1 && c\.from\.ch === 0\);/,
+    '围栏块 end 扩展边界有误（闭围栏行行首回车的新行属围栏内容、行尾的属块外）');
+  // ③ 回归接线：驱动 S79 ④（防抖窗口内即时采样闭围栏在盒内）
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  assert.match(driver, /250ms 防抖窗口内即时采样，闭围栏已在灰盒内（无闪出盒窗口）/, '驱动缺 S79 ④ 即时采样断言');
 });
 
 test('S77 定义列表编辑态冒号可见（次级色，同标题 # 前缀口径）', () => {

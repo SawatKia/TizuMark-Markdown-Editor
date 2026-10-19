@@ -5513,8 +5513,12 @@ try {
         a3.lineCount === a2.lineCount + 1 && (a3.lines[tail + 1].text || '') === ''
         && a3.cursor.line === tail + 1]);
       // —— Part B：围栏块（代码 + mermaid 图表）：2026-10-25 用户要求「末尾的 ``` 像普通
-      // 内容一样可编辑，在 ``` 后面回车应在 ``` 下面增加一行」→ 闭围栏行不再拦截，回车走
-      // 默认换行：新行落围栏**下方**（块外），代码块经正常活动块切换重新遮罩（同 Typora）。
+      // 内容一样可编辑，在 ``` 后面回车应在 ``` 下面增加一行」（口径同日最终确认：新行在
+      // ``` **下方**，代码块**跳出灰盒**重新遮罩）→ 闭围栏行不拦截，回车走默认换行，
+      // 新行落围栏下方（块外），代码块经正常活动块切换重新遮罩、光标行挂光标行底色。
+      // 另回归「代码块内输入时 ``` 闪出灰盒」：块内增行使闭围栏行号下移，250ms 防抖窗口
+      // 内块表由 _wysiwygPatchBlockTableForChange 即时修补（免重解析）→ 灰盒/装饰不按
+      // 陈旧范围走，闭围栏始终在盒内。
       // ——
       const s79bDoc = ['# T', '', '```js', 'const a = 1;', '```', '', '```mermaid', 'graph TD', '    A[开始] --> B[结束]', '```', '', '尾部参照段落。'].join('\n');
       await page.evaluate((d) => {
@@ -5525,56 +5529,88 @@ try {
         cm.setCursor({ line: cm.lineCount() - 1, ch: 0 }, { scroll: false });
       }, s79bDoc);
       await page.waitForTimeout(800);
-      const s79bEnterFence = (idx) => page.evaluate((i) => {
+      const s79bFocusFenceLine = (idx, line) => page.evaluate((p) => {
         const cm = window.__s79cm, ed = window.__s79ed;
-        ed.setWysiwygActiveBlock(i);
-        const b = ed._wysiwygBlocks[i];
+        ed.setWysiwygActiveBlock(p.idx);
         cm.focus();
-        cm.setCursor({ line: b.end - 1, ch: cm.getLineHandle(b.end - 1).text.length }, { scroll: false });
-        return [b.start, b.end];
-      }, idx);
-      // ④ 代码块（js 围栏）闭围栏行行尾回车
+        cm.setCursor({ line: p.line, ch: cm.getLineHandle(p.line).text.length }, { scroll: false });
+      }, { idx, line });
+      // ④ 代码块（js 围栏）末内容行（闭围栏上一行）回车 → 闭围栏下移：
+      // 防抖窗口内即时采样，闭围栏必须已在灰盒内（修复前：陈旧范围下闭围栏露在盒外，
+      // 250ms 防抖后才收回 = 用户看到的「闪一下又恢复」）
       const jsIdx = await page.evaluate(() => {
         const cm = window.__s79cm, ed = window.__s79ed;
         return ed._wysiwygBlocks.findIndex((b) => /^\s{0,3}`{3,}js\b/.test(cm.getLine(b.start) || ''));
       });
-      const jsb = await s79bEnterFence(jsIdx);
+      const jsb = await page.evaluate((i) => {
+        const ed = window.__s79ed;
+        const b = ed._wysiwygBlocks[i];
+        return [b.start, b.end];
+      }, jsIdx);
+      const jsbCount0 = (await s79state()).lineCount;
+      await s79bFocusFenceLine(jsIdx, jsb[1] - 2); // 末内容行行尾
+      await page.waitForTimeout(300);
+      await page.keyboard.press('Enter');
+      // 立即采样（250ms 防抖窗口内）
+      const c1 = await s79state();
+      const fenceC1 = c1.lines.findIndex((l, n) => n > jsb[0] && /^```$/.test(l.text || ''));
+      checks79.push([`④ 代码块内末内容行回车：250ms 防抖窗口内即时采样，闭围栏已在灰盒内（无闪出盒窗口）`,
+        fenceC1 === jsb[1] && c1.lines[fenceC1].box === true
+        && c1.lines[fenceC1 - 1].box === true
+        && c1.activeIdx === jsIdx && c1.cursor.line === fenceC1 - 1 && c1.cursor.ch === 0
+        && c1.lineCount === jsbCount0 + 1]);
       await page.waitForTimeout(800);
+      const c1l = await s79state();
+      checks79.push([`④ 防抖收敛后：围栏块表边界扩一行（闭围栏下移入块），灰盒全块稳定`,
+        c1l.blocks[jsIdx][0] === jsb[0] && c1l.blocks[jsIdx][1] === jsb[1] + 1
+        && c1l.lines[c1l.blocks[jsIdx][0]].box === true
+        && c1l.lines[c1l.blocks[jsIdx][1] - 1].box === true]);
+      // ⑤ 代码块闭围栏行行尾回车：新行落 ``` 下方（块外），代码块跳出灰盒重新遮罩，
+      // 光标落新行行首（块间空行光标行底色）
+      await s79bFocusFenceLine(jsIdx, c1l.blocks[jsIdx][1] - 1); // 闭围栏行行尾
+      await page.waitForTimeout(300);
       await page.keyboard.press('Enter');
       await page.waitForTimeout(800);
       const b1 = await s79state();
       const fence1 = b1.lines.findIndex((l, n) => n > jsb[0] && /^```$/.test(l.text || ''));
-      checks79.push([`④ 代码块闭围栏行行尾回车：新空行插在闭围栏**下方**（块外），闭围栏行位置不变、代码块重新遮罩（灰盒撤）、光标落新行行首`,
-        fence1 === jsb[1] - 1 && b1.lines[fence1].text === '```'
+      checks79.push([`⑤ 代码块闭围栏行行尾回车：新空行在 \`\`\` **下方**（块外），代码块重新遮罩（灰盒撤）、光标落新行行首`,
+        fence1 === jsb[1] && b1.lines[fence1].text === '```'
         && (b1.lines[fence1 + 1].text || '') === ''
         && b1.lines[fence1 + 1].act === true
         && b1.activeIdx !== jsIdx && b1.lines[jsb[0]].box === false && b1.lines[fence1].box === false
         && b1.cursor.line === fence1 + 1 && b1.cursor.ch === 0
-        && b1.lineCount === 13]);
-      // ⑤ mermaid 图表块闭围栏行行尾回车（同一口径）
+        && b1.lineCount === c1l.lineCount + 1]);
+      // ⑥ mermaid 图表块闭围栏行行尾回车（同一口径）
       const mIdx = await page.evaluate(() => {
         const cm = window.__s79cm, ed = window.__s79ed;
         return ed._wysiwygBlocks.findIndex((b) => /^\s{0,3}`{3,}mermaid\b/.test(cm.getLine(b.start) || ''));
       });
-      const mb = await s79bEnterFence(mIdx);
-      await page.waitForTimeout(800);
+      const mb = await page.evaluate((i) => {
+        const ed = window.__s79ed;
+        const b = ed._wysiwygBlocks[i];
+        return [b.start, b.end];
+      }, mIdx);
+      const mbCount = (await s79state()).lineCount;
+      await s79bFocusFenceLine(mIdx, mb[1] - 1);
+      await page.waitForTimeout(300);
       await page.keyboard.press('Enter');
       await page.waitForTimeout(800);
       const b2 = await s79state();
       const fence2 = b2.lines.findIndex((l, n) => n > mb[0] && /^```$/.test(l.text || ''));
-      checks79.push([`⑤ mermaid 图表闭围栏行行尾回车：新空行插在闭围栏**下方**（块外），图表块重新遮罩、光标落新行行首（图表块同口径）`,
+      checks79.push([`⑥ mermaid 图表闭围栏行行尾回车：新空行在 \`\`\` **下方**（块外），图表块重新遮罩、光标落新行行首（同口径）`,
         fence2 === mb[1] - 1 && b2.lines[fence2].text === '```'
         && (b2.lines[fence2 + 1].text || '') === ''
         && b2.lines[fence2 + 1].act === true
         && b2.activeIdx !== mIdx && b2.lines[mb[0]].box === false && b2.lines[fence2].box === false
         && b2.cursor.line === fence2 + 1 && b2.cursor.ch === 0
-        && b2.lineCount === 14]);
+        && b2.lineCount === mbCount + 1]);
       console.log('  edit态: lastContent=' + lastContent + ' active=' + e0.activeIdx + ' blocks=' + JSON.stringify(e0.blocks));
       console.log('  ①后: </details>@' + close1 + ' cursor=' + JSON.stringify(a1.cursor) + ' active=' + a1.activeIdx);
       console.log('  ②后: </details>@' + close2 + ' cursor=' + JSON.stringify(a2.cursor) + ' active=' + a2.activeIdx);
       console.log('  ③后: cursor=' + JSON.stringify(a3.cursor) + ' active=' + a3.activeIdx);
-      console.log('  ④后(js): 闭围栏@' + fence1 + ' cursor=' + JSON.stringify(b1.cursor) + ' active=' + b1.activeIdx);
-      console.log('  ⑤后(mermaid): 闭围栏@' + fence2 + ' cursor=' + JSON.stringify(b2.cursor) + ' active=' + b2.activeIdx);
+      console.log('  ④后(js 块内回车): 闭围栏@' + fenceC1 + ' cursor=' + JSON.stringify(c1.cursor) + ' active=' + c1.activeIdx + ' blocks=' + JSON.stringify(c1l.blocks));
+      console.log('  ⑤后(js 闭围栏回车): 闭围栏@' + fence1 + ' cursor=' + JSON.stringify(b1.cursor) + ' active=' + b1.activeIdx);
+      console.log('  ⑥后(mermaid): 闭围栏@' + fence2 + ' cursor=' + JSON.stringify(b2.cursor) + ' active=' + b2.activeIdx);
       for (const [label, ok] of checks79) {
         console.log(`  ${ok ? '✓' : '✗'} ${label}`);
         if (!ok) fail++;

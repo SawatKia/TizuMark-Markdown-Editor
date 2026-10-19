@@ -3100,8 +3100,50 @@
         if (idx == null || idx < 0) return;
         const b = self._wysiwygBlocks && self._wysiwygBlocks[idx];
         if (!b) return;
+        // 行号增减（回车/多行粘贴/删行）→ 即时修补块表行号（O(块数)，免重解析）：围栏块内
+        // 增行会把闭围栏行号往下推，250ms 防抖窗口内灰盒/装饰若仍按陈旧范围跑，闭围栏就
+        // 露在灰盒外——用户看到的「``` 跑到灰色代码块外闪一下又恢复」的根因（2026-10-25
+        // 用户截图反馈）。修补后 250ms 防抖重解析照常收敛（幂等）。
+        // ⚠️ 闭围栏行下方回车新增的行属块外（markdown 结构上不属于围栏），不扩围栏块
+        // 范围（块表保持真实）；该行按块间空行普通口径处理，代码块经正常活动块切换
+        // 重新遮罩（2026-10-25 用户口径：尾部 ``` 后回车跳出灰盒）。
+        const delta = c.text.length - 1 - (c.to.line - c.from.line);
+        if (delta !== 0 && self._wysiwygPatchBlockTableForChange(c, delta)) self._applyWysiwygActiveHighlight();
         if (c.from.line < b.end && c.to.line >= b.start) self._wysiwygApplyActiveDecor(idx);
       });
+    },
+
+    // 行号增减变化后的块表行号修补（O(块数)，免重解析；2026-10-25「代码块内输入时 ``` 闪出
+    // 灰盒」修复的配套）：
+    //  · 变更行严格在本块上方、或恰在块首行行首（新行落在块首行之前 → 整块下移）：
+    //    start/end 整体位移 delta（块身份不变，遮罩 marks 由 CM 自动跟行，
+    //    data-block-index 不变 → 仅行号字段更新）；
+    //  · 变更点落在某围栏块内（含块首行行内——开围栏行尾回车的新行属围栏内容）：
+    //    变更点在闭围栏行之前、或恰在闭围栏行行首（行首回车的新行仍属围栏内容）→
+    //    end += delta；
+    //  · 变更点在闭围栏行行内/行尾（含闭围栏行下方回车的新行，属块外）或块尾之后：
+    //    块范围不变（块表保持真实，块外行按普通口径处理）；
+    //  · 非围栏块的范围不即时修（类型边界判断贵，250ms 防抖窗口的既有
+    //    _wysiwygBlockIndexAtFresh 即时重切机制照旧兜底，行为不变）。
+    // 250ms 防抖重解析随后照常跑，本修补只是消除窗口内的陈旧范围（幂等、可被覆盖）。
+    _wysiwygPatchBlockTableForChange(c, delta) {
+      const cm = this.cm;
+      const blocks = this._wysiwygBlocks;
+      if (!cm || !blocks) return false;
+      let changed = false;
+      for (const blk of blocks) {
+        if (blk.start > c.from.line || (blk.start === c.from.line && c.from.ch === 0)) {
+          blk.start += delta;
+          blk.end += delta;
+          changed = true;
+        } else if (c.from.line >= blk.start && c.from.line < blk.end) {
+          const first = cm.getLine(blk.start) || '';
+          if (!RE.fence.test(first.trim())) continue;
+          const extendEnd = c.from.line < blk.end - 1 || (c.from.line === blk.end - 1 && c.from.ch === 0);
+          if (extendEnd) { blk.end += delta; changed = true; }
+        }
+      }
+      return changed;
     },
 
     // ---------------- 活动块切换（增量） ----------------
