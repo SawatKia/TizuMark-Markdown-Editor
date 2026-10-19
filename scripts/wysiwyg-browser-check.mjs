@@ -5412,6 +5412,424 @@ try {
   // 含 pre 的 16px 底边距槽（两遮罩间 16px 白槽）；编辑态活动块原无此槽 → 灰盒底缘贴下一块。
   // 修法：闭围栏行挂 16px 底槽 + 灰盒 ::before 底缘上移 16px → 编辑态盒底↔下一块 ≡ 渲染态
   // 16px；灰盒绘制高不变（= pre 高 + 2×代码行高） ----------
+  // ---------- S79：WYSIWYG details 编辑态 Enter 语义（2026-10-22 用户报「会车时下面的
+  // </details> 会跑出灰色框去；从末尾点击回车会跳出折叠列表编辑态，在折叠列表下方新增一行——
+  // 应该是正常的在灰色框中新增行」）：
+  // ① 末内容行行尾回车 → 新空行在块内、</details> 恒留在灰盒内（不跑出盒）；
+  // ② </details> 闭标签行回车（=「从末尾」）→ 新行插在闭标签**之前**（块内灰盒内），
+  //    编辑态不丢（activeIdx 不变）、</details> 行不被劈开、块外不新增行。
+  // 实现 = format.js _handleTableEnter 钩 _wysiwygEnterOnDetailsCloseLine（wysiwyg.js） ----------
+  {
+    console.log('\n=== S79：WYSIWYG 容器块编辑态 Enter（块末结构行回车不出盒）===');
+    const s79doc = ['# T', '', '<details>', '<summary>点击展开：快捷键一览</summary>', '', '<ul>', '<li>保存文档</li>', '<li>查找内容</li>', '</ul>', '', '</details>', '', '尾部参照段落。'].join('\n');
+    const s79setup = await page.evaluate((d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s79cm = cm; window.__s79ed = ed;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      return new Promise((res) => setTimeout(() => {
+        cm.setCursor({ line: cm.lineCount() - 1, ch: 0 }, { scroll: false });
+        setTimeout(() => res(null), 400);
+      }, 400));
+    }, s79doc);
+    if (s79setup) {
+      console.log('  ⚠ 场景失败: ' + s79setup);
+      fail++;
+    } else {
+      const s79state = () => page.evaluate(() => {
+        const cm = window.__s79cm, ed = window.__s79ed;
+        const lines = [];
+        for (let n = 0; n < cm.lineCount(); n++) {
+          const h = cm.getLineHandle(n);
+          const cls = String((h && h.bgClass) || '');
+          lines.push({ n, text: cm.getLine(n), box: cls.indexOf('cm-wysiwyg-code-box') >= 0,
+            first: cls.indexOf('cm-wysiwyg-active-first') >= 0, last: cls.indexOf('cm-wysiwyg-active-last') >= 0,
+            act: cls.indexOf('cm-wysiwyg-active-block') >= 0 });
+        }
+        return { lineCount: cm.lineCount(), cursor: cm.getCursor(), activeIdx: ed._wysiwygActiveIdx,
+          blocks: ed._wysiwygBlocks.map((b) => [b.start, b.end]), lines };
+      });
+      const s79focusCursor = (line, ch) => page.evaluate((p) => {
+        const cm = window.__s79cm;
+        cm.focus();
+        cm.setCursor({ line: p.line, ch: p.ch }, { scroll: false });
+        return cm.getCursor();
+      }, { line, ch });
+      const detIdx = await page.evaluate(() => {
+        const cm = window.__s79cm, ed = window.__s79ed;
+        return ed._wysiwygBlocks.findIndex((b) => /^\s*<details[\s>]/.test(cm.getLine(b.start) || ''));
+      });
+      // 进入编辑态（与 S76 同 API），光标落末内容行（</ul>）行尾
+      const lastContent = await page.evaluate((i) => {
+        const cm = window.__s79cm, ed = window.__s79ed;
+        ed.setWysiwygActiveBlock(i);
+        const b = ed._wysiwygBlocks[i];
+        let last = -1;
+        for (let n = b.start; n < b.end; n++) {
+          const t = (cm.getLine(n) || '').trim();
+          if (t && t !== '</details>') last = n;
+        }
+        cm.focus();
+        cm.setCursor({ line: last, ch: cm.getLineHandle(last).text.length }, { scroll: false });
+        return last;
+      }, detIdx);
+      await page.waitForTimeout(800);
+      const e0 = await s79state();
+      const checks79 = [];
+      checks79.push([`前置：details 块编辑态整块灰盒（块表边界含 </details> 行）`,
+        e0.activeIdx === detIdx && e0.blocks[detIdx][1] === 11
+        && e0.lines.slice(2, 11).every((l) => l.box === true)]);
+      // ① 末内容行（</ul>）行尾回车：新空行在块内，</details> 不出盒
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(800);
+      const a1 = await s79state();
+      const close1 = a1.lines.findIndex((l) => (l.text || '').trim() === '</details>');
+      checks79.push([`① 末内容行回车：新空行插在 </details> 前（块内），</details> 行仍在灰盒内`,
+        close1 === 11 && (a1.lines[close1 - 1].text || '') === ''
+        && a1.lines[close1].box === true && a1.activeIdx === detIdx]);
+      // ② </details> 闭标签行行尾回车（=「从末尾」）：新行插闭标签前，不出盒、不跳出编辑态
+      await s79focusCursor(close1, (a1.lines[close1].text || '').length);
+      await page.waitForTimeout(300);
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(800);
+      const a2 = await s79state();
+      const close2 = a2.lines.findIndex((l) => (l.text || '').trim() === '</details>');
+      checks79.push([`② </details> 行回车：新空行插在闭标签**前**（块外不新增行），闭标签行完整未劈开`,
+        close2 === 12 && a2.lineCount === a1.lineCount + 1
+        && (a2.lines[close2 - 1].text || '') === ''
+        && (a2.lines[close2 + 1].text || '') === ''
+        && a2.lines[close2].text === '</details>']);
+      checks79.push([`② 编辑态保持（activeIdx 不变、非 -1），新行与 </details> 行均在灰盒内，光标落新行行首`,
+        a2.activeIdx === detIdx && a2.lines[close2 - 1].box === true && a2.lines[close2].box === true
+        && a2.cursor.line === close2 - 1 && a2.cursor.ch === 0]);
+      // ③ 块外普通段落回车不受钩子影响（正常换行）
+      const tail = a2.lines.findIndex((l) => (l.text || '') === '尾部参照段落。');
+      await s79focusCursor(tail, (a2.lines[tail].text || '').length);
+      await page.waitForTimeout(300);
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(800);
+      const a3 = await s79state();
+      checks79.push([`③ 块外段落回车：正常换行（新空行在段落后、光标落新行），钩子无误伤`,
+        a3.lineCount === a2.lineCount + 1 && (a3.lines[tail + 1].text || '') === ''
+        && a3.cursor.line === tail + 1]);
+      // —— Part B：围栏块（代码 + mermaid 图表）：2026-10-25 用户要求「末尾的 ``` 像普通
+      // 内容一样可编辑，在 ``` 后面回车应在 ``` 下面增加一行」→ 闭围栏行不再拦截，回车走
+      // 默认换行：新行落围栏**下方**（块外），代码块经正常活动块切换重新遮罩（同 Typora）。
+      // ——
+      const s79bDoc = ['# T', '', '```js', 'const a = 1;', '```', '', '```mermaid', 'graph TD', '    A[开始] --> B[结束]', '```', '', '尾部参照段落。'].join('\n');
+      await page.evaluate((d) => {
+        const { cm, ed } = window.__makeWysiwygEditor(d);
+        window.__s79cm = cm; window.__s79ed = ed;
+        cm.options.viewportMargin = 100000;
+        cm.refresh();
+        cm.setCursor({ line: cm.lineCount() - 1, ch: 0 }, { scroll: false });
+      }, s79bDoc);
+      await page.waitForTimeout(800);
+      const s79bEnterFence = (idx) => page.evaluate((i) => {
+        const cm = window.__s79cm, ed = window.__s79ed;
+        ed.setWysiwygActiveBlock(i);
+        const b = ed._wysiwygBlocks[i];
+        cm.focus();
+        cm.setCursor({ line: b.end - 1, ch: cm.getLineHandle(b.end - 1).text.length }, { scroll: false });
+        return [b.start, b.end];
+      }, idx);
+      // ④ 代码块（js 围栏）闭围栏行行尾回车
+      const jsIdx = await page.evaluate(() => {
+        const cm = window.__s79cm, ed = window.__s79ed;
+        return ed._wysiwygBlocks.findIndex((b) => /^\s{0,3}`{3,}js\b/.test(cm.getLine(b.start) || ''));
+      });
+      const jsb = await s79bEnterFence(jsIdx);
+      await page.waitForTimeout(800);
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(800);
+      const b1 = await s79state();
+      const fence1 = b1.lines.findIndex((l, n) => n > jsb[0] && /^```$/.test(l.text || ''));
+      checks79.push([`④ 代码块闭围栏行行尾回车：新空行插在闭围栏**下方**（块外），闭围栏行位置不变、代码块重新遮罩（灰盒撤）、光标落新行行首`,
+        fence1 === jsb[1] - 1 && b1.lines[fence1].text === '```'
+        && (b1.lines[fence1 + 1].text || '') === ''
+        && b1.lines[fence1 + 1].act === true
+        && b1.activeIdx !== jsIdx && b1.lines[jsb[0]].box === false && b1.lines[fence1].box === false
+        && b1.cursor.line === fence1 + 1 && b1.cursor.ch === 0
+        && b1.lineCount === 13]);
+      // ⑤ mermaid 图表块闭围栏行行尾回车（同一口径）
+      const mIdx = await page.evaluate(() => {
+        const cm = window.__s79cm, ed = window.__s79ed;
+        return ed._wysiwygBlocks.findIndex((b) => /^\s{0,3}`{3,}mermaid\b/.test(cm.getLine(b.start) || ''));
+      });
+      const mb = await s79bEnterFence(mIdx);
+      await page.waitForTimeout(800);
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(800);
+      const b2 = await s79state();
+      const fence2 = b2.lines.findIndex((l, n) => n > mb[0] && /^```$/.test(l.text || ''));
+      checks79.push([`⑤ mermaid 图表闭围栏行行尾回车：新空行插在闭围栏**下方**（块外），图表块重新遮罩、光标落新行行首（图表块同口径）`,
+        fence2 === mb[1] - 1 && b2.lines[fence2].text === '```'
+        && (b2.lines[fence2 + 1].text || '') === ''
+        && b2.lines[fence2 + 1].act === true
+        && b2.activeIdx !== mIdx && b2.lines[mb[0]].box === false && b2.lines[fence2].box === false
+        && b2.cursor.line === fence2 + 1 && b2.cursor.ch === 0
+        && b2.lineCount === 14]);
+      console.log('  edit态: lastContent=' + lastContent + ' active=' + e0.activeIdx + ' blocks=' + JSON.stringify(e0.blocks));
+      console.log('  ①后: </details>@' + close1 + ' cursor=' + JSON.stringify(a1.cursor) + ' active=' + a1.activeIdx);
+      console.log('  ②后: </details>@' + close2 + ' cursor=' + JSON.stringify(a2.cursor) + ' active=' + a2.activeIdx);
+      console.log('  ③后: cursor=' + JSON.stringify(a3.cursor) + ' active=' + a3.activeIdx);
+      console.log('  ④后(js): 闭围栏@' + fence1 + ' cursor=' + JSON.stringify(b1.cursor) + ' active=' + b1.activeIdx);
+      console.log('  ⑤后(mermaid): 闭围栏@' + fence2 + ' cursor=' + JSON.stringify(b2.cursor) + ' active=' + b2.activeIdx);
+      for (const [label, ok] of checks79) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S80：WYSIWYG HTML 容器块（<center>/<div>…）整块灰盒（2026-10-25 用户要求：
+  // 「居中显示等具有编辑按钮的，编辑时是编辑整块源码的，都在灰色块中进行编辑」）。
+  // 块首行为 CommonMark 原始 HTML 块标签（isHtmlBlockContainerLine 收口口径）→ 同代码块/
+  // 折叠区块：整块源行进灰盒（code-box 背景 + 首/末角类）+ 源行 wysiwyg-html-block-line
+  // 左右 12px 内距（与 details-line 共享声明，44px=32+12）。普通段落不受影响（仅光标行底色）。
+  // ----------
+  {
+    console.log('\n=== S80：WYSIWYG HTML 容器块（<center>/<div>）整块灰盒（点遮罩/编辑按钮进编辑 / 普通段落不受影响）===');
+    const s80doc = ['# T', '', '<center>', '居中显示的文本', '</center>', '', '<div class="note">', 'div 块内容', '</div>', '', '尾部参照段落。'].join('\n');
+    const s80setup = await page.evaluate((d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s80cm = cm; window.__s80ed = ed;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      return new Promise((res) => setTimeout(() => {
+        cm.setCursor({ line: cm.lineCount() - 1, ch: 0 }, { scroll: false });
+        setTimeout(() => res(null), 400);
+      }, 400));
+    }, s80doc);
+    if (s80setup) {
+      console.log('  ⚠ 场景失败: ' + s80setup);
+      fail++;
+    } else {
+      const s80state = () => page.evaluate(() => {
+        const cm = window.__s80cm, ed = window.__s80ed;
+        const masks = Array.from(cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask'));
+        const cmMask = masks.find((m) => m.querySelector('center'));
+        const divMask = masks.find((m) => m.querySelector('div.note'));
+        // 灰盒行 / 容器行类（box 背景或 html-block-line 行类之一）
+        const lines = [];
+        for (let n = 0; n < cm.lineCount(); n++) {
+          const h = cm.getLineHandle(n);
+          if (!h || !h.bgClass) continue;
+          const cls = String(h.bgClass);
+          let preCls = '';
+          let pEl = null;
+          for (const lv of cm.display.view) if (lv && lv.line === h) {
+            const el = lv.node;
+            const p = el && el.tagName === 'PRE' ? el : (el && el.querySelector ? el.querySelector('pre.CodeMirror-line') : null);
+            if (p) { preCls = String(p.className || ''); pEl = p; }
+            break;
+          }
+          if (cls.indexOf('cm-wysiwyg-code-box') >= 0 || preCls.indexOf('wysiwyg-html-block-line') >= 0) {
+            lines.push({
+              n,
+              box: cls.indexOf('cm-wysiwyg-code-box') >= 0,
+              first: cls.indexOf('cm-wysiwyg-active-first') >= 0,
+              last: cls.indexOf('cm-wysiwyg-active-last') >= 0,
+              hLine: preCls.indexOf('wysiwyg-html-block-line') >= 0,
+              text: h.text,
+              padL: pEl ? getComputedStyle(pEl).paddingLeft : null,
+            });
+          }
+        }
+        // 普通（非盒）活动行：仅光标行底色、无 code-box
+        const plainActive = [];
+        for (let n = 0; n < cm.lineCount(); n++) {
+          const h = cm.getLineHandle(n);
+          if (!h || !h.bgClass) continue;
+          const cls = String(h.bgClass);
+          if (cls.indexOf('cm-wysiwyg-active-block') >= 0 && cls.indexOf('cm-wysiwyg-code-box') < 0) {
+            plainActive.push({ n, text: h.text });
+          }
+        }
+        return {
+          centerMasked: !!cmMask,
+          divMasked: !!divMask,
+          centerHasBtn: !!(cmMask && cmMask.querySelector('button.block-edit-btn')),
+          cursor: cm.getCursor(),
+          activeIdx: ed._wysiwygActiveIdx,
+          centerIdx: ed._wysiwygBlocks.findIndex((b) => (cm.getLine(b.start) || '').trim() === '<center>'),
+          divIdx: ed._wysiwygBlocks.findIndex((b) => (cm.getLine(b.start) || '').trim() === '<div class="note">'),
+          centerRange: (function () { const i = ed._wysiwygBlocks.findIndex((b) => (cm.getLine(b.start) || '').trim() === '<center>'); const b = ed._wysiwygBlocks[i]; return b ? [b.start, b.end] : null; })(),
+          divRange: (function () { const i = ed._wysiwygBlocks.findIndex((b) => (cm.getLine(b.start) || '').trim() === '<div class="note">'); const b = ed._wysiwygBlocks[i]; return b ? [b.start, b.end] : null; })(),
+          lines,
+          plainActive,
+        };
+      });
+      const s80pt = async (kind) => page.evaluate((k) => {
+        const cm = window.__s80cm;
+        const masks = Array.from(cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask'));
+        let el = null;
+        const cmMask = masks.find((m) => m.querySelector('center'));
+        const divMask = masks.find((m) => m.querySelector('div.note'));
+        if (k === 'centerBody') el = cmMask && cmMask.querySelector('center');
+        else if (k === 'divBtn') el = divMask && divMask.querySelector('button.block-edit-btn');
+        else if (k === 'para') el = null;
+        if (k === 'para') {
+          const ph = cm.getLineHandle(cm.lineCount() - 1);
+          for (const lv of cm.display.view) if (lv && lv.line === ph) {
+            const p = lv.node && lv.node.tagName === 'PRE' ? lv.node : lv.node && lv.node.querySelector && lv.node.querySelector('pre.CodeMirror-line');
+            if (p) { el = p; break; }
+          }
+        }
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.x + Math.min(80, r.width / 2), y: r.y + r.height / 2 };
+      }, kind);
+      const s80click = async (pt) => {
+        if (!pt) return false;
+        await page.mouse.click(pt.x, pt.y);
+        await page.waitForTimeout(400);
+        return true;
+      };
+      const s80remask = async () => {
+        await page.evaluate(() => { const ed = window.__s80ed; try { ed.setWysiwygActiveBlock(-1); } catch (_) {} });
+        await page.waitForTimeout(400);
+      };
+      const a0 = await s80state();
+      const checks80 = [];
+      checks80.push([`前置：<center> 块挂「编辑」按钮（遮罩侧容器块口径），两容器块均遮罩`,
+        a0.centerMasked === true && a0.divMasked === true && a0.centerHasBtn === true && a0.lines.length === 0]);
+      // ① 点 <center> 遮罩正文：整块进编辑态 + 整块灰盒
+      const pC = await s80pt('centerBody');
+      await s80click(pC);
+      const a1 = await s80state();
+      const cLines = (a1.lines || []).filter((l) => a1.centerRange && l.n >= a1.centerRange[0] && l.n < a1.centerRange[1]);
+      const cFirst = cLines.find((l) => l.text === '<center>');
+      const cLast = cLines.find((l) => l.text === '</center>');
+      checks80.push([`① 点 <center> 遮罩正文：撤罩进编辑态，整块 3 行全挂 code-box 灰盒（首行上角、末行下角）`,
+        a1.centerMasked === false && a1.activeIdx === a1.centerIdx && cLines.length === 3
+        && cLines.every((l) => l.box === true)
+        && cFirst && cFirst.first === true && cLast && cLast.last === true]);
+      checks80.push([`① 灰盒内源行挂 wysiwyg-html-block-line（左右内距 44px=32+12，源码不贴盒竖边）`,
+        cLines.length === 3 && cLines.every((l) => l.hLine === true && l.padL === '44px')]);
+      // ② 点 <div> 块编辑按钮：同口径整块灰盒（另一容器标签、按钮入口）
+      await s80remask();
+      const pD = await s80pt('divBtn');
+      await s80click(pD);
+      const a2 = await s80state();
+      const dLines = (a2.lines || []).filter((l) => a2.divRange && l.n >= a2.divRange[0] && l.n < a2.divRange[1]);
+      const dFirst = dLines.find((l) => l.text === '<div class="note">');
+      const dLast = dLines.find((l) => l.text === '</div>');
+      checks80.push([`② 点 <div> 块编辑按钮：整块 3 行全挂 code-box 灰盒（首行上角、末行下角）+ 行内距 44px`,
+        a2.divMasked === false && a2.activeIdx === a2.divIdx && dLines.length === 3
+        && dLines.every((l) => l.box === true && l.hLine === true && l.padL === '44px')
+        && dFirst && dFirst.first === true && dLast && dLast.last === true]);
+      // ③ 普通段落不受影响：仅光标行底色、无灰盒
+      await s80remask();
+      const pP = await s80pt('para');
+      await s80click(pP);
+      const a3 = await s80state();
+      checks80.push([`③ 点普通段落：仅光标行底色（cm-wysiwyg-active-block），无 code-box 灰盒、无 html-block-line`,
+        a3.lines.length === 0 && a3.plainActive.length === 1 && a3.plainActive[0].text === '尾部参照段落。']);
+      console.log('  state0: ' + JSON.stringify({ centerMasked: a0.centerMasked, divMasked: a0.divMasked, centerHasBtn: a0.centerHasBtn, centerIdx: a0.centerIdx, divIdx: a0.divIdx }));
+      console.log('  ①后(center): active=' + a1.activeIdx + ' lines=' + JSON.stringify(cLines));
+      console.log('  ②后(div): active=' + a2.activeIdx + ' lines=' + JSON.stringify(dLines));
+      console.log('  ③后(段落): active=' + a3.activeIdx + ' plainActive=' + JSON.stringify(a3.plainActive) + ' boxLines=' + a3.lines.length);
+      for (const [label, ok] of checks80) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
+  // ---------- S81：① 定义列表不挂「编辑」按钮（2026-10-25 用户要求，点行即编辑同列表口径）；
+  // ② WYSIWYG 遮罩双钮（复制+编辑）：hover 编辑按钮时复制按钮不消失（复制钮显示触发由
+  // pre:hover 扩展为遮罩 hover，与编辑钮同口径）。
+  // ----------
+  {
+    console.log('\n=== S81：定义列表无编辑按钮 + 代码块双钮 hover（编辑钮上复制钮不消失）===');
+    const s81doc = ['# T', '', '术语A', ': 定义A', '', '```js', 'const a = 1;', '```', '', '尾部参照段落。'].join('\n');
+    const s81setup = await page.evaluate((d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s81cm = cm; window.__s81ed = ed;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      return new Promise((res) => setTimeout(() => {
+        cm.setCursor({ line: cm.lineCount() - 1, ch: 0 }, { scroll: false });
+        setTimeout(() => res(null), 400);
+      }, 400));
+    }, s81doc);
+    if (s81setup) {
+      console.log('  ⚠ 场景失败: ' + s81setup);
+      fail++;
+    } else {
+      const s81masks = () => page.evaluate(() => {
+        const cm = window.__s81cm;
+        const masks = Array.from(cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask'));
+        const dlMask = masks.find((m) => m.querySelector('dl'));
+        const codeMask = masks.find((m) => m.querySelector('pre'));
+        const copyBtn = codeMask && codeMask.querySelector('.copy-btn');
+        const editBtn = codeMask && codeMask.querySelector('.block-edit-btn');
+        const dlEl = dlMask && dlMask.querySelector('dl');
+        const dlLast = dlMask && dlMask.lastElementChild;
+        return {
+          dlMasked: !!dlMask,
+          dlHasEditBtn: !!(dlMask && dlMask.querySelector('.block-edit-btn')),
+          dlNoBtnCls: !!(dlMask && dlMask.className.indexOf('wysiwyg-mask-no-btn-dl') >= 0),
+          dlMarginBottom: dlEl ? getComputedStyle(dlEl).marginBottom : null,
+          dlLastMarginBottom: dlLast ? getComputedStyle(dlLast).marginBottom : null,
+          codeMasked: !!codeMask,
+          copyPresent: !!copyBtn,
+          editPresent: !!editBtn,
+          copyOpacity: copyBtn ? getComputedStyle(copyBtn).opacity : null,
+          editOpacity: editBtn ? getComputedStyle(editBtn).opacity : null,
+        };
+      });
+      const s81hover = async (which) => {
+        const pt = await page.evaluate((w) => {
+          const cm = window.__s81cm;
+          const masks = Array.from(cm.getWrapperElement().querySelectorAll('.wysiwyg-block-mask'));
+          const codeMask = masks.find((m) => m.querySelector('pre'));
+          const el = codeMask && codeMask.querySelector(w);
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        }, which);
+        if (!pt) return false;
+        await page.mouse.move(pt.x, pt.y);
+        await page.waitForTimeout(400); // 等 0.2s 过渡完成
+        return true;
+      };
+      const a0 = await s81masks();
+      const checks81 = [];
+      checks81.push([`前置：定义列表块渲染 <dl> 遮罩，且无「编辑」按钮（挂 no-btn-dl 类、dl 底距补回 16px）`,
+        a0.dlMasked === true && a0.dlHasEditBtn === false && a0.dlNoBtnCls === true
+        && a0.dlMarginBottom === '16px' && a0.dlLastMarginBottom === '16px']);
+      // 遮罩未 hover：双钮默认隐藏
+      const a1 = await s81masks();
+      checks81.push([`未 hover：复制钮与编辑钮均隐藏（opacity 0）`,
+        a1.copyOpacity === '0' && a1.editOpacity === '0']);
+      // hover 编辑按钮（pre 之外）：复制钮保持显示（2026-10-25 用户报障的修复点）
+      const okEdit = await s81hover('.block-edit-btn');
+      const a2 = await s81masks();
+      checks81.push([`hover 编辑按钮：复制钮仍显示（opacity 1，不再随 pre 失 hover 淡出）、编辑钮显示`,
+        okEdit && a2.copyOpacity === '1' && a2.editOpacity === '1']);
+      // hover 复制按钮：双钮显示（原口径保持）
+      const okCopy = await s81hover('.copy-btn');
+      const a3 = await s81masks();
+      checks81.push([`hover 复制按钮：双钮均显示（原 pre:hover 口径不回归）`,
+        okCopy && a2.copyOpacity === '1' && a3.copyOpacity === '1' && a3.editOpacity === '1']);
+      // 移出遮罩：双钮隐藏
+      await page.mouse.move(5, 5);
+      await page.waitForTimeout(400);
+      const a4 = await s81masks();
+      checks81.push([`移出遮罩：双钮隐藏（opacity 0）`,
+        a4.copyOpacity === '0' && a4.editOpacity === '0']);
+      console.log('  state0: ' + JSON.stringify(a0));
+      console.log('  hover编辑钮后: ' + JSON.stringify({ copy: a2.copyOpacity, edit: a2.editOpacity }));
+      console.log('  hover复制钮后: ' + JSON.stringify({ copy: a3.copyOpacity, edit: a3.editOpacity }));
+      for (const [label, ok] of checks81) {
+        console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+        if (!ok) fail++;
+      }
+    }
+  }
+
   {
     console.log('\n=== S78：相邻代码块 渲染态≡编辑态 间距（块底 16px 槽位）===');
     const s78doc = ['### HTML / CSS', '', '```html', '<!DOCTYPE html>', '<html lang="zh-CN">', '<head>', '  <meta charset="UTF-8">', '  <title>示例页面</title>', '</head>', '<body>', '  <div class="wrap"></div>', '  <script>console.log(1);</script>', '</body>', '</html>', '```', '', '```css', '.container {', '  display: grid;', '  gap: 16px;', '}', '```', '', '尾部参照段落。'].join('\n');

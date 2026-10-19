@@ -2849,11 +2849,13 @@ test('S76 折叠区块：点文字不进编辑态 / 编辑按钮进灰盒 / 小�
   // ① 遮罩 mousedown：details 正文点击吞掉（summary 分支之后、比例映射之前）
   assert.match(wys, /const detHost = ev\.target && ev\.target\.closest \? ev\.target\.closest\('details'\) : null;[\s\S]{0,120}?if \(detHost && node\.contains\(detHost\)\) return;/,
     '缺 details 正文点击 no-op 分支（点文字仍会进编辑态）');
-  // ② 活动块高亮：details 按容器块处理，整块挂代码盒背景类
-  assert.match(wys, /const isDetails = !isFence && !isTable && \/\^\\s\*<details\[\\s>\]\/i\.test\(first \|\| ''\)/,
+  // ② 活动块高亮：details 按容器块处理，整块挂代码盒背景类（开行正则收口 RE.detailsOpen）
+  assert.match(wys, /const isDetails = !isFence && !isTable && RE\.detailsOpen\.test\(first \|\| ''\)/,
     '缺 isDetails 判定（details 块未按容器块处理）');
-  assert.ok(wys.includes('if (isFence || isDetails) cm.addLineClass(h, \'background\', ACTIVE_CODE_BOX_CLASS);'),
-    'details 块未挂 ACTIVE_CODE_BOX_CLASS（灰盒画不出）');
+  assert.match(wys, /detailsOpen: \/\^\\s\*<details\[\\s>\]\/i,/,
+    '缺 RE.detailsOpen（details 开行正则未收口，判定口径会漂移）');
+  assert.ok(wys.includes('if (isFence || isDetails || isHtmlContainer) cm.addLineClass(h, \'background\', ACTIVE_CODE_BOX_CLASS);'),
+    'details 块未挂 ACTIVE_CODE_BOX_CLASS（灰盒画不出；HTML 容器块同口径）');
   // ③ 源文行左右内距（源码不贴盒竖边）+ 行类先清后挂（装饰段 + 全量清除两处撤）
   assert.ok(css.includes('pre.CodeMirror-line.wysiwyg-details-line'), '缺 wysiwyg-details-line 行类规则');
   assert.ok(css.includes('padding-left: calc(var(--wysiwyg-line-inset, 32px) + 12px);'), 'details 行左右内距不是 32+12 口径');
@@ -2868,6 +2870,92 @@ test('S76 折叠区块：点文字不进编辑态 / 编辑按钮进灰盒 / 小�
   assert.match(driver, /点 details 正文文字：不进编辑态/, '驱动缺点文字不进编辑态断言');
   assert.match(driver, /整块灰盒/, '驱动缺整块灰盒断言');
   assert.match(driver, /44px=32\+12/, '驱动缺 details 行内距断言');
+});
+
+test('S81 定义列表不挂「编辑」按钮（2026-10-25 用户要求）+ 代码块双钮 hover：编辑钮上复制钮不消失', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 遮罩判定：渲染含 <dl> → 定义列表（公共方法，与按钮分支共用）
+  assert.match(wys, /_wysiwygMaskIsDefList\(node\) \{[\s\S]{0,200}?node\.querySelector\('dl'\)/,
+    '缺 _wysiwygMaskIsDefList（定义列表判定散写会漂移）');
+  // ② 按钮分支接线：dl 在 plainText 判定之前挂 no-btn-dl 类（不复用 14px 族的 no-btn）
+  assert.match(wys, /else if \(this\._wysiwygMaskIsDefList\(node\)\) node\.classList\.add\('wysiwyg-mask-no-btn-dl'\);/,
+    '定义列表遮罩未走 no-btn-dl 分支（仍会挂「编辑」按钮）');
+  // ③ CSS：dl 底距补回 16px（.preview-content dl 渲染底距，14px 族不可共用）
+  assert.match(css, /\.CodeMirror \.wysiwyg-block-mask\.preview-content\.wysiwyg-mask-no-btn-dl > \*:last-child \{ margin-bottom: 16px; \}/,
+    '缺 wysiwyg-mask-no-btn-dl 16px 补距规则（遮罩矮 16px，切换跳动）');
+  // ④ CSS：WYSIWYG 遮罩双钮显示触发统一为遮罩 hover（修复 hover 编辑钮时复制钮淡出）
+  assert.match(css, /\.CodeMirror \.wysiwyg-block-mask\.preview-content:hover pre \.copy-btn \{ opacity: 1; \}/,
+    '缺遮罩 hover 显示复制钮规则（hover 编辑按钮时复制钮消失）');
+  // ⑤ 阅读模式单钮口径不变（pre:hover）
+  assert.match(css, /\.preview-content pre:hover \.copy-btn \{\s*opacity: 1;\s*\}/, '阅读模式复制钮 pre:hover 口径被破坏');
+  // ⑥ 回归接线：驱动 S81 场景
+  assert.match(driver, /S81：定义列表无编辑按钮 \+ 代码块双钮 hover/, '驱动缺 S81 场景');
+  assert.match(driver, /hover 编辑按钮：复制钮仍显示（opacity 1，不再随 pre 失 hover 淡出）/, '驱动缺双钮 hover 修复断言');
+  assert.match(driver, /定义列表块渲染 <dl> 遮罩，且无「编辑」按钮/, '驱动缺定义列表无按钮断言');
+});
+
+test('S80 HTML 容器块（<center>/<div>…）编辑态整块灰盒（2026-10-25 用户要求「居中显示等具有编辑按钮的，编辑时是编辑整块源码的，都在灰色块中进行编辑」）', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 判定收口：CommonMark 原始 HTML 块标签集 + 公共函数（两处调用点共用，禁止散写同义正则）
+  assert.ok(wys.includes('const HTML_BLOCK_TAGS = {'), '缺 HTML 块标签集 HTML_BLOCK_TAGS');
+  assert.match(wys, /center: 1,/, 'HTML_BLOCK_TAGS 缺 center 标签（用户报障案例）');
+  assert.ok(wys.includes('function isHtmlBlockContainerLine(line)'), '缺公共判定函数 isHtmlBlockContainerLine（整块灰盒口径会漂移）');
+  assert.match(wys, /const isHtmlContainer = !isFence && !isTable && !isDetails && isHtmlBlockContainerLine\(first\);/,
+    '高亮路径缺 isHtmlContainer 判定（HTML 容器块未纳入整块灰盒）');
+  assert.match(wys, /\} else if \(!isTable && !isDetails && !isHtmlContainer\) \{/,
+    'isHtmlContainer 未并入 lo/hi 收敛分支（仍会塌成光标行）');
+  // ② 高亮：整块挂代码盒背景类（与 fence/details 同一挂法）
+  assert.ok(wys.includes('if (isFence || isDetails || isHtmlContainer) cm.addLineClass(h, \'background\', ACTIVE_CODE_BOX_CLASS);'),
+    'HTML 容器块未挂 ACTIVE_CODE_BOX_CLASS（灰盒画不出）');
+  // ③ 装饰：源行内距行类 + 先清后挂（装饰段 + 全量清除两处撤）
+  assert.match(wys, /const isHtmlContainerBlock = !isFenceBlock && !isTableBlock && !isDetailsBlock && isHtmlBlockContainerLine\(first\);/,
+    '装饰段缺 isHtmlContainerBlock 判定（未与高亮路径共用口径）');
+  assert.ok(wys.includes("else if (isHtmlContainerBlock) cm.addLineClass(h, 'text', 'wysiwyg-html-block-line');"),
+    '装饰段未挂 wysiwyg-html-block-line');
+  assert.ok((wys.match(/cm\.removeLineClass\(h, 'text', 'wysiwyg-html-block-line'\);/g) || []).length >= 2,
+    'wysiwyg-html-block-line 清除不足（须装饰段 + 全量清除两处先清后挂）');
+  // ④ CSS：与 wysiwyg-details-line 共享同一条内距声明（两份拷贝 = 重复口径）
+  assert.match(css, /pre\.CodeMirror-line\.wysiwyg-details-line,\s*\.editor-container\.wysiwyg-mode \.CodeMirror pre\.CodeMirror-line\.wysiwyg-html-block-line \{/,
+    'wysiwyg-html-block-line 未与 details-line 共享内距声明（重复口径）');
+  // ⑤ 装饰段 details 判定收口 RE.detailsOpen（原散写正则已消除）
+  assert.ok(wys.includes("const isDetailsBlock = !isFenceBlock && !isTableBlock && RE.detailsOpen.test(first || '');"),
+    '装饰段 details 判定未收口 RE.detailsOpen');
+  // ⑥ 回归接线：驱动 S80 场景
+  assert.match(driver, /S80：WYSIWYG HTML 容器块（<center>\/<div>）整块灰盒/, '驱动缺 S80 场景');
+  assert.match(driver, /整块 3 行全挂 code-box 灰盒（首行上角、末行下角）/, '驱动缺整块灰盒断言');
+  assert.match(driver, /wysiwyg-html-block-line（左右内距 44px=32\+12，源码不贴盒竖边）/, '驱动缺 html-block-line 内距断言');
+  assert.match(driver, /仅光标行底色（cm-wysiwyg-active-block），无 code-box 灰盒/, '驱动缺普通段落不受影响断言');
+});
+
+test('S79 容器块编辑态 Enter：HTML 容器闭标签行回车不出盒（2026-10-22）；围栏闭行不拦截、新行落围栏下方（2026-10-25 用户要求「``` 是普通可编辑内容」）', () => {
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const fmt = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'format.js'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 守卫方法：光标在活动 HTML 容器块的块末闭标签行 → 新行插结构行前（块内），光标落新行行首
+  assert.match(wys, /_wysiwygEnterOnBlockCloseLine\(cm\) \{[\s\S]{0,1800}?cm\.replaceRange\('\\n', \{ line: prev, ch: prevLen \}\);[\s\S]{0,120}?cm\.setCursor\(\{ line: prev \+ 1, ch: 0 \}\);/,
+    '缺 _wysiwygEnterOnBlockCloseLine（块末结构行回车不再插块内）');
+  // ② 围栏块例外（2026-10-25）：开行为围栏 → 闭围栏行一律不拦截，回车交回默认换行
+  // （行尾 → 新行落围栏下方块外；行中 → 劈围栏行，普通内容语义）
+  assert.match(wys, /if \(RE\.fenceStart\.test\(first\)\) return false;/,
+    '围栏块闭行未豁免拦截（``` 行回车仍被改成插块内，不是普通内容语义）');
+  assert.match(wys, /fenceStart: \/\^\\s\{0,3\}\(`\{3,\}\|~\{3,\}\)\/,/, '缺 RE.fenceStart（围栏开行正则未收口）');
+  // ③ HTML 容器口径：闭标签正则按开标签名派生（details/div/figure… 通用，不再特判）
+  assert.match(wys, /new RegExp\('\^\\\\s\{0,3\}<\/' \+ om\[1\] \+ '\\\\b', 'i'\)\.test\(lastLine\)/,
+    '闭标签行未按开标签名派生判定（details 之外的容器仍会跳出编辑态）');
+  assert.match(wys, /htmlOpenTag: \/\^\\s\{0,3\}<\(\[a-zA-Z\]\[a-zA-Z0-9\]\*\)\\b\[\^>\]\*>\/,/, '缺 RE.htmlOpenTag（容器开行正则未收口）');
+  // ④ Enter 接线：仅所见即所得模式挂钩，守卫处理则消费该键
+  assert.match(fmt, /if \(this\.viewMode === 'wysiwyg' && this\._wysiwygEnterOnBlockCloseLine &&[\s\S]{0,120}?this\._wysiwygEnterOnBlockCloseLine\(cm\)\) return;/,
+    'format.js Enter 链缺容器块结构行钩（末行回车跳出编辑态、行落块外）');
+  // ⑤ 回归接线：驱动 S79 场景（details 不出盒 + 代码/图表闭围栏下方新行）
+  assert.match(driver, /S79：WYSIWYG 容器块编辑态 Enter（块末结构行回车不出盒）/, '驱动缺 S79 场景');
+  assert.match(driver, /② 编辑态保持/, '驱动缺 S79 编辑态保持断言');
+  assert.match(driver, /④ 代码块闭围栏行行尾回车：新空行插在闭围栏\*\*下方\*\*（块外）/, '驱动缺 S79 代码块闭围栏下方新行断言');
+  assert.match(driver, /⑤ mermaid 图表闭围栏行行尾回车：新空行插在闭围栏\*\*下方\*\*（块外）/, '驱动缺 S79 mermaid 图表断言');
+  assert.match(driver, /③ 块外段落回车/, '驱动缺 S79 钩子无误伤断言');
 });
 
 test('S77 定义列表编辑态冒号可见（次级色，同标题 # 前缀口径）', () => {

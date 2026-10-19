@@ -2928,6 +2928,10 @@ body.is-resizing .side-btn {
 /* 标题块不挂「编辑」按钮（2026-10-19 用户反馈 #1）：同 no-btn 机制——h1–h6 成为
    last-child 后 12px margin-bottom（预览 h1–h6 统一值）被清零、遮罩矮 12px → 补回。 */
 .CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn-heading > *:last-child { margin-bottom: 12px; }
+/* 定义列表块不挂「编辑」按钮（2026-10-25 用户要求「定义列表不要编辑按钮」）：同 no-btn
+   机制，补回值为 .preview-content dl 的渲染底距 16px（与 14px 的 ul/ol/p 族不同，
+   不能共用 wysiwyg-mask-no-btn 规则）。 */
+.CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn-dl > *:last-child { margin-bottom: 16px; }
 /* 跨块选区（2026-10-16 用户反馈「选中和全选只能选中当前编辑的一小块」）：CM5 只给可见
    源码行画选框，遮罩（replacedWith widget）节点无选中态 → 选区覆盖的遮罩块由
    _applyWysiwygSelectionMaskClasses 挂本类，半透明着色与原生选区观感一致（浅蓝底，
@@ -2975,6 +2979,11 @@ body.is-resizing .side-btn {
    （含 1px border-top），编辑钮锚定遮罩 border box（无 padding/边框）→ 复制钮天然低 1px。
    仅遮罩上下文按边框厚度上移 1px 补偿（阅读模式复制钮仍 top:8px，单钮无需对齐）。 */
 .CodeMirror .wysiwyg-block-mask pre .copy-btn { top: 7px; }
+/* WYSIWYG 遮罩双钮（复制+编辑）：显示触发统一为遮罩 hover（2026-10-25 用户报「hover 到
+   编辑按钮上时复制按钮消失」——复制钮原仅 pre:hover 显示，而编辑钮在遮罩上、pre 之外，
+   悬停编辑钮时 pre 失 hover → 复制钮淡出）。编辑钮显示本就是 mask:hover（见上），复制钮
+   同口径补齐；阅读模式无编辑钮，pre:hover 单钮口径不变。 */
+.CodeMirror .wysiwyg-block-mask.preview-content:hover pre .copy-btn { opacity: 1; }
 
 /* 活动块（光标所在块、源码态）背景（2026-10-11 用户反馈 #5 引入，2026-10-13 三轮修正：
    ① 修复选择器——addLineClass('background') 的类落在独立的 div.CodeMirror-linebackground
@@ -3454,13 +3463,16 @@ body.is-resizing .side-btn {
      S70 断言口径不动），颜色由透明改次级色、可见不抢正文。 */
   color: var(--text-secondary);
 }
-/* 折叠区块编辑态灰盒（2026-10-22 用户要求「进入编辑态时要在灰色块中进行编辑，可参考
-   代码块」）：整块源行（<details>…</details>）挂 cm-wysiwyg-code-box 背景类（JS 在
-   _applyWysiwygActiveHighlight 把 details 块按容器块处理，首/末行挂 active-first/last
-   角类），复用代码盒 ::before 内缩盒（--code-bg 底色 + 1px 描边 + 6px 圆角）。源文行
-   另加 12px 左右内距（在 32px 行基准上叠加，同 dd 行 calc 口径），源码文字不贴盒竖边。
-   与代码盒的差异：不挂 wysiwyg-code-line（源文保持默认正文字族/字号，非等宽代码排版）。 */
-.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-details-line {
+/* 容器块编辑态源行内距（折叠区块 2026-10-22 用户要求「进入编辑态时要在灰色块中进行编辑，
+   可参考代码块」；HTML 容器块 2026-10-25 用户要求「居中显示等具有编辑按钮的块都在灰色块中
+   编辑」同口径）：整块源行挂 cm-wysiwyg-code-box 背景类（JS 在 _applyWysiwygActiveHighlight
+   把 details / <center>/<div>/<figure>… 块按容器块处理，首/末行挂 active-first/last 角类），
+   复用代码盒 ::before 内缩盒（--code-bg 底色 + 1px 描边 + 6px 圆角）。源文行另加 12px 左右
+   内距（在 32px 行基准上叠加，同 dd 行 calc 口径），源码文字不贴盒竖边。两个行类共享本条
+   声明（禁止拆成两份拷贝）；与代码盒的差异：不挂 wysiwyg-code-line（源文保持默认正文字族/
+   字号，非等宽代码排版）。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-details-line,
+.editor-container.wysiwyg-mode .CodeMirror pre.CodeMirror-line.wysiwyg-html-block-line {
   padding-left: calc(var(--wysiwyg-line-inset, 32px) + 12px);
   padding-right: calc(var(--wysiwyg-line-inset, 32px) + 12px);
 }

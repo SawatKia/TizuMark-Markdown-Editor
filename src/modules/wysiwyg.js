@@ -66,9 +66,39 @@
     table: /^\s*\|/,
     // setext 标题：上一行文本 + 本行 === / ---
     setext: /^(\s*)(=+|-+)\s*$/,
+    // 折叠区块开行（_applyWysiwygActiveHighlight 整块灰盒判定的收口口径，禁止散写同义正则）
+    detailsOpen: /^\s*<details[\s>]/i,
+    // 块末结构行 Enter 拦截（_wysiwygEnterOnBlockCloseLine）共用：围栏开行（容 0–3 前导空格，
+    // 捕获围栏串以校验闭合配对）与 HTML 容器开行（捕获标签名以派生闭标签判定）
+    fenceStart: /^\s{0,3}(`{3,}|~{3,})/,
+    htmlOpenTag: /^\s{0,3}<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/,
     // 缩进代码块：4 空格 / 制表符
     indentedCode: /^(\t| {4,})\S/,
   };
+
+  // CommonMark 原始 HTML 块（type 6）标签名：行首出现这些标签的开标签即构成 HTML 块
+  // （strong/span/u 等行内标签不在集内——它们所在行仍是段落）。
+  const HTML_BLOCK_TAGS = {
+    address: 1, article: 1, aside: 1, base: 1, basefont: 1, blockquote: 1, body: 1,
+    caption: 1, center: 1, col: 1, colgroup: 1, dd: 1, details: 1, dialog: 1, dir: 1,
+    div: 1, dl: 1, dt: 1, fieldset: 1, figcaption: 1, figure: 1, footer: 1, form: 1,
+    frame: 1, frameset: 1, h1: 1, h2: 1, h3: 1, h4: 1, h5: 1, h6: 1, head: 1,
+    header: 1, hr: 1, html: 1, iframe: 1, legend: 1, li: 1, link: 1, main: 1,
+    menu: 1, menuitem: 1, nav: 1, noframes: 1, ol: 1, optgroup: 1, option: 1, p: 1,
+    param: 1, section: 1, source: 1, summary: 1, table: 1, tbody: 1, td: 1, tfoot: 1,
+    th: 1, thead: 1, title: 1, tr: 1, track: 1, ul: 1,
+  };
+
+  // 行是否为「HTML 容器块」开行（2026-10-25 用户要求「居中显示等具有编辑按钮的块，
+  // 编辑整块源码、都在灰色块中进行编辑」的判定收口，与遮罩侧「挂编辑按钮」口径对应：
+  // 渲染结果非列表/标题/TOC/单 <p> 的容器块）。前 ≤3 空格 + HTML 块标签开标签
+  // （<center>/<div>/<figure>/…；<details> 亦在集内，details 专属路径先行判定，
+  // 本函数为其余容器标签的同一口径）。⚠️ _applyWysiwygActiveHighlight（整块灰盒）
+  // 与 _wysiwygApplyActiveDecor（行内距行类）两处必须共用本函数，禁止散写同义正则。
+  function isHtmlBlockContainerLine(line) {
+    const m = RE.htmlOpenTag.exec(line || '');
+    return !!m && !!HTML_BLOCK_TAGS[m[1].toLowerCase()];
+  }
 
   function isBlank(s) { return (s || '').trim() === ''; }
 
@@ -645,6 +675,7 @@
         if (b.listItem && b.listItemPos !== 'last') node.classList.add('wysiwyg-mask-li-mid');
       } else if (this._wysiwygBlockIsHeading(b)) node.classList.add('wysiwyg-mask-no-btn-heading');
       else if (isTocBlock) this._addWysiwygTocDeleteButton(node);
+      else if (this._wysiwygMaskIsDefList(node)) node.classList.add('wysiwyg-mask-no-btn-dl');
       else if (this._wysiwygMaskIsPlainText(node)) node.classList.add('wysiwyg-mask-no-btn');
       else this._addWysiwygEditButton(node);
       this._addWysiwygTableTools(node);
@@ -1031,6 +1062,13 @@
       if (!cm || !b || b.end - b.start !== 1) return false;
       const line = (b.start < cm.lineCount()) ? cm.getLine(b.start) : '';
       return /^\[TOC\]$/i.test((line || '').trim());
+    },
+
+    // 遮罩是否定义列表（2026-10-25 用户要求「定义列表不要编辑按钮」）：渲染结果含
+    // <dl>（术语行 + `: 释义` 行块）。同列表/标题/普通文字口径——点行即进编辑
+    //（遮罩 mousedown 点击映射本就直达源码行），块级源码入口多余。
+    _wysiwygMaskIsDefList(node) {
+      return !!(node && node.querySelector('dl'));
     },
 
     // 遮罩是否「普通文字」段落（2026-07-13 用户要求：普通文字右侧不需要编辑按钮）：
@@ -2486,6 +2524,44 @@
       try { document.body.classList.remove('wysiwyg-table-dragging'); } catch (_) { }
     },
 
+    // 容器块「块末结构行」Enter 语义（2026-10-22 用户报 details「从末尾（</details> 行）
+    // 点击回车会跳出编辑态、在块下方新增一行——应该是正常的在灰色框中新增行」）：
+    // HTML 容器闭标签行（</details>/</div>/…）按 Enter → 新行插在该结构行**之前**
+    // （块内、灰盒内），光标落新行行首——灰盒不缩、编辑态不丢，结构行永不被劈成两半。
+    // ⚠️ 围栏块例外（2026-10-25 用户要求「末尾的 ``` 像代码中的普通内容一样可以编辑，
+    // 在 ``` 后面回车应在 ``` 下面增加一行」）：闭围栏行不拦截，全部 Enter 位置交回默认
+    // 换行——行尾 → 新行落围栏下方（块外，代码块经正常活动块切换重新遮罩，与 Typora 等
+    // 主流编辑器一致）；行中 → 围栏行照常被劈开（普通内容行语义）。
+    // 处理成功消费该键（调用方直接 return）；格编辑中 / 有选区 / 光标不在块末结构行 /
+    // 围栏块一律返回 false 交回原换行逻辑。
+    // 判定收口：HTML 容器块（details/div/figure/pre…，块表合并后末行即闭标签行）——末行以
+    // 「</容器标签」开头，闭标签正则按开标签名派生，details 不再特判。
+    _wysiwygEnterOnBlockCloseLine(cm) {
+      if (!cm || this._wysiwygCellEditing) return false;
+      if (cm.somethingSelected()) return false;
+      const idx = this._wysiwygActiveIdx;
+      const b = (idx != null && idx >= 0 && this._wysiwygBlocks) ? this._wysiwygBlocks[idx] : null;
+      if (!b) return false;
+      const pos = cm.getCursor();
+      // 只拦块末行（且不是首行独担——单行块开闭同行，劈行即破坏块本身）；以该行的
+      // 实际文本为准（250ms 防抖窗口内块表可能滞后一行）
+      if (pos.line !== b.end - 1 || pos.line <= b.start) return false;
+      const first = cm.getLine(b.start) || '';
+      const lastLine = cm.getLine(pos.line) || '';
+      // 围栏块（代码 / mermaid 图表 / 一切围栏）：闭围栏行不拦截（2026-10-25，见头注）
+      if (RE.fenceStart.test(first)) return false;
+      const om = first.match(RE.htmlOpenTag);
+      const isClose = !!(om && new RegExp('^\\s{0,3}</' + om[1] + '\\b', 'i').test(lastLine));
+      if (!isClose) return false;
+      cm.operation(() => {
+        const prev = pos.line - 1;
+        const prevLen = cm.getLineHandle(prev).text.length;
+        cm.replaceRange('\n', { line: prev, ch: prevLen });
+        cm.setCursor({ line: prev + 1, ch: 0 });
+      });
+      return true;
+    },
+
     // 活动块高亮：只给「光标所在行」加底色（2026-10-14 用户要求：列表/引用/段落等块
     // 原来整块灰底、编辑态与渲染态观感差距大 → 改为仅光标行灰底、随光标在块内移动跟随，
     // 块内其余行保持无底色的源文态；配合活动块源文态装饰，编辑态整体贴近渲染态）。
@@ -2559,12 +2635,17 @@
       // 按容器块处理——整块同挂代码盒背景类（ACTIVE_CODE_BOX_CLASS 复用代码盒 ::before
       // 内缩盒：--code-bg 底色 + 1px 描边 + 首/末角），源文行排版类见
       // _wysiwygApplyActiveDecor 的 wysiwyg-details-line（左右 12px 内距，不贴盒竖边）。
-      const isDetails = !isFence && !isTable && /^\s*<details[\s>]/i.test(first || '');
+      const isDetails = !isFence && !isTable && RE.detailsOpen.test(first || '');
+      // HTML 容器块（2026-10-25 用户要求「居中显示等具有编辑按钮的，编辑时是编辑整块源码的，
+      // 都在灰色块中进行编辑」）：开行为 CommonMark 原始 HTML 块标签（<center>/<div>/<figure>/…，
+      // isHtmlBlockContainerLine 与 _wysiwygApplyActiveDecor 共用口径）→ 同代码块/折叠区块
+      // 整块进灰盒（lo/hi 不收敛到光标行）。
+      const isHtmlContainer = !isFence && !isTable && !isDetails && isHtmlBlockContainerLine(first);
       let lo = b.start, hi = last;
       if (isFence) {
         // 整块进盒（lo=b.start 含开围栏、hi=last 含闭围栏）：空代码块（仅开/闭两行）
         // 也是两行灰盒，首/末角类由下方循环按 n===lo/hi 挂
-      } else if (!isTable && !isDetails) {
+      } else if (!isTable && !isDetails && !isHtmlContainer) {
         let head = null;
         try { head = cm.getCursor('head'); } catch (_) { /* 忽略 */ }
         if (head && head.line >= b.start && head.line <= last) { lo = hi = head.line; }
@@ -2576,7 +2657,7 @@
           if (!h) continue;
           this._wysiwygActiveLines.push(h); // 记行对象（撤除处靠它跟住行位移）
           cm.addLineClass(h, 'background', ACTIVE_CLASS);
-          if (isFence || isDetails) cm.addLineClass(h, 'background', ACTIVE_CODE_BOX_CLASS);
+          if (isFence || isDetails || isHtmlContainer) cm.addLineClass(h, 'background', ACTIVE_CODE_BOX_CLASS);
           // 单行：同一行挂三个类 = 四角全圆；容器整块：首行仅上角、末行仅下角
           if (n === lo) cm.addLineClass(h, 'background', ACTIVE_FIRST_CLASS);
           if (n === hi) cm.addLineClass(h, 'background', ACTIVE_LAST_CLASS);
@@ -2626,6 +2707,8 @@
               cm.removeLineClass(h, 'text', 'wysiwyg-para-line');
               // 折叠区块行类（2026-10-22）：同 para-line 先清后挂
               cm.removeLineClass(h, 'text', 'wysiwyg-details-line');
+              // HTML 容器块行类（2026-10-25）：同 details-line 先清后挂
+              cm.removeLineClass(h, 'text', 'wysiwyg-html-block-line');
               // 定义列表行类（2026-10-18）：同 para-line 先清后挂
               cm.removeLineClass(h, 'text', 'wysiwyg-dt-line');
               cm.removeLineClass(h, 'text', 'wysiwyg-dd-line');
@@ -2890,8 +2973,12 @@
       const isFrontmatter = b.start === 0 && (first || '').trim() === '---';
       // 折叠区块（2026-10-22）：整块灰盒见 _applyWysiwygActiveHighlight；源文行挂
       // wysiwyg-details-line（左右 12px 内距，源码文字不贴盒竖边；不挂 code-line，
-      // 保持默认正文字族）。判定与高亮处同口径（块首行 <details 标签）。
-      const isDetailsBlock = !isFenceBlock && !isTableBlock && /^\s*<details[\s>]/i.test(first || '');
+      // 保持默认正文字族）。判定与高亮处同口径（块首行 <details 标签，共用 RE.detailsOpen）。
+      const isDetailsBlock = !isFenceBlock && !isTableBlock && RE.detailsOpen.test(first || '');
+      // HTML 容器块（2026-10-25，同 isDetailsBlock 的判定收口）：源文行挂
+      // wysiwyg-html-block-line（与 wysiwyg-details-line 共享同一条 CSS 声明：左右 12px
+      // 内距，源码文字不贴盒竖边）。
+      const isHtmlContainerBlock = !isFenceBlock && !isTableBlock && !isDetailsBlock && isHtmlBlockContainerLine(first);
       if (!isFenceBlock && !isTableBlock && !isFrontmatter) {
         for (let lineNo = b.start; lineNo < b.end && lineNo < cm.lineCount(); lineNo++) {
           const line = cm.getLine(lineNo);
@@ -2916,6 +3003,7 @@
             if (h) {
               cm.addLineClass(h, 'text', 'wysiwyg-plain-text');
               if (isDetailsBlock) cm.addLineClass(h, 'text', 'wysiwyg-details-line');
+              else if (isHtmlContainerBlock) cm.addLineClass(h, 'text', 'wysiwyg-html-block-line');
               this._wysiwygPlainLines.push(h);
               // 块边缘行类（S43 块高补齐用）：首/末行挂标记，CSS 给「14px 边距族」
               // （列表行/段落行）的边缘行加顶/底距，使活动块与遮罩逐像素等高。
@@ -4404,6 +4492,7 @@
                 if (h) {
                   cm.removeLineClass(h, 'text', 'wysiwyg-plain-text');
                   cm.removeLineClass(h, 'text', 'wysiwyg-details-line');
+                  cm.removeLineClass(h, 'text', 'wysiwyg-html-block-line');
                   cm.removeLineClass(h, 'text', 'wysiwyg-quote-line');
                   cm.removeLineClass(h, 'text', 'wysiwyg-quote-nested');
                 }

@@ -183,6 +183,60 @@ if (missing > 0) {
   process.exit(1);
 }
 
+// TizuMark html2canvas 本地补丁（2026-10-22 导出长图「Error parsing CSS component
+// value, unexpected EOF」修复）：
+// 根因：DocumentCloner.cloneNode 会向元素插入 ::before/::after 伪元素克隆。
+// 被替换元素（INPUT/SELECT/TEXTAREA/IFRAME）的子节点浏览器不做布局，
+// 插进其内的伪元素 getComputedStyle 全为空串，html2canvas 随后用空声明
+// 构建伪元素样式容器时 CSS 分词器抛 unexpected EOF。触发源：任务列表
+// 复选框 <input type=checkbox>——任何含任务项的文档导出 PNG 长图必崩
+// （Word/PDF/HTML 导出不经过 html2canvas，不受影响；复选框本体由本库 pB
+// 容器绘制含选中对勾，外观不受影响）。
+// 补丁 = cloneNode 两处伪元素插入加 !(_B(A)||tn(A)||en(A)||An(A)) 守卫
+// （四个谓词即本库对 INPUT/SELECT/TEXTAREA/IFRAME 的既有判定）。
+// 口径同 CM5 补丁：marker = 幂等跳过；锚点消失且无 marker = vendor 源码变了
+// → 必须失败显式报出，绝不静默跳过（静默 = 修复悄悄丢失）。
+function applyTizuMarkHtml2CanvasPatch() {
+  const dest = path.join(LIB, 'html2canvas.min.js');
+  let code = fs.readFileSync(dest, 'utf8');
+  const patches = [
+    {
+      name: '被替换元素伪元素插入守卫（导出长图 EOF 崩溃修复）',
+      marker: 'n&&!(_B(A)||tn(A)||en(A)||An(A))&&r.insertBefore(n,r.firstChild)',
+      from: 'n&&r.insertBefore(n,r.firstChild);s=this.resolvePseudoContent(A,r,s,gn.AFTER);return s&&r.appendChild(s),',
+      to: 'n&&!(_B(A)||tn(A)||en(A)||An(A))&&r.insertBefore(n,r.firstChild);s=this.resolvePseudoContent(A,r,s,gn.AFTER);return s&&!(_B(A)||tn(A)||en(A)||An(A))&&r.appendChild(s),',
+    },
+    {
+      // 文件头加本地补丁注记（后人读到文件即知其已被本地补丁，升级须重验锚点）
+      name: '文件头本地补丁注记',
+      marker: '本地补丁（2026-10-22',
+      from: ' * Released under MIT License\n */',
+      to: ' * Released under MIT License\n *\n * 本地补丁（2026-10-22，导出长图「Error parsing CSS component value,\n * unexpected EOF」修复）：根因见 scripts/ensure-vendor.mjs 中\n * applyTizuMarkHtml2CanvasPatch 的注释。本文件由 ensure-vendor 从\n * node_modules 再生，补丁在再生后自动重打；升级 html2canvas 须核对该函数\n * 锚点（失败 exit 1，不会静默跳过）。\n */',
+    },
+  ];
+  let bad = 0;
+  for (const p of patches) {
+    if (code.indexOf(p.marker) !== -1) {
+      console.log('[ensure-vendor] html2canvas 补丁已在（幂等跳过）：' + p.name);
+      continue;
+    }
+    if (code.indexOf(p.from) === -1) {
+      console.error(`[ensure-vendor] html2canvas 补丁锚点未找到：${p.name}（vendor 源码已变化，须更新补丁；拒绝继续以免修复静默丢失）`);
+      bad++;
+      continue;
+    }
+    code = code.replace(p.from, p.to);
+    console.log('[ensure-vendor] html2canvas 补丁已应用：' + p.name);
+  }
+  fs.writeFileSync(dest, code);
+  if (bad > 0) {
+    console.error(`[ensure-vendor] ${bad} 个 html2canvas 补丁未应用，vendor 不完整`);
+    process.exit(1);
+  }
+}
+
+applyTizuMarkHtml2CanvasPatch();
+
 // TizuMark CM5 本地补丁（2026-10-21 WYSIWYG「输入文字页面乱跳」修复）：
 // codemirror.js 是从 node_modules 确定性再生的 vendor 副本（src/lib/codemirror/ 在
 // .gitignore 内、不进 git），下列两处修复只存在于该文件——每次复制后必须在此重新打，

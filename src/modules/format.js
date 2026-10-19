@@ -299,6 +299,13 @@
         // 光标在空行）。人为连按两次 Enter 间隔 ≥80ms，且此处还要求「组合 10s 内刚结束」
         // 双条件，避免误吞无 IME 上下文的快速输入。
         if (sincePrevEnter < 150 && this._lastCompositionEnd && now - this._lastCompositionEnd < 10000) return;
+        // 所见即所得 HTML 容器块（折叠区块等）：光标在块末结构行（</details> 闭标签行）
+        // 按 Enter → 新行插在结构行前（块内灰盒内），不出块、不跳出编辑态（2026-10-22
+        // 用户反馈「从末尾点击回车会跳出折叠列表编辑态，在折叠列表下方新增一行」）。
+        // 围栏块（代码 / 图表）闭围栏行不拦截（2026-10-25 用户要求：``` 是普通可编辑内容，
+        // 行尾回车新行落 ``` 下方、退出代码块，同 Typora 口径）。源码模式不受影响。
+        if (this.viewMode === 'wysiwyg' && this._wysiwygEnterOnBlockCloseLine &&
+            this._wysiwygEnterOnBlockCloseLine(cm)) return;
         const TABLE_ROW_RE = /^\|.*\|\s*$/;
         const TABLE_SEPARATOR_RE = /^\|\s*[-:][-:\s]*\|/;
         const pos = cm.getCursor();
