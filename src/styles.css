@@ -3713,6 +3713,28 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested.wysiwyg-block-edge-bottom {
   padding-bottom: 40px;
 }
+/* 2026-10-28 S90 问题 1（用户：光标在引用块不同行间移动，块高被撑开/收缩）：光标行上下间隙
+   按该行在块内位置由 JS 动态挂类（_wysiwygQuoteCurPad）：渲染态同层级行无间隙（软换行）、
+   嵌套盒顶 = 14（<p> 距）+ 12（盒 padding）、<p> 末行接嵌套盒 = 14（<p> 距）、嵌套盒末
+   = 12 + 16（盒 padding + margin）——上方 nested 类静态 12/12 一律套用是块高随光标行跳变
+   的根因。顶缘行 pt 维持静态 12N、底缘行 pb 维持静态 28N（均恰为渲染值）；顶缘行的 pb、
+   底缘行的 pt 亦按上述口径动态调（nested 类静态 12 在这两侧不成立：顶缘应 0/14、底缘应 0/26）；单行块不挂类。特异性
+   (0,6,1) 高于 nested 类 (0,5,1) → 稳赢。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-cur-tp-0 {
+  padding-top: 0;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-cur-tp-26 {
+  padding-top: 26px;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-cur-bp-0 {
+  padding-bottom: 0;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-cur-bp-14 {
+  padding-bottom: 14px;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-cur-bp-28 {
+  padding-bottom: 28px;
+}
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-quote-slot {
   color: transparent;
   font-family: var(--font-preview);
@@ -4315,6 +4337,14 @@ body.is-resizing .side-btn {
    slot-inner，行为不变。特异性与上方透明规则同级、顺序在后 → 稳赢。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text.wysiwyg-quote-cursor-line span[class*="wysiwyg-quote-slot-inner"] {
   color: var(--text-secondary);
+}
+/* 2026-10-28 S90 问题 2（用户：光标所在不同行文字背景颜色不一致、高亮很不明显）：光标行
+   （非 callout）覆写 --qc-bg → S85/S86 光标行同构规则的全部逐层底色层（var(--qc-bg)）解算
+   为同一高亮色 = 任意嵌套层级统一且明显的「正在编辑行」高亮（盒竖条仍走 --qc-bar、层宽/
+   位置几何不变，嵌套结构外观保留）。callout 光标行排除：其底色为类型色（--qc-bg/--qc-bar
+   按类型设置）、嵌套 callout 罕见，维持平色。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line) {
+  --qc-bg: color-mix(in srgb, var(--accent-color) 18%, transparent);
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-heading-hash"] {
   color: var(--text-secondary);

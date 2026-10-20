@@ -3286,3 +3286,39 @@ test('S89 嵌套引用光标行只显一个 >（2026-10-28 用户反馈：只在
   assert.match(driver, /=== S89：嵌套引用光标行只显一个 >/);
   assert.match(driver, /S89 核心：光标行只显最内层一个 >（外层两层 > 透明）/);
 });
+
+test('S90 引用块编辑三修复（块高稳定 / 光标行底色统一 / 输入延迟，2026-10-28 用户反馈）', () => {
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const edc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'editor-core.js'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 光标行上下间隙动态类（渲染态口径：同级 0 / 嵌套盒顶 26=14+12 / <p> 距 14 / 嵌套盒末 28=12+16；
+  //   顶缘 pt 12N 与底缘 pb 28N 静态恰为渲染值 → 顶缘 pb / 底缘 pt 亦按口径动态、单行块不挂类）
+  assert.ok(wys.includes('_wysiwygQuoteCurPadKey'), 'wysiwyg.js 缺光标行上下间隙取值 _wysiwygQuoteCurPadKey');
+  assert.ok(wys.includes('pt = (lvlOf(n - 1) === L - 1) ? 26 : 0;'),
+    'wysiwyg.js 光标行顶隙口径缺失（上一行浅一层 = 嵌套盒顶 26，其余 0）');
+  assert.ok(wys.includes('pb = (nl === L + 1) ? 14 : (nl === L - 1) ? 28 : 0;'),
+    'wysiwyg.js 光标行底隙口径缺失（下一行深一层 14 / 浅一层 28=盒末 12+16 / 同级 0）');
+  for (const [cls, pad] of [['wysiwyg-quote-cur-tp-0', 'padding-top: 0;'], ['wysiwyg-quote-cur-tp-26', 'padding-top: 26px;'],
+    ['wysiwyg-quote-cur-bp-0', 'padding-bottom: 0;'], ['wysiwyg-quote-cur-bp-14', 'padding-bottom: 14px;'],
+    ['wysiwyg-quote-cur-bp-28', 'padding-bottom: 28px;']]) {
+    assert.match(css, new RegExp(
+      'wysiwyg-quote-cursor-line\\.' + cls + ' \\{\\s*' + pad.replace(';', ';\\s*')),
+      'styles.css 缺光标行动态 padding 规则 ' + cls);
+  }
+  // ② 光标行底色统一 tint：--qc-bg 变量（18% accent）覆盖所有 fill 层（各级各层级规则都用 var(--qc-bg)），
+  //   callout 光标行排除（保持类型色）
+  assert.match(css, /wysiwyg-quote-cursor-line:not\(\.wysiwyg-callout-cursor-line\) \{\s*--qc-bg: color-mix\(in srgb, var\(--accent-color\) 18%, transparent\);\s*\}/,
+    'styles.css 缺光标行统一 tint 规则（--qc-bg = 18% accent，排除 callout）');
+  // ③ 输入延迟：行内非结构编辑判定 + 安全标志累积 + 防抖 safeSkip；change 监听透传变更对象
+  assert.ok(wys.includes('_wysiwygChangeIsBoundarySafe'), 'wysiwyg.js 缺行内非结构编辑判定 _wysiwygChangeIsBoundarySafe');
+  assert.ok(wys.includes('_wysiwygSafeSinceParse'), 'wysiwyg.js 缺自上次解析以来的安全标志累积 _wysiwygSafeSinceParse');
+  assert.ok(wys.includes('this._wysiwygLastChange = c || null;'), 'wysiwyg.js 未记录最近变更（IME 组合顺延重排需透传）');
+  assert.ok(edc.includes('if (this.viewMode === \'wysiwyg\') this.refreshWysiwygBlocks(c);'),
+    'editor-core.js change 监听未透传变更对象（防抖无法判定行内安全编辑）');
+  // 驱动回归接线
+  assert.match(driver, /=== S90：引用块编辑三修复/);
+  assert.match(driver, /S90① 10 个光标行 band（seg-top\+pre\+seg-bottom）均 = 遮罩高（块高不随光标行跳变，容差 0\.5px）/);
+  assert.match(driver, /S90② 光标行底色统一（10 行 --qc-bg 同值 = color-mix 18% accent tint）/);
+  assert.match(driver, /S90③ 行内输入 5 字 \+ 250ms 停顿 → 零整篇重解析/);
+});

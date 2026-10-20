@@ -327,7 +327,7 @@
           this.showZoomHint('preview');
         }, true);  // capture：先于预览内部可能的滚动监听拦截
   
-        this.cm.on('change', () => {
+        this.cm.on('change', (cmObj, c) => {
           this.activeTab.content = this.cm.getValue();
           this.updateTabDisplay();
           // 大文档滑动窗口模式：打字时把窗口焦点同步到光标当前行（0-based），
@@ -343,7 +343,9 @@
           // ⚠️ 绝不可在 change 里调 renderWysiwygMasks()——那样每次按键都要
           //    clear 全部标记 + 对所有块跑一遍 Markdown 渲染 + cm.refresh()，
           //    实测造成严重卡顿与抖动（2026-10-06 真机反馈）。昂贵渲染走 250ms 防抖补齐。
-          if (this.viewMode === 'wysiwyg') this.refreshWysiwygBlocks();
+          // 传变更对象（S90 问题 3）：防抖回调据此判定「行内非结构编辑」跳过整篇 remark
+          // 重解析（5000 行约 1s，中文 IME 停顿即触发——输入延迟主因）。
+          if (this.viewMode === 'wysiwyg') this.refreshWysiwygBlocks(c);
         });
   
         this.cm.on('renderLine', (cm, line, el) => {

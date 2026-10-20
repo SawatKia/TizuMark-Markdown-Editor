@@ -312,7 +312,7 @@
     ed.viewMode = 'wysiwyg';
     // 模拟 editor-core 的事件接线（真实 app 中 cursorActivity/change 都接到这里）
     cm.on('cursorActivity', () => ed.syncWysiwygActiveBlock());
-    cm.on('change', () => { if (ed.viewMode === 'wysiwyg') ed.refreshWysiwygBlocks(); ed.updateEmptyLineHint(); });
+    cm.on('change', (cmObj, c) => { if (ed.viewMode === 'wysiwyg') ed.refreshWysiwygBlocks(c); ed.updateEmptyLineHint(); });
     // 模拟 editor-core 的 IME 组合接线：⚠️ CM 5.65.18 不触发用户级 composition 编辑器
     // 事件（cm.on 不执行），幽灵 Enter 吞除窗时间戳必须挂输入域的原生 DOM compositionend
     //（与真实 app 完全一致；见 format.js _handleTableEnter 守卫注释）

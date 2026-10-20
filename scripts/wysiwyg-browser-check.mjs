@@ -6904,6 +6904,140 @@ try {
     }
   }
 
+  // === S90：引用块编辑三修复（2026-10-28 用户反馈：① 光标行变化引用块被撑开/收缩（块高跳变）
+  // ② 光标行背景色不同行不一样 ③ 引用块中输入要等一会才显示）===
+  // ① 光标行上下间隙按渲染态口径动态挂类（wysiwyg-quote-cur-tp-*/bp-*）：同级=软换行无间隙 /
+  //    嵌套盒顶=26（14+12）/ <p> 距=14 / 嵌套盒末=28（12+16）；顶缘 pt 12N、底缘 pb 28N 静态
+  //    恰为渲染值不动（单行块同）。→ 10 行引用块内任一行光标下 band（seg-top+光标行 pre+
+  //    seg-bottom）== 遮罩高（修复前 351.9–389.9 随光标行跳变、±19px）。
+  // ② 光标行底色 = --qc-bg 统一 tint（18% accent），各级各行同值（修复前逐层 accent-subtle 叠加）。
+  // ③ 输入停顿 250ms 对行内非结构编辑跳过整篇 remark 重解析（computeWysiwygBlocks 计数不变）；
+  //    结构性编辑（Enter 拆行）照常重解析。
+  console.log('\n=== S90：引用块编辑三修复（块高稳定 / 光标行底色统一 / 输入延迟，2026-10-28 用户反馈）===');
+  const s90doc = [
+    '# 层级测试', '',
+    '> 外层第一行内容', '> 外层第二行内容', '> 外层第三行内容',
+    '> > 嵌套第一行内容', '> > 嵌套第二行内容', '> > 嵌套第三行内容',
+    '> > 嵌套第四行内容', '> > 嵌套第五行内容', '> > 嵌套第六行内容', '> > 嵌套第七行内容',
+    '', '尾段内容行。',
+  ].join('\n');
+  const s90checks = [];
+  {
+    // ①② 块 [2,12) 共 10 行；点击映射分母 = to−from（marker 口径 = N−1 = 9，实测
+    // dbg-quote-map），末行区 = ratio≥1 单点点击不可达（既有映射行为）→ 末行走 ArrowDown。
+    // 每行新建编辑器（首次点击解罩后整块遮罩消失，且块内 setCursor 受锚点钳制）。
+    const bands = {};
+    for (const ln of [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) {
+      await page.evaluate((d) => {
+        const { cm, ed } = window.__makeWysiwygEditor(d);
+        window.__s90cm = cm; window.__s90ed = ed;
+        ed.settings.softBreaks = true; // 用户环境口径：同级行一个 <p> + <br>
+        cm.options.viewportMargin = 100000;
+        cm.refresh();
+        ed.renderWysiwygMasks();
+      }, s90doc);
+      await page.waitForTimeout(500);
+      const maskH = await page.evaluate(() => {
+        const m = document.querySelector('.wysiwyg-block-mask.wysiwyg-mask-no-btn-qc');
+        return m ? +m.getBoundingClientRect().height.toFixed(1) : null;
+      });
+      if (ln === 11) {
+        // 末行（块内 offset 9）：点倒数第二行（offset 8）区中心 + ArrowDown
+        const pt = await page.evaluate(() => {
+          const m = document.querySelector('.wysiwyg-block-mask.wysiwyg-mask-no-btn-qc');
+          const r = m.getBoundingClientRect();
+          return { x: r.x + 120, y: r.top + ((8 + 0.5) / 9) * r.height };
+        });
+        await page.mouse.click(pt.x, pt.y);
+        await page.waitForTimeout(500);
+        await page.keyboard.press('ArrowDown');
+      } else {
+        const pt = await page.evaluate((k) => {
+          const m = document.querySelector('.wysiwyg-block-mask.wysiwyg-mask-no-btn-qc');
+          const r = m.getBoundingClientRect();
+          return { x: r.x + 120, y: r.top + ((k - 2 + 0.5) / 9) * r.height };
+        }, ln);
+        await page.mouse.click(pt.x, pt.y);
+      }
+      await page.waitForTimeout(500);
+      const m90 = await page.evaluate((k) => {
+        const cm = window.__s90cm;
+        const cur = cm.getCursor('head');
+        if (cur.line !== k) return { landed: cur.line, want: k };
+        const h = cm.getLineHandle(cur.line);
+        let pre = null;
+        for (const lv of cm.display.view) {
+          if (lv && lv.line === h) { const el = lv.node; pre = el.tagName === 'PRE' ? el : el.querySelector('pre'); break; }
+        }
+        const topM = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-top');
+        const botM = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-bottom');
+        const H = (el) => (el ? el.getBoundingClientRect().height : 0);
+        return {
+          landed: cur.line,
+          band: +((H(topM) + (pre ? pre.getBoundingClientRect().height : 0) + H(botM)).toFixed(1)),
+          cursorCls: pre ? pre.className.indexOf('wysiwyg-quote-cursor-line') >= 0 : false,
+          qcBg: pre ? getComputedStyle(pre).getPropertyValue('--qc-bg').trim() : '',
+        };
+      }, ln);
+      if (m90.band !== undefined) {
+        bands[ln] = { maskH, band: m90.band, qcBg: m90.qcBg, cursorCls: m90.cursorCls };
+        if (ln === 7) {
+          const s90shot = path.join(root, 'screenshots', 's90-quote-cursor-line.png');
+          fs.mkdirSync(path.dirname(s90shot), { recursive: true });
+          await page.screenshot({ path: s90shot });
+          console.log('  截图: ' + path.relative(root, s90shot));
+        }
+      } else {
+        s90checks.push(['S90① 光标落行 ' + ln + '（mask 点击/ArrowDown）', false, 'landed=' + m90.landed]);
+      }
+    }
+    const allStable = Object.keys(bands).length === 10 && Object.values(bands).every(
+      (v) => Math.abs(v.band - v.maskH) <= 0.5 && v.cursorCls);
+    s90checks.push(['S90① 10 个光标行 band（seg-top+pre+seg-bottom）均 = 遮罩高（块高不随光标行跳变，容差 0.5px）', allStable,
+      JSON.stringify(Object.keys(bands).map((k) => bands[k].band)) + ' maskH=' + (bands[2] ? bands[2].maskH : '?')]);
+    const tintSet = new Set(Object.values(bands).map((v) => v.qcBg));
+    s90checks.push(['S90② 光标行底色统一（10 行 --qc-bg 同值 = color-mix 18% accent tint）',
+      tintSet.size === 1 && [...tintSet][0].indexOf('color-mix') >= 0, JSON.stringify([...tintSet])]);
+  }
+  {
+    // ③ 输入延迟：mask 点击落行尾（wysiwyg.js setSelection ch=行长）→ 行内输入 = 非结构编辑
+    await page.evaluate((d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s90pcm = cm; window.__s90ped = ed;
+      ed.settings.softBreaks = true;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      ed.renderWysiwygMasks();
+      window.__s90parseN = 0;
+      const orig = ed.computeWysiwygBlocks;
+      ed.computeWysiwygBlocks = function (...a) { window.__s90parseN++; return orig.apply(this, a); };
+    }, s90doc);
+    await page.waitForTimeout(500);
+    const pt3 = await page.evaluate(() => {
+      const m = document.querySelector('.wysiwyg-block-mask.wysiwyg-mask-no-btn-qc');
+      const r = m.getBoundingClientRect();
+      // 行 7（块内 offset 5，嵌套中间行）区中心
+      return { x: r.x + 120, y: r.top + ((5 + 0.5) / 9) * r.height };
+    });
+    await page.mouse.click(pt3.x, pt3.y);
+    await page.waitForTimeout(500);
+    await page.evaluate(() => {
+      const cm = window.__s90pcm;
+      for (let i = 0; i < 5; i++) { const p = cm.getCursor('head'); cm.replaceRange('字', p, p, 'input'); }
+    });
+    await page.waitForTimeout(600); // > 250ms 防抖
+    const safeN = await page.evaluate(() => window.__s90parseN);
+    await page.evaluate(() => { window.__s90pcm.replaceSelection('\n', null, 'input'); });
+    await page.waitForTimeout(600);
+    const enterN = await page.evaluate(() => window.__s90parseN);
+    s90checks.push(['S90③ 行内输入 5 字 + 250ms 停顿 → 零整篇重解析（parseN=' + safeN + '）', safeN === 0]);
+    s90checks.push(['S90③ 结构性编辑（Enter 拆行）仍触发重解析（parseN ' + safeN + '→' + enterN + '）', enterN >= safeN + 1]);
+  }
+  for (const [label, ok, extra] of s90checks) {
+    console.log(`  ${ok ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    if (!ok) fail++;
+  }
+
   if (errors.length) {
     console.log('\n页面错误:');
     for (const e of errors) console.log('  ' + e);

@@ -3587,8 +3587,17 @@
       const inQuote = !!(ab && line >= ab.start && line < ab.end
         && RE.quote.test(((this.cm.getLine(line) || '').trimStart())));
       const nextQuote = inQuote ? line : null;
-      if (prevQuote != null && prevQuote !== nextQuote) this._setWysiwygQuoteCurClass(prevQuote, false);
-      if (nextQuote != null && nextQuote !== prevQuote) this._setWysiwygQuoteCurClass(nextQuote, true);
+      if (prevQuote != null && prevQuote !== nextQuote) {
+        this._setWysiwygQuoteCurClass(prevQuote, false);
+        this._setWysiwygQuoteCurPad(prevQuote, false);
+      }
+      if (nextQuote != null && nextQuote !== prevQuote) {
+        this._setWysiwygQuoteCurClass(nextQuote, true);
+        this._setWysiwygQuoteCurPad(nextQuote, true, ab);
+      }
+      // 光标停留同行但块结构变化（回车增行/退格删行改动了行内位置）→ 上下间隙类重判
+      //（幂等值差：值未变即 no-op，不触发行重渲染）
+      if (nextQuote != null && nextQuote === prevQuote) this._setWysiwygQuoteCurPad(nextQuote, true, ab);
       this._wysiwygQuoteCurLine = nextQuote;
       // —— callout 光标行类（2026-10-25 分段口径）：活动块是 callout（首行 [!TYPE]）时，
       //    光标行的 > 槽竖条/底色按 callout 类型配色（与上下分段遮罩 .alert 盒同一色板）。
@@ -3644,6 +3653,67 @@
     // 控制该行 > 槽字符可见）。
     _setWysiwygQuoteCurClass(n, on) {
       this._setWysiwygCurLineClass(n, 'wysiwyg-quote-cursor-line', on);
+    },
+
+    // 光标行上下间隙动态类（2026-10-28 S90 问题 1：用户截图「光标到不同的行，引用块被撑开
+    // 和收缩、高度变化」）。根因 = 光标源行盒高与其替换的渲染行不一致（实测：嵌套中间行
+    // +24px、层级组边界段落距 -14px，块总高随光标行 ±19px）。渲染几何（softBreaks 逐行）：
+    // · 同层级相邻行 = 同一 <p> 内软换行 → 行间无间隙；
+    // · 嵌套盒首行上方 = 14px（外层 <p> margin-bottom）+ 12px（盒 padding-top）；
+    // · <p> 末行下方接嵌套盒 = 14px（该 <p> margin-bottom；盒 padding-top 在底段遮罩内）；
+    // · 嵌套盒末行下方接外层行 = 12px（盒 padding-bottom）+ 16px（盒 margin-bottom）——盒在
+    //   接缝处 open（seg-open 规则清两侧 padding），两段遮罩都不含 → 源行自担。
+    // 边缘行（块首/末）维持 edge 类固定 padding（S85/S86 口径）→ 不挂本类。类挂 pre
+    // （'text' 域，与光标行类同口径），值差幂等防重渲染。
+    _setWysiwygQuoteCurPad(n, on, b) {
+      const cm = this.cm;
+      if (!cm || n == null) return;
+      const CLS = ['wysiwyg-quote-cur-tp-0', 'wysiwyg-quote-cur-tp-26', 'wysiwyg-quote-cur-bp-0', 'wysiwyg-quote-cur-bp-14', 'wysiwyg-quote-cur-bp-28'];
+      let h = null;
+      try { h = cm.getLineHandle(n); } catch (_) { return; }
+      if (!h) return;
+      // b = 调用点现算的活动块（sync 差分先于 setWysiwygActiveBlock 落地，
+      // this._wysiwygActiveIdx 此刻可能是旧块）
+      const key = on ? this._wysiwygQuoteCurPadKey(n, b) : 'off';
+      if (this._wysiwygQuoteCurPadLine === n && this._wysiwygQuoteCurPadVal === key) return;
+      for (const c of CLS) {
+        try { cm.removeLineClass(h, 'text', c); } catch (_) { /* 行已销毁 */ }
+      }
+      if (on && key !== 'off') {
+        const p = key.split('-');
+        if (p[1] !== 'off') cm.addLineClass(h, 'text', 'wysiwyg-quote-cur-tp-' + p[1]);
+        if (p[3] !== 'off') cm.addLineClass(h, 'text', 'wysiwyg-quote-cur-bp-' + p[3]);
+      }
+      this._wysiwygQuoteCurPadLine = n;
+      this._wysiwygQuoteCurPadVal = key;
+    },
+
+    // 光标行上下间隙取值：'tp-X-bp-Y'（off = 该侧维持静态 edge 规则）；'off' = 单行块/不在块内。
+    // · pt：顶缘行（块首）静态 12N 恰为渲染值（盒链 padT，无块上内容）→ 不动；其余行
+    //   上一行同层 = 同一 <p> 软换行（间隙 0）、上一行浅一层 = 嵌套盒顶（14 <p> 距 + 12 盒 pad）。
+    //   ⚠️ 嵌套 edge-bottom 行静态 pt=12（nested 类）在两种情况下都错（同层应 0 / 浅层应 26）→ 必须动态。
+    // · pb：底缘行（块末）静态 28N 恰为渲染值（盒链 padB + 整盒底距 16）→ 不动；其余行
+    //   下一行同层 = 0、下一行深一层 = 14（本 <p> 距，盒 padT 在下段遮罩内）、下一行浅一层
+    //   = 28（本嵌套盒末 12+16，盒在接缝 open、两段遮罩都不含 → 源行自担）。
+    //   ⚠️ 嵌套 edge-top 行静态 pb=12 在下一行同层时应 0、深一层时应 14 → 必须动态。
+    _wysiwygQuoteCurPadKey(n, b) {
+      const cm = this.cm;
+      if (!b || n < b.start || n >= b.end) return 'off';
+      if (n === b.start && n === b.end - 1) return 'off'; // 单行块：静态 pt 12N / pb 28N 之和恰为渲染值
+      const lvlOf = (ln) => {
+        let t = '';
+        try { t = cm.getLine(ln) || ''; } catch (_) { t = ''; }
+        const m = /^(\s*(?:>[ \t]?)+)/.exec(t);
+        return m ? (m[1].match(/>/g) || []).length : 0;
+      };
+      const L = lvlOf(n);
+      let pt = 'off', pb = 'off';
+      if (n !== b.start) pt = (lvlOf(n - 1) === L - 1) ? 26 : 0;
+      if (n !== b.end - 1) {
+        const nl = lvlOf(n + 1);
+        pb = (nl === L + 1) ? 14 : (nl === L - 1) ? 28 : 0;
+      }
+      return 'tp-' + pt + '-bp-' + pb;
     },
 
     // callout 光标行类（2026-10-25 分段口径，同日改版：类型类 alert-{type} →
@@ -4014,16 +4084,86 @@
 
     // 输入停止后补齐：重算块划分并对非活动块刷新渲染结果。
     // 输入期间只更新行索引缓存（极廉价），把昂贵的渲染推迟到这里。
-    refreshWysiwygBlocks() {
+    // S90 问题 3（2026-10-28 用户「在引用块中输入文字时要等一会才能显示出来」）：判定一次
+    // 变更是否为「不触碰行首结构的纯行内文本编辑」。块边界只由 ① 行数 ② 各行行首结构
+    // （空行/引用·#·列表·围栏前缀/setext 下划线/水平线/HTML 块）决定——单行、行数不变、
+    // 编辑起点严格晚于行首结构区 → 行类型与块成员关系不变，块表无需重解析（整篇 remark
+    // 重解析实测 5000 行约 1s，250ms 输入停顿即触发、中文 IME 每次候选上屏停顿都触发，
+    // 主线程阻塞是感知延迟主因）。保守口径：拿不准一律 unsafe（照常重解析）。
+    _wysiwygChangeIsBoundarySafe(c) {
+      if (!c || !c.from || !c.to || !Array.isArray(c.text)) return false;
+      if (c.from.line !== c.to.line) return false;
+      if (c.text.length !== 1) return false; // 行数不变（多行替换 = 增/删行）
+      const cm = this.cm;
+      if (!cm) return false;
+      const L = c.from.line;
+      let line = '';
+      try { line = cm.getLine(L) || ''; } catch (_) { return false; }
+      if (line.trim() === '') return false; // 行被编辑成空行 = 块边界必变（空行分隔块）
+      return c.from.ch > this._wysiwygStructuralPrefixLen(line);
+    },
+
+    // 行的行首结构区长度（编辑必须严格晚于它）；整行结构化的行返回 MAX_SAFE_INTEGER
+    //（该行任何编辑都 unsafe）。行按**变更后**状态读：结构未变时前后结构区一致；编辑若已
+    // 破坏行首结构（如删 >），from.ch 会落回新行首结构区之内 → 判 unsafe。
+    _wysiwygStructuralPrefixLen(line) {
+      const ALL = Number.MAX_SAFE_INTEGER;
+      if (/^\s{0,3}(`{3,}|~{3,})/.test(line)) return ALL;             // 围栏定界行（删反引号可开/合围栏）
+      if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) return ALL;  // 水平线 ---/***/___
+      if (/^\s{0,3}([=-])+\s*$/.test(line)) return ALL;               // setext 下划线 ===/---
+      if (/^\s{0,3}([-*+]|\d{1,9}[.)])\s*$/.test(line)) return ALL;   // 无内容列表标记（编辑可成列表项）
+      if (/^\s{0,3}</.test(line)) return ALL;                         // HTML 块开行
+      const hm = /^\s{0,3}#{1,6}[ \t]/.exec(line);                    // 非空 ATX 标题：编辑在正文内安全
+      if (hm) {
+        if (line.length > hm[0].length) return hm[0].length;
+        return ALL;                                                   // 空标题（# / # 空格）
+      }
+      let i = 0;
+      while (i < line.length && i < 3 && (line[i] === ' ' || line[i] === '\t')) i++;
+      if (line[i] === '>') {
+        // 引用：结构区 = 行首 > 连跑（含其间的空格）；编辑只需晚于最后一个 >
+        //（> 后空格非结构：`>x` 同为有效引用，删该空格不改层级）
+        let lastGt = -1;
+        while (i < line.length) {
+          if (line[i] === '>') { lastGt = i; i++; }
+          else if (line[i] === ' ' || line[i] === '\t') i++;
+          else break;
+        }
+        return lastGt + 1;
+      }
+      const lm = /^\s{0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/.exec(line);
+      if (lm) return lm[0].length; // 列表标记 + 分隔空格：其后 = 项正文
+      return i;                    // 普通文本/缩进代码：前导空白之后编辑保持行类型
+    },
+
+    // c 可空（compositionend 兜底/历史调用）= 无法判定 → 按 unsafe 计
+    refreshWysiwygBlocks(c) {
       if (this.viewMode !== 'wysiwyg' || !this.cm) return;
+      this._wysiwygLastChange = c || null;
       if (this._wysiwygMaskTimer) clearTimeout(this._wysiwygMaskTimer);
+      // 安全标志累积：自上次解析以来的**所有**变更都安全才可跳过重解析
+      if (this._wysiwygSafeSinceParse == null) this._wysiwygSafeSinceParse = true;
+      if (!this._wysiwygChangeIsBoundarySafe(c)) this._wysiwygSafeSinceParse = false;
       const self = this;
       this._wysiwygMaskTimer = setTimeout(() => {
         self._wysiwygMaskTimer = null;
         if (self.viewMode !== 'wysiwyg') return;
-        // IME 组合期间重排会打断输入法导致吞字：顺延到 compositionend（那里会再调本方法）
+        // IME 组合期间重排会打断输入法导致吞字：顺延到 compositionend（那里会再调本方法）。
+        // 透传最近变更保留安全判定（无参重调会把中文组合期安全编辑误判 unsafe、
+        // 停顿后强制整篇重解析）。
         if (self._wysiwygComposing) {
-          self.refreshWysiwygBlocks();
+          self.refreshWysiwygBlocks(self._wysiwygLastChange);
+          return;
+        }
+        // S90 问题 3：块边界未变 → 跳过重解析 + 重键 + 重挂遮罩，只跑轻量尾
+        //（decor/分段/高亮均为幂等 no-op 或廉价重刷）。
+        const safeSkip = !!(self._wysiwygBlocks && self._wysiwygSafeSinceParse && !self._wysiwygCellEditing);
+        self._wysiwygSafeSinceParse = true; // 消耗（无论跳过与否，基线已对齐）
+        if (safeSkip) {
+          self._applyWysiwygActiveHighlight();
+          self._wysiwygApplyActiveDecor(self._wysiwygActiveIdx);
+          self._wysiwygApplyQuoteSegments();
+          self._applyWysiwygSelectionMaskClasses();
           return;
         }
         // 全量模式：只重切块边界（仅解析、轻）+ 仅重挂源文变化的块——万行文档
