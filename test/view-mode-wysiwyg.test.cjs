@@ -1209,40 +1209,74 @@ test('引用 + 行内语法渲染化：活动块 > 前缀灰显/左竖条，行�
     '遮罩 mark 竖 padding 须 0 + box-shadow ±1px（视觉盒 ≡ 渲染 mark、行盒不变，S97）');
 });
 
-test('行内代码双反引号 code span + 边缘空格剥离（2026-10-29 S93：demo.md `` ` `` 行编辑态 ≡ 渲染态）', () => {
+test('行内代码 backtick 状态机 + 边缘空格剥离 + 语法边界对齐渲染态（2026-10-29 S93/S98）', () => {
   const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   const pIdx = wsrc.indexOf('function parseWysiwygInlineSpans(text) {');
   assert.ok(pIdx > 0, '缺 parseWysiwygInlineSpans');
-  const pblk = wsrc.slice(pIdx, pIdx + 4200);
-  // 双反引号分支内容须允许孤立反引号（CommonMark backtick string）：旧 `[^`\n]+` 使
-  // `` ` `` 失配 → 单引号分支整行级联误配（假 chip + 相邻代码 span 丢 chip，S93 复现）
-  assert.match(pblk, /reCode = \/``\(\[\^`\\n\]\*\(\?:`\[\^`\\n\]\+\)\*\)``\|`\(\[\^`\\n\]\+\)`\//,
-    'reCode 双反引号分支不容内容反引号（`` ` `` 失配会级联误配整行）');
+  const pblk = wsrc.slice(pIdx, pIdx + 6000);
+  // S98：code span = CommonMark backtick run 状态机（数 run 长 N → 恰为 N 的 run 闭合 →
+  // 失败整 run 字面量、run 尾继续）；旧 reCode 正则的左起匹配错位与内容式残差已被取代
+  assert.match(pblk, /const codeSpanAt = \(pos\)/, '缺 code span backtick run 状态机（S98）');
+  assert.match(pblk, /if \(r === n\)/, 'code span 闭合须为「恰为 N」的 run（```a`` 不被双闭合，≡ remark）');
+  // S98：正则分支须「就地」匹配（左起匹配恰在 slice 0）——旧实现把 index>0 的匹配按
+  // start=i 消费 → **x* / [a [b](c) / `` `a` 三类 span 整体错位（编辑态 ≠ 渲染态）
+  assert.match(pblk, /return \(m && m\.index === 0\) \? m : null;/,
+    '缺语法分支 index-0 守卫（S98：触发字符处不就地成语法时不得消费后续匹配）');
   // CommonMark 边缘空格规则：内容首尾空格（非全空格）各剥一个，chip 宽 ≡ 渲染 <code>
   assert.match(pblk, /cTo - cFrom >= 2 && s\.charAt\(cFrom\) === ' ' && s\.charAt\(cTo - 1\) === ' ' && s\.slice\(cFrom \+ 1, cTo - 1\)\.trim\(\) !== ''/,
     '缺 code span CommonMark 边缘空格剥离（编辑态 chip 比渲染 <code> 宽，编辑≠渲染）');
-  // 行为（同 L1273 guardMathBlocks 提取先例：纯函数、无闭包依赖，直接从源提取执行）
+  // 行为（同 guardMathBlocks 提取先例：纯函数、无闭包依赖，直接从源提取执行）
   const eIdx = wsrc.indexOf('\n  const mixin = {', pIdx);
   assert.ok(eIdx > pIdx, 'parseWysiwygInlineSpans 函数尾未定位');
   const fnSrc = wsrc.slice(pIdx, eIdx).trim();
   const fn = eval('(' + fnSrc + ')');
   assert.equal(typeof fn, 'function', '提取的 parseWysiwygInlineSpans 不是函数');
+  const codes = (t) => fn(t).filter((x) => x.cls === 'wysiwyg-inline-code');
+  // —— S93 回归 ——
   const t1 = '用 `` ` `` 包裹';
-  const c1 = fn(t1).filter((x) => x.cls === 'wysiwyg-inline-code');
-  assert.equal(c1.length, 1, '`` ` `` 应恰产生 1 个 code span（修复前为 3 个跨行级联假 span）');
+  const c1 = codes(t1);
+  assert.equal(c1.length, 1, '`` ` `` 应恰产生 1 个 code span（S93 修复前为跨段级联假 span）');
   assert.equal(t1.slice(c1[0].from, c1[0].to), '`', 'code span 内容 = 单反引号（边缘空格剥离，≡ 渲染 <code>`</code>）');
   const t2 = '变量名 `userName`、命令 `npm install`';
-  const c2 = fn(t2).filter((x) => x.cls === 'wysiwyg-inline-code');
-  assert.deepEqual(c2.map((x) => t2.slice(x.from, x.to)), ['userName', 'npm install'],
+  assert.deepEqual(codes(t2).map((x) => t2.slice(x.from, x.to)), ['userName', 'npm install'],
     '单引号代码 span 回归（修复前该两 span 的反引号被 `` ` `` 失配后的级联吞掉）');
   const t3 = '前 ` b ` 后';
-  const c3 = fn(t3).filter((x) => x.cls === 'wysiwyg-inline-code');
-  assert.equal(c3.length, 1, '单引号 code span 数');
-  assert.equal(t3.slice(c3[0].from, c3[0].to), 'b', '单引号 code span 边缘空格剥离（CommonMark，≡ 渲染）');
+  assert.equal(codes(t3).length, 1, '单引号 code span 数');
+  assert.equal(t3.slice(codes(t3)[0].from, codes(t3)[0].to), 'b', '单引号 code span 边缘空格剥离（CommonMark，≡ 渲染）');
   const t4 = '`**text**` 与 **粗体**';
-  const c4 = fn(t4).filter((x) => x.cls === 'wysiwyg-inline-code');
-  assert.deepEqual(c4.map((x) => t4.slice(x.from, x.to)), ['**text**'], '回归：`**text**` 代码 span 内容不变');
+  assert.deepEqual(codes(t4).map((x) => t4.slice(x.from, x.to)), ['**text**'], '回归：`**text**` 代码 span 内容不变');
   assert.ok(fn(t4).some((x) => x.cls === 'wysiwyg-bold'), '回归：bold span 不受扫描器改动影响');
+  const t4b = 'a `b``c` d';
+  assert.deepEqual(codes(t4b).map((x) => t4b.slice(x.from, x.to)), ['b``c'],
+    'S98：短于开 run 的反引号在内容内（`b``c` ≡ 渲染 <code>b``c</code>，旧正则错拆两 chip）');
+  // —— S98：语法边界对齐渲染态（≡ remark 渲染输出实测）——
+  const t5 = '**x*';
+  const it5 = fn(t5).filter((x) => x.cls === 'wysiwyg-italic');
+  assert.equal(it5.length, 1, '**x* 应恰 1 个 italic span');
+  assert.equal(t5.slice(it5[0].from, it5[0].to), 'x', '**x* 斜体须精确落 x（S98 前落在第 2 个 * 上，≠ 渲染 *<em>x</em>）');
+  assert.equal(fn(t5).filter((x) => x.cls === 'wysiwyg-bold').length, 0, '**x* 不成 bold（渲染亦无 strong）');
+  const t6 = '[a [b](c)';
+  const lk6 = fn(t6).filter((x) => x.cls === 'wysiwyg-inline-link');
+  assert.equal(lk6.length, 1, '[a [b](c) 应恰 1 个 link span');
+  assert.equal(t6.slice(lk6[0].from, lk6[0].to), 'b', '[a [b](c) 链接须精确落 b（S98 前 a 着链接色，≠ 渲染 [a <a>b</a>）');
+  const t7 = '`` `a` 尾巴';
+  const c7 = codes(t7);
+  assert.equal(c7.length, 1, '`` `a` 应恰 1 个 code span（S98 前孤立反引号上出假 chip）');
+  assert.equal(t7.slice(c7[0].from, c7[0].to), 'a', '`` `a` = 字面 `` 后 `a` 成 span（≡ 渲染 `` <code>a</code>）');
+  assert.equal(codes('```a`` b').length, 0, '```a`` 无 code span（三重 run 无三重闭合 = 全字面量，≡ 渲染）');
+  const t8 = '~~a ~b~';
+  assert.equal(fn(t8).filter((x) => x.cls === 'wysiwyg-strike').length, 0, '~~a ~b~ 不成删除线（渲染全字面）');
+  const t9 = '==a =b=';
+  assert.equal(fn(t9).filter((x) => x.cls === 'wysiwyg-highlight').length, 0, '==a =b= 不成高亮（渲染全字面）');
+  const t10 = '_x _y_';
+  const it10 = fn(t10).filter((x) => x.cls === 'wysiwyg-italic');
+  assert.equal(it10.length, 1, '_x _y_ 应恰 1 个 italic span');
+  assert.equal(t10.slice(it10[0].from, it10[0].to), 'y', '_x _y_ 斜体须精确落 y（≡ 渲染 _x <em>y</em>）');
+  // —— 常规回归（S98 改动不伤正常匹配）——
+  const t11 = '**粗体** 和 *斜体* 和 ~~删除~~ 和 ==高亮== 和 [链接](url) 和 <u>下划</u>';
+  assert.deepEqual(fn(t11).filter((x) => !x.cls.endsWith('marker')).map((x) => t11.slice(x.from, x.to)),
+    ['粗体', '斜体', '删除', '高亮', '链接', '下划'], '六类语法 span 内容回归');
+  assert.equal(fn('snake_case 不变').length, 0, 'snake_case 词内守卫回归');
 });
 
 test('底部滚动余量：padding-bottom 50vh 且特异性须压过 codemirror.css（2026-10-14 + 2026-10-17 真机：文末贴底缘）', () => {
@@ -2342,7 +2376,7 @@ test('下划线渲染化：<u> 原生 HTML 标签在编辑态同渲染观感（2
   const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
   const pIdx = wsrc.indexOf('function parseWysiwygInlineSpans(text) {');
   assert.ok(pIdx > 0, '缺 parseWysiwygInlineSpans');
-  const pblk = wsrc.slice(pIdx, pIdx + 4200);
+  const pblk = wsrc.slice(pIdx, pIdx + 6000);
   assert.match(pblk, /reUnderline = \/\^<u>\(\[\^<\\n\][+]\)<\\\/u>\//, '缺 <u></u> 行内形态正则（单标签成对、不含嵌套标签/换行）');
   assert.match(pblk, /kind = 'underline'/, '缺 underline 分支');
   assert.match(pblk, /push\(start, start \+ 3, 'wysiwyg-inline-marker'\);[\s\S]{0,120}push\(start \+ 3, end - 4, 'wysiwyg-underline'\);/,
@@ -3522,4 +3556,15 @@ test('S94 引用光标行高亮 = 统一实色灰带（2026-10-29 用户截图�
   assert.match(driver, /S94③ 高亮宽度 ≡ 内容所在引用块（4 位置带左右缘 = 渲染同级盒左右缘，Δ≤1px）/);
   assert.match(driver, /S94④ 块高 = 遮罩高（S90① 不变式：高亮改动不破坏块高稳定，容差 0\.5px）/);
   assert.match(driver, /S90② 高亮几何（S94：带顶\/底 ≡ 行 padding、带高 27\.2 各行一致、带左右 ≡ 最内层盒）/);
+});
+
+test('S98 行内语法 span 边界对齐：驱动回归接线（编辑态 span 序列 ≡ 渲染参照）', () => {
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // S98 场景：5 单行段落块（空行隔离 → 4 遮罩作渲染参照），逐条断言光标行 span 序列
+  assert.match(driver, /=== S98：行内语法 span 边界对齐渲染态（编辑态 ≡ 渲染态） ===/);
+  assert.match(driver, /S98① \*\*x\* 斜体精确落 x（首 \* 素文本，≡ 渲染 \*<em>x<\/em>）/);
+  assert.match(driver, /S98② \[a \[b\]\(c\) 链接精确落 b（S98 前 a 着链接色）/);
+  assert.match(driver, /S98③ `` `a` 尾巴 code 精确落 a（≡ 渲染 `` <code>a<\/code>）/);
+  assert.match(driver, /S98④ ```a`` 全字面量（无 code span，≡ 渲染）/);
+  assert.match(driver, /S98⑤ 回归行 \*\*粗体\*\* bold span 不变/);
 });

@@ -403,13 +403,24 @@
   // 行内语法渲染化 span 扫描（2026-10-14 用户要求，Typora 式行内）：对活动块的一行源文
   // 单遍扫描产品支持的行内语法，返回 [{ from, to, cls }] text marker 段表：
   //   标记段（** / * / _ / ` / [ ] (url) / ~~ / == / <u></u>）→ wysiwyg-inline-marker
-  //     （透明、**保留真实宽度**——光标测量精准，2026-10-14 列表符号 width:0 裁掉
-  //      ::before 的教训同此：绝不用 width:0/overflow:hidden）
+  //     （双态：非光标行 width:0 零宽 + 透明 = 渲染化外观；光标行 width:auto + 次级色
+  //      = 源码显示——2026-10-21 S58，见 styles.css .wysiwyg-inline-marker 基础规则与
+  //      pre.wysiwyg-inline-cursor-line 覆盖规则）
   //   文本段 → wysiwyg-bold / wysiwyg-italic / wysiwyg-inline-code / wysiwyg-strike /
   //     wysiwyg-highlight / wysiwyg-underline / wysiwyg-inline-link
   //     （观感对齐 preview-content 对应元素）
   // 优先级：行内代码 > 链接 > 粗体 > 斜体 > 删除线 > 高亮 > 下划线；按位置顺序消费、
   // 不重叠（MVP 不做嵌套，如 **a `b` c** 整段按粗体；<u>**x**</u> 整段按下划线）。
+  // S98（2026-10-29 代码审查：编辑态 ≠ 渲染态三组实测定位）：触发字符必须「就地」成语法
+  // 才消费——正则分支要求左起匹配恰在 slice 0（m.index===0），反引号分支为 CommonMark
+  // backtick run 状态机；旧实现把左起匹配按 start=i 直接消费、不校验 m.index → 触发字符
+  // 处无法就地成语法而 slice 更后存在合法语法时 span 整体错位（**x* 斜体落错字符 /
+  // [a [b](c) 假链接色 / `` `a` 孤立反引号假 chip）；i++ 到真实起点处重新按 index 0
+  // 匹配即得正确 span。
+  // 已知残差（如实声明）：* / _ 为简化正则匹配，未实现完整 CommonMark 定界符栈
+  // （flanking/三倍数规则）——邻接定界符组如 *x **y** 的配对语义会与渲染态有差
+  // （编辑态 em("x ")+ital("y") vs 渲染 "*x " 字面 + strong("y")）；边界错位已修，
+  // 此为罕见输入的语义配对残差（修复前该输入更糟：bold 落在 " **" 上）。
   // 图片行 ![]() 不解析（图片活动态是独立机制）；下划线变体加词内守卫（snake_case
   // 不误判）；<u> 为渲染器放行的原生 HTML 标签（unified-renderer L1514），仅单标签
   // 成对、不含嵌套标签/换行的行内形态参与装饰。围栏块/表格/frontmatter 由调用方
@@ -419,15 +430,6 @@
     if (text == null) return spans;
     const s = String(text);
     const push = (from, to, cls) => { if (to > from) spans.push({ from: from, to: to, cls: cls }); };
-    // 行内代码（S93，2026-10-29 用户截图 demo.md 松散列表「行内代码」行）：双反引号分支
-    // 内容须允许孤立反引号（CommonMark backtick string：内容可含短于定界串的反引号，
-    // 以「双反引号对」为闭合边界）。旧 `[^`\n]+` 使 `` ` ``（双反引号包单反引号）失配，
-    // 单引号分支随后整行级联误配（" " / " 包裹 — 变量名 " 等假 chip、userName/npm install
-    // 的反引号被吞作定界符丢 chip、光标行裸露反引号——编辑态 ≠ 渲染态）。内容式 =
-    // 非反引号段 +（单反引号 + ≥1 个非反引号段）×n：每个内容反引号后须跟非反引号，
-    // 连续双反引号只能是闭合边界（`` ``` 类病态边缘按 MVP 提前闭合，与渲染态残差
-    // 为罕见输入，注释如实声明）。
-    const reCode = /``([^`\n]*(?:`[^`\n]+)*)``|`([^`\n]+)`/;
     const reLink = /\[([^\[\]\n]+)\]\(([^()\n]*)\)/;
     const reBoldStar = /\*\*([^*\n]+)\*\*/;
     const reBoldUnder = /__([^_\n]+)__/;
@@ -438,27 +440,74 @@
     const reUnderline = /^<u>([^<\n]+)<\/u>/;
     // 下划线变体词内守卫：前/后邻接字母数字下划线即视为标识符（snake_case），不成语法
     const isWordish = (ch) => !!ch && /[A-Za-z0-9_]/.test(ch);
+    // S98：CommonMark 边缘空格规则（S93 沿用）：内容首尾各带一个空格（且非全空格）→
+    // 各剥掉一个，与渲染 <code> 文本一致（remark 同剥）→ 编辑态 chip 宽度 ≡ 渲染态
+    // （`` ` `` chip 只包单反引号；剥掉的空格留在 marker span 内，保真实宽度）。
+    const stripEdge = (cFrom, cTo) => {
+      if (cTo - cFrom >= 2 && s.charAt(cFrom) === ' ' && s.charAt(cTo - 1) === ' ' && s.slice(cFrom + 1, cTo - 1).trim() !== '') {
+        return [cFrom + 1, cTo - 1];
+      }
+      return [cFrom, cTo];
+    };
+    // 行内代码（S93 2026-10-29 用户截图 demo.md 松散列表「行内代码」行 + S98 状态机化）：
+    // CommonMark backtick string 口径（≡ remark/渲染器，2026-10-29 渲染输出实测对齐）：
+    //   a. 从反引号起数连续 run 长度 N（`` ``` 的 N=3）；
+    //   b. 向后扫描「恰为 N」的 run 作闭合边界（更长的 run 不算：```a`` 不被双闭合）；
+    //   c. 内容可含短于 N 的反引号 run（S93 能力保留：`` ` `` → chip 内容单反引号）；
+    //   d. 找不到闭合 → 整个 run 是字面量、i 移到 run 尾继续解析（其后更短 run 可另起
+    //      span：`` `a` → `` 字面 + `a` 成 span，≡ 渲染器实测）。
+    // 旧 reCode 正则两缺陷被取代：① 双反引号内容式不覆盖孤立反引号邻接的更多形态；
+    // ② 与其余正则分支同病——左起匹配可能不在 slice 0 却被 start=i 消费（错位）。
+    const codeSpanAt = (pos) => {
+      let n = 0;
+      while (pos + n < s.length && s.charAt(pos + n) === '`') n++;
+      let j = pos + n;
+      while (j < s.length) {
+        if (s.charAt(j) !== '`') { j++; continue; }
+        let r = 0;
+        while (j + r < s.length && s.charAt(j + r) === '`') r++;
+        if (r === n) return { from: pos, to: j + r, cFrom: pos + n, cTo: j };
+        j += r;
+      }
+      return { from: pos, to: pos + n, literal: true };
+    };
+    // S98：正则只在「触发字符就地成语法」时返回匹配（左起匹配必须从 slice 0 开始）；
+    // index>0 = 语法始于位置 i 之后 → 本位置不消费，由 i++ 推进到真实起点处重新匹配。
+    const matchAt = (re, pos) => {
+      const m = re.exec(s.slice(pos));
+      return (m && m.index === 0) ? m : null;
+    };
     let i = 0;
     while (i < s.length) {
       let m = null;
       let kind = null;
       const c = s.charAt(i);
       if (c === '`') {
-        m = reCode.exec(s.slice(i));
-        if (m) kind = 'code';
+        const cs = codeSpanAt(i);
+        if (cs.literal) {
+          // 未闭合反引号 run = 字面量（无任何 span），run 尾继续解析
+          i = cs.to;
+          continue;
+        }
+        const sc = stripEdge(cs.cFrom, cs.cTo);
+        push(cs.from, sc[0], 'wysiwyg-inline-marker');
+        push(sc[0], sc[1], 'wysiwyg-inline-code');
+        push(sc[1], cs.to, 'wysiwyg-inline-marker');
+        i = cs.to;
+        continue;
       } else if (c === '[') {
         if (i > 0 && s.charAt(i - 1) === '!') { i++; continue; } // 图片行保持源码
-        m = reLink.exec(s.slice(i));
+        m = matchAt(reLink, i);
         if (m) kind = 'link';
       } else if (c === '*') {
-        m = reBoldStar.exec(s.slice(i));
+        m = matchAt(reBoldStar, i);
         if (m) kind = 'bold';
-        else { m = reItStar.exec(s.slice(i)); if (m) kind = 'ital'; }
+        else { m = matchAt(reItStar, i); if (m) kind = 'ital'; }
       } else if (c === '_') {
         // 词内守卫：开/闭 `_` 紧邻字母数字下划线 → 标识符（snake_case），不成语法
         if (!isWordish(s.charAt(i - 1))) {
-          const bM = reBoldUnder.exec(s.slice(i));
-          const tM = bM ? null : reItUnder.exec(s.slice(i));
+          const bM = matchAt(reBoldUnder, i);
+          const tM = bM ? null : matchAt(reItUnder, i);
           const picked = bM || tM;
           if (picked && !isWordish(s.charAt(i + picked[0].length))) {
             m = picked;
@@ -467,33 +516,19 @@
         }
         if (!m) { i++; continue; }
       } else if (c === '~') {
-        m = reStrike.exec(s.slice(i));
+        m = matchAt(reStrike, i);
         if (m) kind = 'strike';
       } else if (c === '=') {
-        m = reHighlight.exec(s.slice(i));
+        m = matchAt(reHighlight, i);
         if (m) kind = 'highlight';
       } else if (c === '<') {
-        m = reUnderline.exec(s.slice(i));
+        m = matchAt(reUnderline, i);
         if (m) kind = 'underline';
       }
       if (!m) { i++; continue; }
       const start = i;
       const end = i + m[0].length;
-      if (kind === 'code') {
-        const tick = (m[1] !== undefined) ? 2 : 1;
-        let cFrom = start + tick;
-        let cTo = end - tick;
-        // CommonMark 边缘空格规则（S93）：内容首尾各带一个空格（且非全空格）→ 各剥掉
-        // 一个，与渲染 <code> 文本一致（remark 同剥）→ 编辑态 chip 宽度 ≡ 渲染态
-        // （`` ` `` chip 只包单反引号；剥掉的空格留在 marker span 内，保真实宽度）。
-        if (cTo - cFrom >= 2 && s.charAt(cFrom) === ' ' && s.charAt(cTo - 1) === ' ' && s.slice(cFrom + 1, cTo - 1).trim() !== '') {
-          cFrom++;
-          cTo--;
-        }
-        push(start, cFrom, 'wysiwyg-inline-marker');
-        push(cFrom, cTo, 'wysiwyg-inline-code');
-        push(cTo, end, 'wysiwyg-inline-marker');
-      } else if (kind === 'link') {
+      if (kind === 'link') {
         push(start, start + 1, 'wysiwyg-inline-marker');
         push(start + 1, start + 1 + m[1].length, 'wysiwyg-inline-link');
         push(start + 1 + m[1].length, end, 'wysiwyg-inline-marker');

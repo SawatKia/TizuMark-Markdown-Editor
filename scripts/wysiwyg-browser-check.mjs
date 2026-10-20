@@ -8102,6 +8102,129 @@ try {
     }
   }
 
+  // ---------- S98: 行内语法 span 边界对齐渲染态（2026-10-29 代码审查发现的既有中危 bug） ----------
+  // 根因：parseWysiwygInlineSpans 各语法分支把正则左起匹配按 start=i 消费、不校验
+  // m.index===0 → 触发字符处无法就地成语法而 slice 更后存在合法语法时 span 整体错位
+  // （DOM 实测 **x* 斜体落错字符 / [a [b](c) a 着链接色 / `` `a` 孤立反引号假 chip；
+  // code span 旧 reCode 正则同病 + 内容式残差）。修复 = ① 各正则分支 index-0 守卫
+  // ② code span 改 CommonMark backtick run 状态机（恰为 N 的 run 闭合；未闭合 run 字面
+  // 量、run 尾继续）。文档 = 5 个单行段落块（空行隔离，各自独立遮罩作渲染参照；
+  // 行 6 ```a`` 经 renderMarkdownBlocks 实测为段落非围栏——info string 含反引号不合法）。
+  // 断言：每条病态行光标行的文本 span 序列（class:内容）≡ 渲染参照（遮罩 HTML）。
+  {
+    console.log('\n=== S98：行内语法 span 边界对齐渲染态（编辑态 ≡ 渲染态） ===');
+    const s98doc = [
+      '**x*',
+      '',
+      '[a [b](c)',
+      '',
+      '`` `a` 尾巴',
+      '',
+      '```a``',
+      '',
+      '常规 **粗体** 回归行',
+    ].join('\n');
+    const s98 = await page.evaluate(async (doc) => {
+      const { cm } = window.__makeWysiwygEditor(doc);
+      window.__s98cm = cm;
+      await new Promise((res) => setTimeout(res, 400));
+      const out = {};
+      const wrap = cm.getWrapperElement();
+      wrap.scrollIntoView({ block: 'start' });
+      await new Promise((res) => setTimeout(res, 300));
+      // 首块挂载自激活 → 4 个遮罩（块2..块5 = 行 2/4/6/8）
+      const masks = Array.from(wrap.querySelectorAll('.wysiwyg-block-mask'));
+      out.maskCount = masks.length;
+      // 渲染参照：mask[0]=行2 [a [b](c) / mask[1]=行4 `` `a` 尾巴 / mask[2]=行6 ```a``
+      out.refLink = masks[0] ? (masks[0].querySelector('a') || { textContent: null }).textContent : null;
+      out.refCode = masks[1] ? (masks[1].querySelector('code') || { textContent: null }).textContent : null;
+      out.refCodeCount = masks[2] ? masks[2].querySelectorAll('code').length : -1;
+      const ptOf = (mask) => {
+        const r = mask.getBoundingClientRect();
+        return { x: r.x + 40, y: r.y + 0.5 * r.height };
+      };
+      out.pt0 = masks[0] ? ptOf(masks[0]) : null;
+      out.pt1 = masks[1] ? ptOf(masks[1]) : null;
+      out.pt2 = masks[2] ? ptOf(masks[2]) : null;
+      out.pt3 = masks[3] ? ptOf(masks[3]) : null;
+      return out;
+    }, s98doc);
+    if (s98.maskCount !== 4 || !s98.pt0 || !s98.pt1 || !s98.pt2 || !s98.pt3) {
+      console.log('  ⚠ S98 初始化失败（masks=' + s98.maskCount + '）');
+      fail++;
+    } else {
+      // 光标行文本 span 序列（排除 marker：marker 是装饰段，断言只看文本段 class:内容）
+      const seqOfCursorLine = () => page.evaluate(() => {
+        const cm = window.__s98cm;
+        const cur = cm.getCursor('head');
+        const h = cm.getLineHandle(cur.line);
+        let pre = null;
+        for (const lv of cm.display.view) {
+          if (lv && lv.line === h) {
+            const el = lv.node;
+            pre = el.tagName === 'PRE' ? el : (el.querySelector ? el.querySelector('pre.CodeMirror-line') : null);
+            break;
+          }
+        }
+        if (!pre) return { err: '活动行 pre 未物化 line=' + cur.line };
+        const styled = Array.from(pre.querySelectorAll('span'))
+          .filter((sp) => /wysiwyg-(bold|italic|strike|highlight|underline|inline-code|inline-link)\b/.test(sp.className))
+          .map((sp) => {
+            const cls = Array.from(sp.classList).find((c) => c.indexOf('wysiwyg-') === 0);
+            return cls + ':' + sp.textContent;
+          });
+        return { line: cur.line, styled: styled };
+      });
+      const expect = (tag, got, wantLine, wantSeq, refNote) => {
+        if (got.err || got.line !== wantLine || JSON.stringify(got.styled) !== JSON.stringify(wantSeq)) {
+          fail++;
+          console.log('  ✗ ' + tag + '：got=' + JSON.stringify(got) + '（want line=' + wantLine + ' ' + JSON.stringify(wantSeq) + '；' + refNote + '）');
+          return false;
+        }
+        console.log('  ✓ ' + tag);
+        return true;
+      };
+      // ① 行 0 = **x*（显式落光标，确定性）：斜体精确落 x、无 bold（≡ 渲染 *<em>x</em>）
+      await page.evaluate(() => {
+        const cm = window.__s98cm;
+        cm.focus();
+        cm.setCursor({ line: 0, ch: 1 }, { scroll: false });
+      });
+      await page.waitForTimeout(500);
+      let g = await seqOfCursorLine();
+      expect('S98① **x* 斜体精确落 x（首 * 素文本，≡ 渲染 *<em>x</em>）', g, 0, ['wysiwyg-italic:x'], '渲染参照 mask 无此块（首块激活态）');
+      // ② 点 mask[0] → 行 2 = [a [b](c)：链接精确落 b（≡ 渲染 [a <a>b</a>）
+      await page.mouse.click(s98.pt0.x, s98.pt0.y);
+      await page.waitForTimeout(500);
+      g = await seqOfCursorLine();
+      if (expect('S98② [a [b](c) 链接精确落 b（S98 前 a 着链接色）', g, 2, ['wysiwyg-inline-link:b'], '渲染参照 link=' + s98.refLink) && s98.refLink !== 'b') {
+        fail++;
+        console.log('  ✗ S98② 渲染参照非 <a>b</a>：' + s98.refLink);
+      }
+      // ③ 点 mask[1] → 行 4 = `` `a` 尾巴：code 精确落 a（S98 前孤立反引号假 chip）
+      await page.mouse.click(s98.pt1.x, s98.pt1.y);
+      await page.waitForTimeout(500);
+      g = await seqOfCursorLine();
+      if (expect('S98③ `` `a` 尾巴 code 精确落 a（≡ 渲染 `` <code>a</code>）', g, 4, ['wysiwyg-inline-code:a'], '渲染参照 code=' + s98.refCode) && s98.refCode !== 'a') {
+        fail++;
+        console.log('  ✗ S98③ 渲染参照非 <code>a</code>：' + s98.refCode);
+      }
+      // ④ 点 mask[2] → 行 6 = ```a``：无 code span（三重 run 无三重闭合 = 全字面量，≡ 渲染）
+      await page.mouse.click(s98.pt2.x, s98.pt2.y);
+      await page.waitForTimeout(500);
+      g = await seqOfCursorLine();
+      if (expect('S98④ ```a`` 全字面量（无 code span，≡ 渲染）', g, 6, [], '渲染参照 codeCount=' + s98.refCodeCount) && s98.refCodeCount !== 0) {
+        fail++;
+        console.log('  ✗ S98④ 渲染参照含 code：' + s98.refCodeCount);
+      }
+      // ⑤ 点 mask[3] → 行 8 = 常规 **粗体**：bold span 不变（S98 改动不伤正常匹配）
+      await page.mouse.click(s98.pt3.x, s98.pt3.y);
+      await page.waitForTimeout(500);
+      g = await seqOfCursorLine();
+      expect('S98⑤ 回归行 **粗体** bold span 不变', g, 8, ['wysiwyg-bold:粗体'], '常规匹配回归');
+    }
+  }
+
   if (errors.length) {
     console.log('\n页面错误:');
     for (const e of errors) console.log('  ' + e);
