@@ -7038,6 +7038,230 @@ try {
     if (!ok) fail++;
   }
 
+  // === S91：引用长行换行留距 + 嵌套弹级渲染修复（2026-10-28 用户反馈）===
+  // ① 光标行长引用自动换行：续行贴盒左边缘（无边距）且右缘到盒右缘（无 20px 留距），
+  //    与渲染态文本域（左 24N 槽宽、右留 20N 内边距）不一致。修法二版（纯盒模型，
+  //    2026-10-29）：光标行 pre padding-left=32+24N / padding-right=32+20N（内容盒 =
+  //    渲染 N 层文本域 [32+24N, 668−20N]）+ 首个 > 槽负 margin(−24N) 回盒左缘。
+  //    ⚠️ 一版（wysiwyg-quote-text span 改 inline-block 限宽）已废：该 span 类挂在
+  //    CM5 按 wikilink 等装饰拆分的每个片段 span 上，逐 span 限宽 = 每片段独占一行
+  //    → 含 [导出功能|#导出功能] 的长行布局爆炸（用户 2026-10-29 截图「格式乱了」）。
+  //    本场景 doc1 = 用户实含 wikilink 的语法演示行（回归点）。
+  // ② 嵌套引用内输入后回车弹级（S87）：seg 缓存键缺「光标行层级」→ 层级变化时早退、
+  //    残留 seg-open-N 旧类 → 应闭合的嵌套盒保持开放（pb/mb/圆角全 0、块高 −28px）。
+  //    修法 = _wysiwygSegState 键加入 curLvl。
+  // ③ 渲染器层级回退（> > c 后 > d）：CommonMark 惰性延续把 d 并进嵌套盒 P（用户输入
+  //    的外层行在渲染态「消失」进嵌套盒）。修法 = normalizeListIndentation 在回退行前
+  //    插一行目标层级空引用行（'>'×L，不产生节点），渲染 = 层级感知分块（编辑态口径）。
+  // ④ 弹级态 band == 遮罩高（S90 不变式在层级回退态成立：seg-top 含嵌套盒闭合距、
+  //    光标行 pt0/pb28）。
+  console.log('\n=== S91：引用长行换行留距 + 嵌套弹级渲染修复（2026-10-28 用户反馈）===');
+  const s91checks = [];
+  {
+    // ① 长行换行几何（实测口径：pre 内容宽 636，行高 27.2）
+    // doc1 = 用户 2026-10-29 实含 wikilink 的长行（CM5 按 link 装饰拆分为多个同级 span，
+    // 一版 inline-block 方案在此行上布局爆炸——必须覆盖的回归点）
+    const s91doc1 = ['# 层级测试', '',
+      '> 下文是完整语法演示。想快速体验特色功能，直接跳到 [导出功能|#导出功能]、[数学公式|#数学公式]、[流程图与图表|#流程图与图表]、[查找与替换|#查找与替换]、[文件与工作区|#文件与工作区]、[个性化与设置|#个性化与设置] 几个章节即可。',
+      '> 第二行内容。'].join('\n');
+    const s91doc2 = ['# 层级测试', '', '> 外层第一行内容',
+      '> > 嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行嵌套长行。',
+      '> > 嵌套第二行。'].join('\n');
+    for (const [tag, label, doc, lvl, wantLine, wantL, wantR, wantPadL, wantPadR] of [
+      ['S91① lvl-1', 'S91① lvl-1 长行换行（wikilink 行）：pre pad 56/52、槽左缘=32、正文各视觉行左=56、右缘≤648、行高=视觉行数×27.2', s91doc1, 1, 2, 56, 648, 56, 52],
+      ['S91① lvl-2', 'S91① lvl-2 长行换行：pre pad 80/72、槽左缘=32、正文各视觉行左=80、右缘≤628、行高=视觉行数×27.2', s91doc2, 2, 3, 80, 628, 80, 72],
+    ]) {
+      await page.evaluate((d) => {
+        const { cm, ed } = window.__makeWysiwygEditor(d);
+        window.__s91cm = cm; window.__s91ed = ed;
+        ed.settings.softBreaks = true;
+        cm.options.viewportMargin = 100000;
+        cm.refresh();
+        ed.renderWysiwygMasks();
+      }, doc);
+      await page.waitForTimeout(500);
+      const ptS = await page.evaluate((lvlArg) => {
+        const m = document.querySelector('.wysiwyg-block-mask.wysiwyg-mask-no-btn-qc');
+        const r = m.getBoundingClientRect();
+        // lvl-1 点首行区中心（块 [2,3] 分母 1，offset 0.5）；lvl-2 点行 3（块 [2,5] 分母 N−1=2，offset 1.5）
+        const off = lvlArg === 1 ? 0.5 : 1.5;
+        const denom = lvlArg === 1 ? 1 : 2;
+        return { x: r.x + 100, y: r.top + (off / denom) * r.height };
+      }, lvl);
+      await page.mouse.click(ptS.x, ptS.y);
+      await page.waitForTimeout(500);
+      const gS = await page.evaluate((wantLine) => {
+        const cm = window.__s91cm;
+        if (cm.getCursor('head').line !== wantLine) return { landed: cm.getCursor('head').line };
+        const pre = document.querySelector('pre.wysiwyg-quote-cursor-line');
+        if (!pre) return { landed: 'no-pre' };
+        const cs = getComputedStyle(pre);
+        const slot = pre.querySelector('span.wysiwyg-quote-slot');
+        if (!slot) return { landed: 'no-slot' };
+        // 正文 = 所有 wysiwyg-quote-text 片段 span（CM5 按 wikilink 等装饰拆分为同级 span）并集
+        const rects = [...pre.querySelectorAll('span.wysiwyg-quote-text')].flatMap((s) => {
+          const rng = document.createRange(); rng.selectNodeContents(s);
+          return [...rng.getClientRects()].filter((x) => x.width > 0);
+        }).map((x) => ({ left: +x.left.toFixed(1), right: +x.right.toFixed(1), top: +x.top.toFixed(1) }));
+        const lines = [];
+        for (const r of rects.sort((a, b) => a.top - b.top)) {
+          const g = lines.find((l) => Math.abs(l.top - r.top) < 1);
+          if (g) { g.minL = Math.min(g.minL, r.left); g.maxR = Math.max(g.maxR, r.right); }
+          else lines.push({ top: r.top, minL: r.left, maxR: r.right });
+        }
+        return {
+          padL: parseFloat(cs.paddingLeft), padR: parseFloat(cs.paddingRight),
+          slotL: +slot.getBoundingClientRect().left.toFixed(1),
+          preH: +pre.getBoundingClientRect().height.toFixed(1), lines,
+        };
+      }, wantLine);
+      if (gS.lines) {
+        // 行高口径：preH = 光标行 pt+pb（12 或 24，边缘/中间行组合）+ 视觉行数×27.2（±2.5 舍入）
+        const hOk = Math.abs(gS.preH - (12 + gS.lines.length * 27.2)) <= 2.5
+          || Math.abs(gS.preH - (24 + gS.lines.length * 27.2)) <= 2.5;
+        const geoOk = Math.abs(gS.padL - wantPadL) <= 0.5 && Math.abs(gS.padR - wantPadR) <= 0.5
+          && gS.lines.length >= 2
+          && Math.abs(gS.slotL - 32) <= 0.5
+          && gS.lines.every((l) => Math.abs(l.minL - wantL) <= 0.5 && l.maxR <= wantR + 0.5)
+          && hOk;
+        s91checks.push([label, geoOk,
+          JSON.stringify({ padL: gS.padL, padR: gS.padR, slotL: gS.slotL, h: gS.preH, lines: gS.lines })]);
+      } else {
+        s91checks.push([tag + ' 光标落行', false, JSON.stringify(gS)]);
+      }
+    }
+  }
+  {
+    // ② 弹级后 seg 类重分类（编辑态侧，不依赖 bundle）
+    const s91doc3 = ['# T', '', '> 阿斯蒂芬撒地方士大夫', '> 阿斯蒂芬撒地方', '> 的发生',
+      '> > sfdasdfsad', '> > sadfsdf', '> > 手动阀手动阀手动阀'].join('\n');
+    await page.evaluate((d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s91cm = cm; window.__s91ed = ed;
+      ed.settings.softBreaks = true;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      ed.renderWysiwygMasks();
+    }, s91doc3);
+    await page.waitForTimeout(500);
+    // 点行 6（嵌套中间行，分母 N−1=5，offset 4.5）
+    const pt6 = await page.evaluate(() => {
+      const m = document.querySelector('.wysiwyg-block-mask.wysiwyg-mask-no-btn-qc');
+      const r = m.getBoundingClientRect();
+      return { x: r.x + 100, y: r.top + (4.5 / 5) * r.height };
+    });
+    await page.mouse.click(pt6.x, pt6.y);
+    await page.waitForTimeout(400);
+    await page.keyboard.press('Enter'); // 行 6 非空嵌套 → 新空嵌套行 7
+    await page.waitForTimeout(400);
+    await page.keyboard.press('Enter'); // 行 7 空嵌套 → S87 弹级 → `> `
+    await page.waitForTimeout(500);
+    await page.evaluate(() => {
+      const cm = window.__s91cm;
+      for (const ch of '上层内容'.split('')) { const p = cm.getCursor('head'); cm.replaceRange(ch, p, p, 'input'); }
+    });
+    await page.waitForTimeout(500);
+    const mS = await page.evaluate(() => {
+      const cm = window.__s91cm;
+      const top = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-top');
+      const bot = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-bottom');
+      const inner = top ? top.querySelector('blockquote > blockquote') : null;
+      const innerCs = inner ? getComputedStyle(inner) : null;
+      return {
+        line7: cm.getLine(7),
+        topCls: top ? top.className : null,
+        botCls: bot ? bot.className : null,
+        inner: innerCs ? { pb: innerCs.paddingBottom, mb: innerCs.marginBottom, radius: innerCs.borderBottomRightRadius } : null,
+      };
+    });
+    const segReclass = mS.line7 === '> 上层内容'
+      && /wysiwyg-quote-seg-deep/.test(mS.topCls || '') && !/seg-open-\d/.test(mS.topCls || '')
+      && /wysiwyg-quote-seg-deep/.test(mS.botCls || '') && !/seg-open-\d/.test(mS.botCls || '')
+      && mS.inner && mS.inner.pb === '12px' && mS.inner.mb === '16px' && mS.inner.radius === '6px';
+    s91checks.push(['S91② 弹级后 seg 重分类（seg-deep、无 seg-open-N、嵌套盒闭合 pb12/mb16/圆角6）', segReclass,
+      JSON.stringify(mS)]);
+    // 光标移开 → 弹级行（含输入内容）进 seg 渲染（渲染态可见）
+    const ptT = await page.evaluate(() => {
+      const top = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-top');
+      const r = top.getBoundingClientRect();
+      return { x: r.x + 60, y: r.top + 12 };
+    });
+    await page.mouse.click(ptT.x, ptT.y);
+    await page.waitForTimeout(500);
+    const segVis = await page.evaluate(() => {
+      const segs = [...document.querySelectorAll('.wysiwyg-block-mask.wysiwyg-quote-seg-top, .wysiwyg-block-mask.wysiwyg-quote-seg-bottom')]
+        .map((n) => n.textContent.replace(/\s+/g, ' ').trim());
+      return { cur: window.__s91cm.getCursor('head').line, has: segs.some((s) => s.indexOf('上层内容') >= 0), segs };
+    });
+    s91checks.push(['S91② 光标移开后弹级行内容进 seg 渲染（渲染态可见）', segVis.has,
+      JSON.stringify({ cur: segVis.cur, segs: segVis.segs })]);
+  }
+  {
+    // ③ 渲染器层级回退（window.UnifiedRenderer = 本 harness 加载的 bundle 口径）
+    const dropSrc = '> A\n> B\n> C\n> > s\n> > d\n> > m\n> x';
+    const noDropSrc = '> a\n> b\n> > c\n> > d';
+    const rS = await page.evaluate((ab) => {
+      const norm = (html) => {
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        const bq = div.querySelector('blockquote');
+        const clean = (t) => t.replace(/\s+/g, ''); // 渲染 HTML 为缩进格式，去空白
+        const kids = [...bq.children].map((c) => (c.tagName === 'BLOCKQUOTE' ? 'BQ(' + clean(c.textContent) + ')' : c.tagName + '(' + clean(c.textContent) + ')'));
+        return kids.join(' | ');
+      };
+      return { drop: norm(window.UnifiedRenderer.renderMarkdown(ab.a, { softBreaks: true })),
+               noDrop: norm(window.UnifiedRenderer.renderMarkdown(ab.b, { softBreaks: true })) };
+    }, { a: dropSrc, b: noDropSrc });
+    // 层级感知：外层 = P(ABC) | BQ(sdm) | P(x)（回退行 x 独立成外层 P，不并入嵌套 P）
+    s91checks.push(['S91③ 渲染器层级回退：> x 独立成外层 P（P(ABC) | BQ(sdm) | P(x)）',
+      rS.drop === 'P(ABC) | BQ(sdm) | P(x)', rS.drop]);
+    // 无回退对照（防回归：同级软换行合并、嵌套盒不变）
+    s91checks.push(['S91③ 无回退对照不变（P(ab) | BQ(cd)）', rS.noDrop === 'P(ab) | BQ(cd)', rS.noDrop]);
+  }
+  {
+    // ④ 弹级态 band == 遮罩高（S90 不变式 × 层级回退态；遮罩渲染依赖 bundle 新口径）
+    const s91doc4 = ['# T', '', '> 阿斯蒂芬撒地方士大夫', '> 阿斯蒂芬撒地方', '> 的发生',
+      '> > sfdasdfsad', '> > sadfsdf', '> > 手动阀手动阀手动阀', '> 上层内容'].join('\n');
+    await page.evaluate((d) => {
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s91cm = cm; window.__s91ed = ed;
+      ed.settings.softBreaks = true;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      ed.renderWysiwygMasks();
+    }, s91doc4);
+    await page.waitForTimeout(500);
+    const maskH4 = await page.evaluate(() => {
+      const m = document.querySelector('.wysiwyg-block-mask.wysiwyg-mask-no-btn-qc');
+      return m ? +m.getBoundingClientRect().height.toFixed(1) : null;
+    });
+    // 光标到末行 8（弹级行）：点行 7 + ArrowDown（末行点击不可达，S90 口径）
+    const pt7 = await page.evaluate(() => {
+      const m = document.querySelector('.wysiwyg-block-mask.wysiwyg-mask-no-btn-qc');
+      const r = m.getBoundingClientRect();
+      return { x: r.x + 100, y: r.top + ((5 + 0.5) / 6) * r.height };
+    });
+    await page.mouse.click(pt7.x, pt7.y);
+    await page.waitForTimeout(400);
+    await page.keyboard.press('ArrowDown');
+    await page.waitForTimeout(400);
+    const bS = await page.evaluate(() => {
+      const cm = window.__s91cm;
+      const top = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-top');
+      const bot = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-bottom');
+      const pre = document.querySelector('pre.wysiwyg-quote-cursor-line');
+      const H = (el) => (el ? el.getBoundingClientRect().height : 0);
+      return { line: cm.getCursor('head').line, preCls: pre ? pre.className : '', band: +((H(top) + H(pre) + H(bot)).toFixed(1)) };
+    });
+    s91checks.push(['S91④ 弹级态（光标在末行层级回退行）band = 遮罩高（块高不跳变）',
+      bS.line === 8 && bS.band !== undefined && Math.abs(bS.band - maskH4) <= 0.5,
+      JSON.stringify({ band: bS.band, maskH4, cls: bS.preCls })]);
+  }
+  for (const [label, ok, extra] of s91checks) {
+    console.log(`  ${ok ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    if (!ok) fail++;
+  }
+
   if (errors.length) {
     console.log('\n页面错误:');
     for (const e of errors) console.log('  ' + e);

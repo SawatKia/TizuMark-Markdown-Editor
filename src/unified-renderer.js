@@ -1657,6 +1657,7 @@ function normalizeListIndentation(content, tabSize) {
   let inFence = false;
   let fenceMarker = '';
   let prevEmittedDepth = 0; // 上一个已输出列表项的嵌套深度（0 = 无）
+  let prevQuoteLvl = 0;    // 上一个已输出引用行的层级（> 计数；非引用行重置 0）
 
   const expand = (s) => s.replace(/\t/g, ' '.repeat(ts));
 
@@ -1665,6 +1666,7 @@ function normalizeListIndentation(content, tabSize) {
     // —— 围栏代码块：进入/离开均跳过归一化 ——
     const fenceMatch = line.match(/^(\s*)(`{3,}|~{3,})/);
     if (fenceMatch) {
+      prevQuoteLvl = 0; // 围栏行结束引用上下文
       const marker = fenceMatch[2][0];
       const len = fenceMatch[2].length;
       if (!inFence) {
@@ -1678,8 +1680,25 @@ function normalizeListIndentation(content, tabSize) {
       continue;
     }
     if (inFence) {
+      prevQuoteLvl = 0;
       emit(line, origLine++);
       continue;
+    }
+
+    // —— 引用层级回退（2026-10-28 S91 用户②）：某引用行层级比上一引用行浅（如
+    // `> > > c` 后 `> d`）时，CommonMark「惰性延续」会把 d 并进最内层打开的段落
+    // （实测：d 渲染在嵌套盒 P 内、而非用户输入的位置 = 用户反馈「输入内容之后
+    // 渲染态展示不出来」）。在其前插一行目标层级的空引用行（'>' × L）：强制更深层
+    // 盒闭合——该空行不产生任何节点、也不产生空 <p>（3→1 / 3→2 / 2→1→2 全实测），
+    // 渲染即与编辑态的层级感知分块（wysiwyg 块表/分段口径、S83「编辑态=渲染态」）
+    // 一致。插入行映射到下一行同一原始行号（与上方有序嵌套空行前插同口径）。
+    const qm = line.match(/^\s{0,3}(?:>[ \t]?)+/);
+    if (qm) {
+      const qLvl = (qm[0].match(/>/g) || []).length;
+      if (qLvl < prevQuoteLvl) emit('>'.repeat(qLvl), origLine);
+      prevQuoteLvl = qLvl;
+    } else {
+      prevQuoteLvl = 0;
     }
 
     const m = line.match(itemRe);

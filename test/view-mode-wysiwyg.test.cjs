@@ -3036,8 +3036,9 @@ test('S83 引用/提示块活动态「渲染分段 + 光标行源码」：非光
   // ① 核心挂载：分段遮罩（上段 [start, cursor) / 下段 (cursor, end]）、清退、幂等判定
   assert.match(wys, /_wysiwygApplyQuoteSegments\(\) \{/, '缺 _wysiwygApplyQuoteSegments（引用活动态分段遮罩挂载）');
   assert.match(wys, /_wysiwygClearQuoteSegments\(\) \{/, '缺 _wysiwygClearQuoteSegments（分段遮罩清退）');
-  assert.match(wys, /_wysiwygSegState\s*=\s*\{ idx, cur, topSrc, botSrc \}/, '缺分段幂等状态（idx+cursor+两段源文）');
-  assert.match(wys, /if \(st && st\.idx === idx && st\.cur === cur && st\.topSrc === topSrc && st\.botSrc === botSrc\) return;/, '缺分段幂等 no-op 判定（范围与源文未变不重挂）');
+  // 键含 curLvl（S91 演进：光标行层级变化——弹级/删 >——时 cur/段源未变但 open/deep 类须重挂）
+  assert.match(wys, /_wysiwygSegState\s*=\s*\{ idx, cur, curLvl, topSrc, botSrc \}/, '缺分段幂等状态（idx+cursor+层级+两段源文）');
+  assert.match(wys, /if \(st && st\.idx === idx && st\.cur === cur && st\.curLvl === curLvl && st\.topSrc === topSrc && st\.botSrc === botSrc\) return;/, '缺分段幂等 no-op 判定（范围/层级/源文未变不重挂）');
   // ② 分段组成与渲染：上段 [b.start, cur)、下段 (cur+1, b.end]；下段合成块首标记行
   assert.match(wys, /mk\(b\.start, cur, 'wysiwyg-quote-seg-top'\)/, '缺上段挂载（[start, cursor)）');
   assert.match(wys, /mk\(cur \+ 1, b\.end, 'wysiwyg-quote-seg-bottom'\)/, '缺下段挂载（(cursor, end]）');
@@ -3321,4 +3322,62 @@ test('S90 引用块编辑三修复（块高稳定 / 光标行底色统一 / 输�
   assert.match(driver, /S90① 10 个光标行 band（seg-top\+pre\+seg-bottom）均 = 遮罩高（块高不随光标行跳变，容差 0\.5px）/);
   assert.match(driver, /S90② 光标行底色统一（10 行 --qc-bg 同值 = color-mix 18% accent tint）/);
   assert.match(driver, /S90③ 行内输入 5 字 \+ 250ms 停顿 → 零整篇重解析/);
+});
+
+test('S91 引用长行换行留距 + 嵌套弹级渲染修复（2026-10-28 用户反馈：①长引用自动换行两侧要留距、与渲染态一致 ②嵌套弹级后输入渲染态展示不出来+输入中显示异常）', () => {
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const rend = fs.readFileSync(path.join(ROOT, 'src', 'unified-renderer.js'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 光标行长引用自动换行（二版纯盒模型，2026-10-29）：光标行 pre padding-left=32+24N /
+  //    padding-right=32+20N（N=--qtext-lvl）→ 内容盒 = 渲染 N 层文本域 [32+24N, 668−20N]；
+  //    首个 > 槽负 margin(−24N) 回盒左缘 [32, 32+24N]。首行/续行文本均在此域内换行，
+  //    与渲染态逐像素一致。⚠️ 一版（wysiwyg-quote-text span inline-block 限宽）已废：
+  //    该 span 类挂在 CM5 按 wikilink 等装饰拆分的每个片段 span 上，逐 span 限宽使含
+  //    wikilink 的长行布局爆炸（用户 2026-10-29 截图）。纯 padding 不改任何 display，
+  //    行高/S90 band/S85 IME 槽不受影响；callout 光标行排除（另有 padding 口径）。
+  assert.match(css, /\.editor-container\.wysiwyg-mode \.CodeMirror pre\.wysiwyg-quote-cursor-line \{ --qtext-lvl: 1; \}/,
+    'styles.css 缺光标行 --qtext-lvl 基准（lvl-1）');
+  for (const n of [2, 3, 4, 5, 6]) {
+    assert.match(css, new RegExp(
+      'pre\\.wysiwyg-quote-cursor-line\\.wysiwyg-quote-lvl-' + n + ' \\{ --qtext-lvl: ' + n + '; \\}'),
+      'styles.css 缺 lvl-' + n + ' 光标行 --qtext-lvl');
+  }
+  assert.match(css, /pre\.wysiwyg-quote-cursor-line:not\(\.wysiwyg-callout-cursor-line\) \{\s*padding-left:\s*calc\(var\(--wysiwyg-line-inset, 32px\) \+ 24px \* var\(--qtext-lvl\)\);\s*padding-right:\s*calc\(var\(--wysiwyg-line-inset, 32px\) \+ 20px \* var\(--qtext-lvl\)\);\s*\}/,
+    'styles.css 缺光标行换行留距规则（pre padding 32+24N / 32+20N）');
+  assert.match(css, /span\.wysiwyg-quote-slot:first-of-type \{\s*margin-left:\s*calc\(-24px \* var\(--qtext-lvl\)\);\s*\}/,
+    'styles.css 缺首个 > 槽负 margin（回盒左缘）');
+  // 一版 inline-block 方案已废：光标行作用域内不得再有 display:inline-block 限宽规则
+  assert.doesNotMatch(css, /wysiwyg-quote-cursor-line[^{]*\{[^}]*display:\s*inline-block/,
+    'styles.css 残留光标行 inline-block 限宽规则（wikilink 片段 span 会逐块独占一行）');
+  // 换行留距不得波及非光标行（渲染段/普通行）：既有 .wysiwyg-quote-text 基规则只设字体/颜色
+  const baseTxt = css.match(/\.editor-container\.wysiwyg-mode \.CodeMirror \.wysiwyg-quote-text \{[^}]*\}/);
+  assert.ok(baseTxt && !/inline-block/.test(baseTxt[0]), 'styles.css 非光标行 .wysiwyg-quote-text 不得 inline-block（会改渲染段几何）');
+  // ② 弹级（S87）后 seg 缓存键含光标行层级：层级变化（> > → >）时不再早退留陈旧
+  //    seg-open-N/deep 类（实测残留 open-2 → 嵌套盒该闭合处仍敞口、pb/mb/圆角全清、块高 −28px）
+  assert.match(wys, /if \(st && st\.idx === idx && st\.cur === cur && st\.curLvl === curLvl && st\.topSrc === topSrc && st\.botSrc === botSrc\) return;/,
+    'wysiwyg.js 分段幂等键未含 curLvl（弹级/层级变化早退留陈旧 open/deep 类）');
+  assert.match(wys, /this\._wysiwygSegState = \{ idx, cur, curLvl, topSrc, botSrc \};/,
+    'wysiwyg.js _wysiwygSegState 未记录 curLvl');
+  // ③ 渲染器层级回退（> > c 后 > d）：CommonMark 惰性延续把回退行并进嵌套盒最内层 P
+  //    （用户外层输入在渲染态「消失」进嵌套盒 = 反馈②「渲染态展示不出来」）。
+  //    修法在 normalizeListIndentation（lineMap 基建所在）：回退行前插目标层级空引用行
+  //    （'>'×L，不产生节点），渲染 = 层级感知分块（与 wysiwyg 块表/分段同口径）
+  assert.ok(rend.includes('let prevQuoteLvl = 0;'), 'unified-renderer.js 缺引用层级跟踪 prevQuoteLvl');
+  assert.ok(rend.includes("if (qLvl < prevQuoteLvl) emit('>'.repeat(qLvl), origLine);"),
+    'unified-renderer.js 缺层级回退空引用行前插（惰性延续把外层行并进嵌套 P）');
+  assert.ok(rend.includes('const qm = line.match(/^\\s{0,3}(?:>[ \\t]?)+/);'),
+    'unified-renderer.js 缺引用行前缀判定（> 计数口径）');
+  // 围栏行须重置引用上下文（围栏后的引用行不得误判回退）
+  const fenceResetCount = (rend.match(/prevQuoteLvl = 0;/g) || []).length;
+  assert.ok(fenceResetCount >= 3, 'unified-renderer.js prevQuoteLvl 重置不足（围栏进出 + 非引用行须重置），实际 ' + fenceResetCount);
+  // 驱动回归接线
+  assert.match(driver, /=== S91：引用长行换行留距 \+ 嵌套弹级渲染修复/);
+  assert.match(driver, /S91① lvl-1 长行换行（wikilink 行）：pre pad 56\/52、槽左缘=32、正文各视觉行左=56、右缘≤648、行高=视觉行数×27\.2/);
+  assert.match(driver, /S91① lvl-2 长行换行：pre pad 80\/72、槽左缘=32、正文各视觉行左=80、右缘≤628/);
+  assert.match(driver, /S91② 弹级后 seg 重分类（seg-deep、无 seg-open-N、嵌套盒闭合 pb12\/mb16\/圆角6）/);
+  assert.match(driver, /S91② 光标移开后弹级行内容进 seg 渲染（渲染态可见）/);
+  assert.match(driver, /S91③ 渲染器层级回退：> x 独立成外层 P（P\(ABC\) \| BQ\(sdm\) \| P\(x\)）/);
+  assert.match(driver, /S91③ 无回退对照不变（P\(ab\) \| BQ\(cd\)）/);
+  assert.match(driver, /S91④ 弹级态（光标在末行层级回退行）band = 遮罩高（块高不跳变）/);
 });

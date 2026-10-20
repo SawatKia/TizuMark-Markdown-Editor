@@ -3781,6 +3781,35 @@ body.is-resizing .side-btn {
   font-family: var(--font-preview);
   color: var(--text-secondary);
 }
+/* S91 用户①：引用光标行长文自动换行时，续行左缘/右缘要与边框留距、与渲染态一致。
+   实测口径（pre 700 宽）：盒 32→668；渲染 N 层文本可用域 = [32+24N, 668−20N]（左 = 槽 24N
+   = 逐层 border 4 + pad 20，右 = 逐层盒右缘收 20N = 渲染 padding-right）。源态旧行为：续行
+   从 pre 内容左缘 32 起（贴盒左边框）、正文可伸到内容右缘 668（无右距）。
+   修法（纯盒模型，2026-10-29 二版）：光标行 pre 的 padding-left = 32+24N、padding-right =
+   32+20N（内容盒 = 渲染文本域），首个 > 槽负 margin（−24N）移回盒左缘 [32, 32+24N]。
+   首行 = 槽(32→32+24N) + 正文(32+24N 起)；续行 = 内容盒左缘 32+24N 起、右缘 668−20N 止
+   ——与渲染态逐层文本域逐像素一致，且对行内任何内容（wikilink/cm-link 等被 CM5 拆分成
+   多个同级 span 的装饰）都成立。⚠️ 一版（wysiwyg-quote-text span 改 inline-block 限宽）
+   已废：该 span 类实际挂在 CM5 拆分出的每个片段 span 上（含每个 wikilink span），逐 span
+   592px 宽 = 每片段独占一行 → 含 wikilink 的行布局爆炸（preH 66.4→365.4，用户 2026-10-29
+   截图「格式乱了」）。纯 padding 方案不改任何 display，行高/S90 band/S85 IME 槽均不受影响。
+   仅光标行生效（非光标行 = 渲染段遮罩，源行不可见）；callout 光标行另有 padding 口径，排除。
+   lvl-N 行类既有（_wysiwygApplyActiveDecor 按 > 数挂、封顶 6）。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-cursor-line { --qtext-lvl: 1; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-2 { --qtext-lvl: 2; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-3 { --qtext-lvl: 3; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-4 { --qtext-lvl: 4; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-5 { --qtext-lvl: 5; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-6 { --qtext-lvl: 6; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line) {
+  padding-left: calc(var(--wysiwyg-line-inset, 32px) + 24px * var(--qtext-lvl));
+  padding-right: calc(var(--wysiwyg-line-inset, 32px) + 20px * var(--qtext-lvl));
+}
+/* 首个槽负 margin 回盒左缘：内容盒左缘 = 32+24N，槽须占 [32, 32+24N]（逐层 24px 槽序排，
+   后续槽紧贴前槽无需偏移）。负 margin 把槽布局盒移入 pre 左 padding 区（不裁切、选区跟随）。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line) span.wysiwyg-quote-slot:first-of-type {
+  margin-left: calc(-24px * var(--qtext-lvl));
+}
 
 /* 嵌套光标行 = 渲染嵌套盒同构（2026-10-28 用户「编辑态保持跟渲染态样式完全一致」）：
    层级 N（N≥2）中间行光标行，渲染态对应区域 = N 个嵌套盒：每盒底色同为 --qc-bg（普通引用

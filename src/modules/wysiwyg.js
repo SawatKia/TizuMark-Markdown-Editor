@@ -1127,8 +1127,12 @@
         : '';
       const topSrc = this._wysiwygSegSource(b.start, cur);
       const botSrc = this._wysiwygSegSource(cur + 1, b.end, markerLine);
+      // 2026-10-28 S91 用户②：光标行层级变化（空嵌套行回车弹级 > > → >、行首删一层 > 等）
+      // 时 cur/段源都不变 → 只按 (idx,cur,src) 早退会留陈旧 seg-open-N/deep 类（实测弹级后
+      // seg-top 挂旧 open-2：嵌套盒该闭合处仍敞口、pb/mb/radius 全清、块高缺 28px，输入过程
+      // 显示异常）。curLvl 进状态键：层级一变即重建两段、open/deep 类按新层级重挂。
       const st = this._wysiwygSegState;
-      if (st && st.idx === idx && st.cur === cur && st.topSrc === topSrc && st.botSrc === botSrc) return;
+      if (st && st.idx === idx && st.cur === cur && st.curLvl === curLvl && st.topSrc === topSrc && st.botSrc === botSrc) return;
       this._wysiwygClearQuoteSegments();
       const self = this;
       const mk = (s, e, cls) => {
@@ -1206,7 +1210,7 @@
       const bot = mk(cur + 1, b.end, 'wysiwyg-quote-seg-bottom');
       if (bot) marks.push(bot);
       this._wysiwygSegMarks = marks;
-      this._wysiwygSegState = { idx, cur, topSrc, botSrc };
+      this._wysiwygSegState = { idx, cur, curLvl, topSrc, botSrc };
       this._applyWysiwygSelectionMaskClasses();
     },
 

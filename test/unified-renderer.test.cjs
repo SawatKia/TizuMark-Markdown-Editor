@@ -487,4 +487,48 @@ test('Word/Excel 命名空间标签与 mso-* 样式被清洗，结构与 class �
   assert.ok(html.includes('MsoTableGrid'), 'class 属性应保留');
 });
 
+test('S91 引用层级回退 = 层级感知分块（回退行不并入嵌套 P，2026-10-28 用户反馈②渲染态展示不出来）', async () => {
+  // CommonMark 惰性延续会把「嵌套后的浅层行」并进最内层打开的段落（实测 > a/> > b/> c
+  // → c 进嵌套 P）= 用户在外层输入的行在渲染态「消失」进嵌套盒。修复：回退行前插
+  // 目标层级空引用行（不产生节点）→ 深层盒闭合、回退行独立成 P（与 wysiwyg 块表同口径）。
+  const html = renderMarkdown('> A\n> B\n> C\n> > s\n> > d\n> > m\n> x', { softBreaks: true });
+  // 外层 = P(ABC) | 嵌套盒(s,d,m) | P(x)：x 不得并入嵌套 P
+  const bqMatch = html.match(/<blockquote[^>]*>([\s\S]*)<\/blockquote>\s*$/);
+  assert.ok(bqMatch, '应渲染出最外层 blockquote');
+  const outer = bqMatch[1];
+  assert.ok(!/s<br>d<br>m<br>x/.test(outer), '回退行 x 不得并入嵌套 P（惰性延续回归）');
+  assert.ok(/s<br>d<br>m<\/p>\s*<\/blockquote>/.test(outer), '嵌套盒 P 应止于 m（回退前闭合）');
+  assert.ok(/<p[^>]*>x<\/p>\s*$/.test(outer.trim()), '回退行 x 应独立成外层 P（块尾）');
+  // 源行号映射：x 指向原始行 7（插入的空引用行不占行号）
+  assert.ok(/<p data-source-line="7"[^>]*>x<\/p>/.test(outer), '回退行 x 的 data-source-line 应为 7（lineMap 含插入行）');
+  // 3→1 跳级：两个深层盒都闭合，回退行独立
+  const html2 = renderMarkdown('> a\n> > b\n> > > c\n> d', { softBreaks: true });
+  assert.ok(/<p data-source-line="3"[^>]*>c<\/p>/.test(html2), '3→1：最深盒 P(c) 独立闭合');
+  assert.ok(/<p data-source-line="4"[^>]*>d<\/p>/.test(html2), '3→1：回退行 d 独立 P');
+  // 3→2：只闭合 lvl-3 盒，d 在 lvl-2 成新 P（无空 P 产生）
+  const html3 = renderMarkdown('> a\n> > b\n> > > c\n> > d', { softBreaks: true });
+  const pCount3 = (html3.match(/<p data-source-line="4"/g) || []).length;
+  assert.strictEqual(pCount3, 1, '3→2：d 恰好一个 P（插入空行不得产生空段落）');
+  // 回退后升层：回退行 P、升层行新嵌套盒
+  const html4 = renderMarkdown('> a\n> > b\n> c\n> > d\n> > e', { softBreaks: true });
+  assert.ok(/<p data-source-line="3"[^>]*>c<\/p>/.test(html4), '2→1→2：c 独立外层 P');
+  assert.ok(/<p data-source-line="4"[^>]*>d<br>e<\/p>/.test(html4), '2→1→2：d,e 新嵌套盒 P');
+});
+
+test('S91 引用层级回退无回归：无回退块/空行分隔/引用后普通段落行为不变', async () => {
+  // 无回退（同级合并 + 嵌套盒）保持原样
+  const html = renderMarkdown('> a\n> b\n> > c\n> > d', { softBreaks: true });
+  assert.ok(/<p data-source-line="1"[^>]*>a<br>b<\/p>/.test(html), '同级软换行合并不变');
+  assert.ok(/<p data-source-line="3"[^>]*>c<br>d<\/p>\s*<\/blockquote>/.test(html), '嵌套盒不变');
+  // 空行分隔的引用块互不影响（两个顶层 blockquote：前者单层、后者含一层嵌套 = 标签共 3 个）
+  const html2 = renderMarkdown('> a\n\n> > b', { softBreaks: true });
+  assert.ok((html2.match(/<blockquote data-source-line="1"/g) || []).length === 1 &&
+            (html2.match(/<blockquote data-source-line="3"/g) || []).length === 2, '空行分隔 = 两个独立引用块（后块含嵌套层）');
+  assert.ok(/<p data-source-line="1"[^>]*>a<\/p>\s*<\/blockquote>/.test(html2), '前块单独闭合（a 不并入后块）');
+  // 引用后空行再普通段落：普通段落仍独立（原行为）
+  const html3 = renderMarkdown('> 行一\n\n普通段落。', { softBreaks: true });
+  assert.ok(/<blockquote data-source-line="1">[\s\S]*?<p data-source-line="1"[^>]*>行一<\/p>\s*<\/blockquote>\s*<p data-source-line="3"[^>]*>普通段落。<\/p>/.test(html3), '引用块不变、普通段落独立');
+  assert.ok(/<p[^>]*>普通段落。<\/p>/.test(html3), '普通段落独立');
+});
+
 
