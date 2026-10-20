@@ -61,6 +61,10 @@
 <script src="src/modules/code-block.js"></script>
 <script src="src/modules/image-processor.js"></script>
 <script src="src/modules/render-post.js"></script>
+<!-- constants.js：共享常量层（TMConst）。wysiwyg.js 的 RE.quote 收口到
+     TMConst.BLOCKQUOTE_LINE_RE（与 format.js insertLinePrefix 引用行嵌套判定同口径），
+     加载期即引用 → 必须先于 wysiwyg.js（生产 index.html 同一顺序） -->
+<script src="src/modules/constants.js"></script>
 <script src="src/modules/wysiwyg.js"></script>
 <script src="src/modules/empty-hint.js"></script>
 <!-- format.js：真实 _handleTableEnter（Enter 键映射的处理体，editor-core L171 绑定它）
@@ -1617,7 +1621,7 @@
     const { cm, ed } = makeEditor(DOC);
     ed.renderWysiwygMasks();
     await sleep(150); // 后处理 + 异步 pass flush
-    const out = { nonListMasks: 0, btnNonList: 0, listMasks: 0, btnList: 0, headingMasks: 0, btnHeading: 0, headingNoBtnCls: 0, plainMasks: 0, btnPlain: 0, plainNoBtnCls: 0, allHaveBtn: false, listNoBtn: false, headingNoBtn: false, plainNoBtn: false, defaultOpacity: null, codeOffsetOk: null, plainOffset: null, click: null };
+    const out = { nonListMasks: 0, btnNonList: 0, listMasks: 0, btnList: 0, headingMasks: 0, btnHeading: 0, headingNoBtnCls: 0, plainMasks: 0, btnPlain: 0, plainNoBtnCls: 0, quoteMasks: 0, btnQuote: 0, quoteNoBtnCls: 0, allHaveBtn: false, listNoBtn: false, headingNoBtn: false, plainNoBtn: false, quoteNoBtn: false, defaultOpacity: null, codeOffsetOk: null, plainOffset: null, click: null };
     try {
       // 2026-10-16 反馈 #1：列表块不挂「编辑」按钮（点行即编辑）→ 统计按「列表遮罩
       // /非列表遮罩」分类（列表遮罩=遮罩内容顶层是 ul/ol，与渲染切块同一口径）。
@@ -1633,6 +1637,8 @@
         const isListMask = !!(mark.replacedWith.querySelector(':scope > ul') || mark.replacedWith.querySelector(':scope > ol'));
         const isHeadingMask = typeof ed._wysiwygBlockIsHeading === 'function' && ed._wysiwygBlockIsHeading(b);
         const isPlainMask = typeof ed._wysiwygMaskIsPlainText === 'function' && ed._wysiwygMaskIsPlainText(mark.replacedWith);
+        // 2026-10-25 用户要求：引用/提示块也不挂「编辑」按钮（点遮罩即编辑，与标题同口径）
+        const isQuoteMask = mark.replacedWith.classList.contains('wysiwyg-mask-no-btn-qc');
         if (isHeadingMask) {
           out.headingMasks++;
           if (btn) out.btnHeading++;
@@ -1644,6 +1650,9 @@
           out.plainMasks++;
           if (btn) out.btnPlain++;
           if (mark.replacedWith.classList.contains('wysiwyg-mask-no-btn')) out.plainNoBtnCls++;
+        } else if (isQuoteMask) {
+          out.quoteMasks++;
+          if (btn) out.btnQuote++;
         } else {
           out.nonListMasks++;
           if (btn) {
@@ -1656,6 +1665,7 @@
       out.listNoBtn = out.listMasks > 0 && out.btnList === 0;
       out.headingNoBtn = out.headingMasks > 0 && out.btnHeading === 0 && out.headingNoBtnCls === out.headingMasks;
       out.plainNoBtn = out.plainMasks > 0 && out.btnPlain === 0 && out.plainNoBtnCls === out.plainMasks;
+      out.quoteNoBtn = out.quoteMasks > 0 && out.btnQuote === 0;
       const first = masks[0];
       if (first) out.defaultOpacity = getComputedStyle(first.btn).opacity;
       for (const m of masks) {
@@ -1681,9 +1691,10 @@
           out.btnPair = { err: '代码遮罩内无 .copy-btn' };
         }
       }
-      // 点击编辑：选非列表/非标题/非普通文字块（列表 2026-10-16、标题 2026-10-17、
-      // 普通文字 2026-07-13 起均无块级入口，点行即编辑）→ 引用块保留按钮，作点击目标
-      const target = (ed._wysiwygBlocks || []).find((b) => /^> 引用块第一行$/.test(cm.getLine(b.start) || ''));
+      // 点击编辑：选非列表/非标题/非普通文字/非引用块（列表 2026-10-16、标题 2026-10-17、
+      // 普通文字 2026-07-13、引用/提示 2026-10-25 起均无块级入口，点行/遮罩即编辑）
+      // → 表格块保留按钮，作点击目标
+      const target = (ed._wysiwygBlocks || []).find((b) => /^\| 列甲 \|/.test((cm.getLine(b.start) || '').trim()));
       if (target) {
         const idx = (ed._wysiwygBlocks || []).indexOf(target);
         const mark = ed._wysiwygMarks.get(idx);

@@ -9,6 +9,16 @@
   --alert-important-rgb: 139, 92, 246;
   --alert-warning-rgb: 245, 158, 11;
   --alert-caution-rgb: 239, 68, 68;
+  /* callout 平色底色统一变量（2026-10-25 用户「编辑态与渲染态完全一致、规则不要互相
+     冲突」）：渲染态 .alert-* 盒与 WYSIWYG 编辑态光标行背景盒同取此值（单一来源）。
+     原 135deg 渐变（亮 0.08→0.04 / 暗 0.12→0.06）无法在「分段盒 + 光标行」两个独立盒
+     间无缝延续（渐变在接缝处重新开始 → 色带）→ 收平为中点值（亮 0.06 / 暗 0.09）；
+     渲染观感几乎不变（淡色调 4% alpha 差，明暗两套各自收口）。 */
+  --alert-note-bg: rgba(var(--alert-note-rgb), 0.06);
+  --alert-tip-bg: rgba(var(--alert-tip-rgb), 0.06);
+  --alert-important-bg: rgba(var(--alert-important-rgb), 0.06);
+  --alert-warning-bg: rgba(var(--alert-warning-rgb), 0.06);
+  --alert-caution-bg: rgba(var(--alert-caution-rgb), 0.06);
   /* 全局统一小三角（chevron-down）：原生 select 背景三角的唯一样式源（固定灰，无法继承主题色）。
      自定义 Select/FontPicker 用 .picker-caret 内联 SVG（与折叠标题 .collapse-caret 同源，继承主题色），不走背景图。 */
   --caret-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
@@ -2717,7 +2727,7 @@ body.is-resizing .side-btn {
 }
 
 .alert-note {
-  background: linear-gradient(135deg, rgba(var(--alert-note-rgb), 0.08) 0%, rgba(var(--alert-note-rgb), 0.04) 100%);
+  background: var(--alert-note-bg);
   border-left-color: var(--accent-color);
   box-shadow: inset 0 0 0 1px rgba(var(--alert-note-rgb), 0.1);
 }
@@ -2727,7 +2737,7 @@ body.is-resizing .side-btn {
 }
 
 .alert-tip {
-  background: linear-gradient(135deg, rgba(var(--alert-tip-rgb), 0.08) 0%, rgba(var(--alert-tip-rgb), 0.04) 100%);
+  background: var(--alert-tip-bg);
   border-left-color: var(--color-success);
   box-shadow: inset 0 0 0 1px rgba(var(--alert-tip-rgb), 0.1);
 }
@@ -2737,7 +2747,7 @@ body.is-resizing .side-btn {
 }
 
 .alert-important {
-  background: linear-gradient(135deg, rgba(var(--alert-important-rgb), 0.08) 0%, rgba(var(--alert-important-rgb), 0.04) 100%);
+  background: var(--alert-important-bg);
   border-left-color: #8b5cf6;
   box-shadow: inset 0 0 0 1px rgba(var(--alert-important-rgb), 0.1);
 }
@@ -2747,7 +2757,7 @@ body.is-resizing .side-btn {
 }
 
 .alert-warning {
-  background: linear-gradient(135deg, rgba(var(--alert-warning-rgb), 0.08) 0%, rgba(var(--alert-warning-rgb), 0.04) 100%);
+  background: var(--alert-warning-bg);
   border-left-color: var(--color-warning);
   box-shadow: inset 0 0 0 1px rgba(var(--alert-warning-rgb), 0.1);
 }
@@ -2757,7 +2767,7 @@ body.is-resizing .side-btn {
 }
 
 .alert-caution {
-  background: linear-gradient(135deg, rgba(var(--alert-caution-rgb), 0.08) 0%, rgba(var(--alert-caution-rgb), 0.04) 100%);
+  background: var(--alert-caution-bg);
   border-left-color: var(--color-danger);
   box-shadow: inset 0 0 0 1px rgba(var(--alert-caution-rgb), 0.1);
 }
@@ -2766,12 +2776,20 @@ body.is-resizing .side-btn {
   color: var(--color-danger);
 }
 
-/* Dark theme alerts */
-[data-theme="dark"] .alert-note { background: linear-gradient(135deg, rgba(var(--alert-note-rgb), 0.12) 0%, rgba(var(--alert-note-rgb), 0.06) 100%); box-shadow: inset 0 0 0 1px rgba(var(--alert-note-rgb), 0.15); }
-[data-theme="dark"] .alert-tip { background: linear-gradient(135deg, rgba(var(--alert-tip-rgb), 0.12) 0%, rgba(var(--alert-tip-rgb), 0.06) 100%); box-shadow: inset 0 0 0 1px rgba(var(--alert-tip-rgb), 0.15); }
-[data-theme="dark"] .alert-important { background: linear-gradient(135deg, rgba(var(--alert-important-rgb), 0.12) 0%, rgba(var(--alert-important-rgb), 0.06) 100%); box-shadow: inset 0 0 0 1px rgba(var(--alert-important-rgb), 0.15); }
-[data-theme="dark"] .alert-warning { background: linear-gradient(135deg, rgba(var(--alert-warning-rgb), 0.12) 0%, rgba(var(--alert-warning-rgb), 0.06) 100%); box-shadow: inset 0 0 0 1px rgba(var(--alert-warning-rgb), 0.15); }
-[data-theme="dark"] .alert-caution { background: linear-gradient(135deg, rgba(var(--alert-caution-rgb), 0.12) 0%, rgba(var(--alert-caution-rgb), 0.06) 100%); box-shadow: inset 0 0 0 1px rgba(var(--alert-caution-rgb), 0.15); }
+/* Dark theme alerts（底色走 --alert-*-bg 变量暗色值 0.09 = 原渐变 0.12→0.06 中点；
+   1px 内环保持暗色 0.15） */
+[data-theme="dark"] {
+  --alert-note-bg: rgba(var(--alert-note-rgb), 0.09);
+  --alert-tip-bg: rgba(var(--alert-tip-rgb), 0.09);
+  --alert-important-bg: rgba(var(--alert-important-rgb), 0.09);
+  --alert-warning-bg: rgba(var(--alert-warning-rgb), 0.09);
+  --alert-caution-bg: rgba(var(--alert-caution-rgb), 0.09);
+}
+[data-theme="dark"] .alert-note { box-shadow: inset 0 0 0 1px rgba(var(--alert-note-rgb), 0.15); }
+[data-theme="dark"] .alert-tip { box-shadow: inset 0 0 0 1px rgba(var(--alert-tip-rgb), 0.15); }
+[data-theme="dark"] .alert-important { box-shadow: inset 0 0 0 1px rgba(var(--alert-important-rgb), 0.15); }
+[data-theme="dark"] .alert-warning { box-shadow: inset 0 0 0 1px rgba(var(--alert-warning-rgb), 0.15); }
+[data-theme="dark"] .alert-caution { box-shadow: inset 0 0 0 1px rgba(var(--alert-caution-rgb), 0.15); }
 
 /* KaTeX Math Styles */
 
@@ -2932,6 +2950,10 @@ body.is-resizing .side-btn {
    机制，补回值为 .preview-content dl 的渲染底距 16px（与 14px 的 ul/ol/p 族不同，
    不能共用 wysiwyg-mask-no-btn 规则）。 */
 .CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn-dl > *:last-child { margin-bottom: 16px; }
+/* 引用/提示块不挂「编辑」按钮（2026-10-25 用户要求「引用块、提示块的编辑按钮去掉」）：
+   同 no-btn 机制——blockquote/.alert 成为 last-child 后渲染底距 16px 被上面的清零规则
+   抹掉、遮罩矮 16px → 补回（与 14px 的 ul/ol/p 族不同，不能共用 wysiwyg-mask-no-btn）。 */
+.CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-mask-no-btn-qc > *:last-child { margin-bottom: 16px; }
 /* 跨块选区（2026-10-16 用户反馈「选中和全选只能选中当前编辑的一小块」）：CM5 只给可见
    源码行画选框，遮罩（replacedWith widget）节点无选中态 → 选区覆盖的遮罩块由
    _applyWysiwygSelectionMaskClasses 挂本类，半透明着色与原生选区观感一致（浅蓝底，
@@ -3637,7 +3659,8 @@ body.is-resizing .side-btn {
      （行类 wysiwyg-quote-cursor-line，cursorActivity 管理进出，与块内空行
      _wysiwygBlankCurLine 同一机制）。 */
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line {
-  background: var(--accent-subtle) no-repeat;
+  position: relative; /* 边缘行全高左竖条（pre::before）的定位锚 */
+  background: var(--qc-bg, var(--accent-subtle)) no-repeat;
   background-size: calc(100% - 2 * var(--wysiwyg-line-inset, 32px)) 100%;
   background-position: var(--wysiwyg-line-inset, 32px) 0;
 }
@@ -3650,6 +3673,34 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-block-edge-bottom {
   padding-bottom: 28px;
   border-bottom-right-radius: 6px;
+  /* 底部 16px = 渲染盒 margin-bottom（盒外白隙）：不铺底色、竖条收在盒底（旧口径底色
+     铺过 margin 区，盒视觉高 16px） */
+  background-size: calc(100% - 2 * var(--wysiwyg-line-inset, 32px)) calc(100% - 16px);
+}
+/* 边缘行全高左竖条（pre::before，2026-10-25 用户「规则不要互相冲突、与渲染态完全一致」）：
+   槽 ::before 竖条只有 1.7em（单行文本高），不覆盖边缘 padding 区 → 盒内竖条断成两段。
+   边缘行改由 pre::before 画满「背景盒纵向域」：顶缘行 top:0/height:100%（盒顶=行顶，无
+   盒 margin-top——遮罩 `> *:first-child` 已清零）；末缘行 height:calc(100% - 16px)（收在
+   盒底、margin 区留白）。中间行无 padding，槽竖条本已顶满整行，不画。单行块（两缘同挂）
+   时两规则同特异性、后规则（末缘）生效 = top:0/height:100%-16 ✓。颜色走 --qc-bar
+   （callout 类型色，见下；普通引用默认 accent，与槽 ::before 同一变量口径）。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-block-edge-top::before {
+  content: '';
+  position: absolute;
+  left: var(--wysiwyg-line-inset, 32px);
+  top: 0;
+  width: 4px;
+  height: 100%;
+  background: var(--qc-bar, var(--accent-color));
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-block-edge-bottom::before {
+  content: '';
+  position: absolute;
+  left: var(--wysiwyg-line-inset, 32px);
+  top: 0;
+  width: 4px;
+  height: calc(100% - 16px);
+  background: var(--qc-bar, var(--accent-color));
 }
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested {
   padding-top: 12px;
@@ -3684,12 +3735,490 @@ body.is-resizing .side-btn {
   top: 0;
   width: 4px;
   height: 100%;
-  background: var(--accent-color);
+  background: var(--qc-bar, var(--accent-color));
 }
+
+/* IME 组合竖排修复（2026-10-28 用户反馈：空嵌套续行上拼音显成两条短线 "a's' / d'f"，
+   与 2026-10-18 列表 marker 竖排同一根因）：空续行（正文无文本节点，如回车续出的
+   `> > > `）时，Chromium 把拼音组合串作为文本节点插进光标处的**本 24px 固定槽**（DOM
+   模拟实测："> " → "> a's'd'f"——空项正文无节点，组合串落进固定槽自己的文本节点；列表
+   真机 CDP 实测 2026-10-18 "1." → "1.a's'd'f" 同源）；24px 槽继承行盒 pre-wrap → 组合串
+   逐字折行（实测槽 scrollHeight 27.2 → 81.6 = 3 行内容），拼音显成行下两条短线。修法 =
+   **仅组合期**挂类：wysiwyg.js _wysiwygImeCompositionStart/End 在光标行 pre 上挂/摘
+   wysiwyg-ime-quote（与 wysiwyg-ime-heading-{级} 字号保持同一 wiring、同一口径），组合期
+   槽 nowrap = 组合文本单行右溢（overflow 可见、不裁切），上屏后 CM 读 DOM 差分进模型、
+   重渲染恢复。
+   ⚠️ **不可常驻 nowrap**：常驻会让行尾键入的 CM DOM 差分丢槽内空格（2026-10-28 实测：
+   `> > ` 行尾光标 + CJK 键入 → 模型 `> >内容`、ch3 空格被吞，S84 回归；列表无恙因其源空格
+   在独立零宽 span 且有 JS 修复函数）。组合期结束摘类恢复 pre-wrap → 常态输入路径不受影响。
+   上屏模型干净（实测：空 `> > > ` + 组合提交 "阿斯蒂芬" → `> > > 阿斯蒂芬`、光标 ch6 →
+   ch10）→ 无需列表式 JS 修复（引用空格随 > 进本槽、顺序不可破）。常态无影响（槽内容
+   "> " 仅 2 字符，24px 内恒不换行）。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-ime-quote .wysiwyg-quote-slot { white-space: nowrap; }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-quote-text {
   font-family: var(--font-preview);
   color: var(--text-secondary);
 }
+
+/* 嵌套光标行 = 渲染嵌套盒同构（2026-10-28 用户「编辑态保持跟渲染态样式完全一致」）：
+   层级 N（N≥2）中间行光标行，渲染态对应区域 = N 个嵌套盒：每盒底色同为 --qc-bg（普通引用
+   = accent-subtle rgba 0.07/层，逐层叠加、越深越暗），每盒 4px border 在左缘 32/56/80…
+   逐线连续穿过。旧光标行 = 单层平色 + 槽内 1.7em 短竖条（被 12px 嵌套 padding 区断开）
+   → 一条平带，与上下嵌套盒明显不一致（用户截图：通宽灰带 + 3 根短条）。改 pre 多层
+   背景（首层置顶）：每层一根全高 4px 竖条 + 一层底色；层宽 = 636−44d（d=层深）——渲染盒
+   右缘逐层收 20px = 父盒右 padding（实测：外 636 / l2 592 / l3 548 / l4 504，pre 700 宽时
+   = 100%−64 / −108 / −152 / −196）。> 标记（用户口径：只在光标行显示）保留 = 编辑态与
+   渲染态唯一有意差异。范围：仅中间行（边缘组合维持原规则不回归）× 非 callout（callout 底色
+   = 类型色、嵌套罕见，维持平色）。lvl-N 行类由 _wysiwygApplyActiveDecor 按行内 > 数挂
+   （封顶 6，同列表 wysiwyg-list-lvl-N 口径），两处引用行类清算随 wysiwyg-quote-nested 同撤。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-2:not(.wysiwyg-callout-cursor-line):not(.wysiwyg-block-edge-top):not(.wysiwyg-block-edge-bottom) {
+  background:
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 0 / calc(100% - 108px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-3:not(.wysiwyg-callout-cursor-line):not(.wysiwyg-block-edge-top):not(.wysiwyg-block-edge-bottom) {
+  background:
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 0 / calc(100% - 152px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 0 / calc(100% - 108px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-4:not(.wysiwyg-callout-cursor-line):not(.wysiwyg-block-edge-top):not(.wysiwyg-block-edge-bottom) {
+  background:
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 0 / calc(100% - 196px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 0 / calc(100% - 152px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 0 / calc(100% - 108px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-5:not(.wysiwyg-callout-cursor-line):not(.wysiwyg-block-edge-top):not(.wysiwyg-block-edge-bottom) {
+  background:
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 128px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 128px 0 / calc(100% - 240px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 0 / calc(100% - 196px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 0 / calc(100% - 152px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 0 / calc(100% - 108px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-6:not(.wysiwyg-callout-cursor-line):not(.wysiwyg-block-edge-top):not(.wysiwyg-block-edge-bottom) {
+  background:
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 152px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 152px 0 / calc(100% - 284px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 128px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 128px 0 / calc(100% - 240px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 0 / calc(100% - 196px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 0 / calc(100% - 152px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 0 / calc(100% - 108px) 100% no-repeat,
+    linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
+    linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat;
+}
+
+/* S86 光标行 = 渲染盒全位置全层级同构（2026-10-28 用户反馈 ①嵌套换行中间空白 ②单层
+   光标行蓝底铺到最右）：基规则 background: color 是纯色——纯色下 background-size 不生效
+   → 光标行底色恒通宽（实测计算值 bgImage:none + bgSize 无效）；嵌套末行（edge-bottom +
+   lvl-N）另叠加通用嵌套边缘距 40px（真值 = 28N）→ 通宽平带 + 文本下空白（用户截图）。
+   修法 = 把 S85 中间行同构背景扩到全部边缘位置 × lvl-1..6：每层（d=0 最外）竖条
+   x=32+24d 宽 4px、层底色宽 100%−(64+44d)（渲染盒右缘逐层收 20px，实测 636/592/548/504）；
+   纵向按位置：中间行上下皆敞口（S85 规则不动）；顶缘（块首行）盒 d 顶 = 12d（盒顶 =
+   父盒顶 + 12 padT）；底缘（块末行）盒 d 底 = 距带底 16+28d（盒底 = 文本底 + 12 padB +
+   每外一层 16 margin + 12 padB + 整盒底距 16，反解 = 16+28d）；顶+底（单行块）两者叠加。
+   配合下方分级边缘距（顶 12N / 底 28N，带高与渲染盒+margin 同高）。callout 光标行不动
+   （类型色平色口径、嵌套罕见）；lvl-1 规则以 :not(.wysiwyg-quote-nested) 排他（nested=
+   层级≥2，与 lvl-N 类互斥）。 */
+
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line):not(.wysiwyg-quote-nested):not(.wysiwyg-block-edge-bottom) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line):not(.wysiwyg-quote-nested):not(.wysiwyg-block-edge-top) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line):not(.wysiwyg-quote-nested).wysiwyg-block-edge-top.wysiwyg-block-edge-bottom {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-2:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top:not(.wysiwyg-block-edge-bottom) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 12px / 4px calc(100% - 12px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 12px / calc(100% - 108px) calc(100% - 12px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-2:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom:not(.wysiwyg-block-edge-top) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 0 / 4px calc(100% - 44px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 0 / calc(100% - 108px) calc(100% - 44px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-2:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-block-edge-bottom {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 12px / 4px calc(100% - 56px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 12px / calc(100% - 108px) calc(100% - 56px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-3:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top:not(.wysiwyg-block-edge-bottom) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 24px / 4px calc(100% - 24px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 24px / calc(100% - 152px) calc(100% - 24px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 12px / 4px calc(100% - 12px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 12px / calc(100% - 108px) calc(100% - 12px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-3:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom:not(.wysiwyg-block-edge-top) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 0 / 4px calc(100% - 72px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 0 / calc(100% - 152px) calc(100% - 72px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 0 / 4px calc(100% - 44px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 0 / calc(100% - 108px) calc(100% - 44px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-3:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-block-edge-bottom {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 24px / 4px calc(100% - 96px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 24px / calc(100% - 152px) calc(100% - 96px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 12px / 4px calc(100% - 56px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 12px / calc(100% - 108px) calc(100% - 56px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-4:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top:not(.wysiwyg-block-edge-bottom) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 36px / 4px calc(100% - 36px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 36px / calc(100% - 196px) calc(100% - 36px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 24px / 4px calc(100% - 24px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 24px / calc(100% - 152px) calc(100% - 24px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 12px / 4px calc(100% - 12px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 12px / calc(100% - 108px) calc(100% - 12px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-4:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom:not(.wysiwyg-block-edge-top) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 0 / 4px calc(100% - 100px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 0 / calc(100% - 196px) calc(100% - 100px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 0 / 4px calc(100% - 72px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 0 / calc(100% - 152px) calc(100% - 72px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 0 / 4px calc(100% - 44px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 0 / calc(100% - 108px) calc(100% - 44px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-4:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-block-edge-bottom {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 36px / 4px calc(100% - 136px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 36px / calc(100% - 196px) calc(100% - 136px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 24px / 4px calc(100% - 96px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 24px / calc(100% - 152px) calc(100% - 96px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 12px / 4px calc(100% - 56px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 12px / calc(100% - 108px) calc(100% - 56px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-5:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top:not(.wysiwyg-block-edge-bottom) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 128px 48px / 4px calc(100% - 48px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 128px 48px / calc(100% - 240px) calc(100% - 48px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 36px / 4px calc(100% - 36px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 36px / calc(100% - 196px) calc(100% - 36px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 24px / 4px calc(100% - 24px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 24px / calc(100% - 152px) calc(100% - 24px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 12px / 4px calc(100% - 12px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 12px / calc(100% - 108px) calc(100% - 12px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-5:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom:not(.wysiwyg-block-edge-top) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 128px 0 / 4px calc(100% - 128px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 128px 0 / calc(100% - 240px) calc(100% - 128px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 0 / 4px calc(100% - 100px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 0 / calc(100% - 196px) calc(100% - 100px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 0 / 4px calc(100% - 72px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 0 / calc(100% - 152px) calc(100% - 72px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 0 / 4px calc(100% - 44px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 0 / calc(100% - 108px) calc(100% - 44px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-5:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-block-edge-bottom {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 128px 48px / 4px calc(100% - 176px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 128px 48px / calc(100% - 240px) calc(100% - 176px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 36px / 4px calc(100% - 136px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 36px / calc(100% - 196px) calc(100% - 136px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 24px / 4px calc(100% - 96px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 24px / calc(100% - 152px) calc(100% - 96px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 12px / 4px calc(100% - 56px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 12px / calc(100% - 108px) calc(100% - 56px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-6:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top:not(.wysiwyg-block-edge-bottom) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 152px 60px / 4px calc(100% - 60px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 152px 60px / calc(100% - 284px) calc(100% - 60px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 128px 48px / 4px calc(100% - 48px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 128px 48px / calc(100% - 240px) calc(100% - 48px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 36px / 4px calc(100% - 36px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 36px / calc(100% - 196px) calc(100% - 36px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 24px / 4px calc(100% - 24px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 24px / calc(100% - 152px) calc(100% - 24px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 12px / 4px calc(100% - 12px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 12px / calc(100% - 108px) calc(100% - 12px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-6:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom:not(.wysiwyg-block-edge-top) {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 152px 0 / 4px calc(100% - 156px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 152px 0 / calc(100% - 284px) calc(100% - 156px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 128px 0 / 4px calc(100% - 128px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 128px 0 / calc(100% - 240px) calc(100% - 128px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 0 / 4px calc(100% - 100px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 0 / calc(100% - 196px) calc(100% - 100px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 0 / 4px calc(100% - 72px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 0 / calc(100% - 152px) calc(100% - 72px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 0 / 4px calc(100% - 44px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 0 / calc(100% - 108px) calc(100% - 44px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-lvl-6:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-block-edge-bottom {
+  background:
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 152px 60px / 4px calc(100% - 216px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 152px 60px / calc(100% - 284px) calc(100% - 216px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 128px 48px / 4px calc(100% - 176px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 128px 48px / calc(100% - 240px) calc(100% - 176px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 104px 36px / 4px calc(100% - 136px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 104px 36px / calc(100% - 196px) calc(100% - 136px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 80px 24px / 4px calc(100% - 96px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 80px 24px / calc(100% - 152px) calc(100% - 96px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 56px 12px / 4px calc(100% - 56px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 56px 12px / calc(100% - 108px) calc(100% - 56px) no-repeat,
+     linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
+     linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
+}
+
+/* 分级边缘距：顶缘文本顶 = 12N（文本在盒 N-1 内、其顶 = 12(N-1) + padT 12）；底缘文本底 =
+   28N（盒底推导 + 整盒底距 16）。旧通用值 24/40 仅 lvl-2 顶缘恰好正确，lvl-2 底缘起全偏
+   （2026-10-28 实测嵌套末行带 = 行 + 40px 空白）。lvl-7+（封顶 6）退化维持旧值。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-quote-lvl-3 { padding-top: 36px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-quote-lvl-4 { padding-top: 48px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-quote-lvl-5 { padding-top: 60px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-quote-lvl-6 { padding-top: 72px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom.wysiwyg-quote-lvl-2 { padding-bottom: 56px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom.wysiwyg-quote-lvl-3 { padding-bottom: 84px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom.wysiwyg-quote-lvl-4 { padding-bottom: 112px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom.wysiwyg-quote-lvl-5 { padding-bottom: 140px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom.wysiwyg-quote-lvl-6 { padding-bottom: 168px; }
+
+/* WYSIWYG 引用/提示块活动态「渲染分段 + 光标行源码」（2026-10-25 用户要求：编辑态样式
+   与渲染态一致，光标在哪一行就显示该行源码）：非光标行按上段 [start, cursor) / 下段
+   (cursor, end] 两个独立遮罩渲染（.wysiwyg-quote-seg-top / -bottom，与阅读态同一渲染
+   管线），接缝处向光标行"敞口"——去掉朝向光标行一侧的 padding/边距/圆角，背景盒由
+   光标行（wysiwyg-quote-line 的 pre 背景 + 槽 ::before 竖条）衔接成连续盒。 */
+/* 只命中段盒顶层块（子选择器）：段内嵌套引用（blockquote > blockquote）的 padding 是
+   嵌套盒自身样式（渲染态恒为 12/12），不在接缝上，不得清零（2026-10-25 实测：后代
+   选择器误伤嵌套盒 padT → 下段盒比渲染态短 12px，S59 B 底缘残差漂移） */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top > blockquote {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom-right-radius: 0;
+}
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom > blockquote {
+  margin-top: 0;
+  padding-top: 0;
+  border-top-right-radius: 0;
+}
+
+/* 嵌套开口方向（2026-10-28 用户①「中间一段空白」另一半根因）：光标行层级 N → 段内
+   层级 2..N 的嵌套盒朝光标行敞口：上段清底（padB/mb/下角）、下段清顶（padT/mt/上角）。
+   否则嵌套盒自身 12px pad + 16px margin 留在接缝 = 盒↔光标带 16px 白缝（2026-10-28
+   实测：嵌套 seg-top mask 底 = 盒底 + 16px = 内层 boxquote mb 未清；单层无嵌套盒、
+   顶层 > blockquote 规则已够）。open-N 类由 _wysiwygApplyQuoteSegments 按光标行 > 数挂段节点
+   （封顶 6）。层级 > N 的盒是闭合的（用户案例：光标 lvl-2、上段 lvl-3 盒保留底缘）；
+   顶层盒（层级 1）由上方既有 > blockquote 规则清零。只命中链上第 d 层（子选择器链长 d），
+   不伤闭合盒与段内更深层盒（同 2026-10-25 顶层子选择器口径，S59 误伤教训）。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-2 > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-3 > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-3 > blockquote > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-4 > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-4 > blockquote > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-4 > blockquote > blockquote > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-5 > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-5 > blockquote > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-5 > blockquote > blockquote > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-5 > blockquote > blockquote > blockquote > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-6 > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0; border-bottom-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-2 > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-3 > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-3 > blockquote > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-4 > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-4 > blockquote > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-4 > blockquote > blockquote > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-5 > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-5 > blockquote > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-5 > blockquote > blockquote > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-5 > blockquote > blockquote > blockquote > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-6 > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote { margin-top: 0; padding-top: 0; border-top-right-radius: 0; }
+
+/* 接缝深侧（2026-10-28 用户①同批实测）：段末/段首行比光标更深时（闭合嵌套盒紧邻
+   接缝），闭合盒 16px margin 会从开口盒背景逸出——盒↔光标带间 16px 白条（渲染态
+   该区域在开口盒内容区内、有底色）。修法：内层开口盒（层级 N）补 16px 内距把
+   margin 收进自身背景（盒底/顶 = 段缘，无缝且底色连续），闭合盒（层级 N+1）margin
+   清零（防双重计入）。更深层闭合盒（> N+1）自身 12px 内距已挡住 margin 外逸，不涉
+   及。deep 类由 _wysiwygApplyQuoteSegments 按段末/段首行层级 > 光标层级挂。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-2 > blockquote > blockquote { padding-bottom: 16px; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-2 > blockquote > blockquote > blockquote { margin-bottom: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-3 > blockquote > blockquote > blockquote { padding-bottom: 16px; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-3 > blockquote > blockquote > blockquote > blockquote { margin-bottom: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-4 > blockquote > blockquote > blockquote > blockquote { padding-bottom: 16px; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-4 > blockquote > blockquote > blockquote > blockquote > blockquote { margin-bottom: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-5 > blockquote > blockquote > blockquote > blockquote > blockquote { padding-bottom: 16px; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-5 > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote { margin-bottom: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote { padding-bottom: 16px; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote { margin-bottom: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-2 > blockquote > blockquote { padding-top: 16px; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-2 > blockquote > blockquote > blockquote { margin-top: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-3 > blockquote > blockquote > blockquote { padding-top: 16px; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-3 > blockquote > blockquote > blockquote > blockquote { margin-top: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-4 > blockquote > blockquote > blockquote > blockquote { padding-top: 16px; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-4 > blockquote > blockquote > blockquote > blockquote > blockquote { margin-top: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-5 > blockquote > blockquote > blockquote > blockquote > blockquote { padding-top: 16px; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-5 > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote { margin-top: 0; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote { padding-top: 16px; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote { margin-top: 0; }
+
+
+
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top .alert {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  box-shadow: none; /* 1px 内环在接缝处显成横线，分段不画 */
+}
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom .alert {
+  margin-top: 0;
+  padding-top: 0;
+  border-radius: 0 0 10px 10px;
+  box-shadow: none;
+}
+/* 下段是「块首标记行 + 段内行」合成的完整 callout（配色/竖条与上段一致），其重复的
+   标题（图标 + 标签）只允许出现在上段——此处隐藏 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom .alert .alert-title {
+  display: none;
+}
+/* 下段盒底距补回（2026-10-25）：下段无编辑按钮占 last-child 位，`> *:last-child`
+   清零规则命中盒本体 → 渲染 margin-bottom 16px（blockquote/.alert 同值）丢失，
+   光标行在块中部时编辑态比渲染态矮 16px、块下内容上跳 → 补回 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.preview-content.wysiwyg-quote-seg-bottom > *:last-child {
+  margin-bottom: 16px;
+}
+/* 分段载体行（含 seg widget 的 pre，2026-10-25 用户「规则不要互相冲突」实测根因）：
+   块活动后 decor 给全块行挂 wysiwyg-quote-line + 边缘类，被分段盖住的行其 pre 仍会：
+   ① 画自身背景（与段盒底色同色族但双重叠加：0.07×2≈0.134，callout 更是 accent-subtle
+      叠 alert 底双色调）→ 段盒比光标行「深一截」的色差带；
+   ② 边缘 padding（edge-top 12/14、edge-bottom 28/30）把段盒整体推离块缘 → 块首出现
+      一条「色差带」，盒圆角/内环悬在块中间（角线浮起）；
+   ③ pre::before 全高竖条与段盒自身 border-left 重叠（同位双竖条）。
+   段盒走与阅读态同一渲染管线，自绘背景/竖条/内环/圆角 → pre 只做零内距纯载体。
+   注：仅命中「活动块的分段行」（quote-line 类 + 段 widget 同时在场）；非活动块的整块
+   遮罩 pre 无 quote-line 类（实测），不受影响。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line:has(span.CodeMirror-widget .wysiwyg-block-mask) {
+  background: none;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line:has(span.CodeMirror-widget .wysiwyg-block-mask)::before {
+  display: none;
+}
+/* 引用/提示块光标行撤 CM active-line 底色（2026-10-25 用户「直接与渲染态样式完全一致」）：
+   app 保留 styleActiveLine（editor-core L172；光标行底色 codemirror.css #e8f2ff + 失步守卫
+   仍依赖 addon 本体，见 wysiwyg.js「光标行类改挂 pre」注释）。#e8f2ff 不透明底色垫在光标
+   pre 背景（--qc-bg/accent-subtle）之下 → 光标行比上下段盒/渲染盒深一截的色差（实测
+   (218,231,254) vs 盒 (240,244,254)）。引用块光标行底色即渲染盒本貌，再垫 #e8f2ff 属
+   规则叠加 → 该行 active-line 背景透明（仅引用光标行：光标行 DOM 为
+   div.CodeMirror-activeline > [linebackground, 0 宽 gutter-background, pre]——pre 是
+   linebackground 的后续兄弟（中间隔着 gutter 垫底 div），须用 ~ 而非 + 命中；
+   非引用行 active-line 底色不受影响）。 */
+.editor-container.wysiwyg-mode .CodeMirror .CodeMirror-linebackground.CodeMirror-activeline-background:has(~ pre.wysiwyg-quote-line) {
+  background: transparent;
+}
+
+/* callout 光标行（.wysiwyg-callout-cursor-line + .wysiwyg-callout-{type}，仅光标行挂；
+   2026-10-25 改版，用户「编辑态不适用灰色代码框、直接与渲染态样式完全一致」）：
+   ① 类型类改名 wysiwyg-callout-{type}（原 alert-{type}）——pre 带旧类名会直接命中
+      .alert-{type} 渲染规则（1px inset 内环铺满整行 + 渐变底色），与 pre 自身背景规则
+      叠加互搏 = 用户截图「灰色框/背景太乱」的规则冲突根源；改名后 pre 不再匹配任何
+      .alert-* 规则；
+   ② 底色 = 渲染 .alert 盒的平色 --alert-{type}-bg（单一来源，明暗自适应）——原 135deg
+      渐变逐盒重新开始，接缝出色带；
+   ③ 边缘距按 alert 盒参数：顶缘 +14px（alert padding-top，blockquote 为 12px）/
+      末缘 +30px（padding-bottom 14 + margin-bottom 16，blockquote 为 28px）；
+   ④ 竖条/底色按 callout 类型配色（与 .alert-* 的 border-left-color 同一口径：
+      note=accent / tip=success / important=#8b5cf6 / warning=warning / caution=danger），
+      收口为 --qc-bg / --qc-bar 两变量，槽 ::before 与 pre::before 竖条共用；
+   ⑤ 槽宽 22px = border 4 + padding 18（alert 内容缘，替换普通引用 24px），
+      光标行正文与上下段 alert 内容左右对齐。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-callout-cursor-line .wysiwyg-quote-slot {
+  width: 22px;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-callout-cursor-line.wysiwyg-block-edge-top {
+  padding-top: 14px;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-callout-cursor-line.wysiwyg-block-edge-bottom {
+  padding-bottom: 30px;
+}
+/* 嵌套行（callout 内 `> >`）同时是块边缘行：与嵌套 12px 内盒 padding 相加
+   （14+12 / 30+12），特异性高于上面单缘规则 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-callout-cursor-line.wysiwyg-quote-nested.wysiwyg-block-edge-top {
+  padding-top: 26px;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-callout-cursor-line.wysiwyg-quote-nested.wysiwyg-block-edge-bottom {
+  padding-bottom: 42px;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-callout-cursor-line.wysiwyg-callout-note { --qc-bg: var(--alert-note-bg); --qc-bar: var(--accent-color); }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-callout-cursor-line.wysiwyg-callout-tip { --qc-bg: var(--alert-tip-bg); --qc-bar: var(--color-success); }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-callout-cursor-line.wysiwyg-callout-important { --qc-bg: var(--alert-important-bg); --qc-bar: #8b5cf6; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-callout-cursor-line.wysiwyg-callout-warning { --qc-bg: var(--alert-warning-bg); --qc-bar: var(--color-warning); }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-callout-cursor-line.wysiwyg-callout-caution { --qc-bg: var(--alert-caution-bg); --qc-bar: var(--color-danger); }
 
 /* WYSIWYG 行内语法活动态（2026-10-14 用户要求，Typora 式行内）：标记字符透明 +
    零宽（2026-10-20 用户截图 demo.md：渲染态与编辑态差异巨大——旧「透明保留宽度」

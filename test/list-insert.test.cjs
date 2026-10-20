@@ -41,6 +41,12 @@ dom.window.Range.prototype.getClientRects = () => [];
 dom.window.Element.prototype.getBoundingClientRect = rect;
 dom.window.Element.prototype.getClientRects = () => [];
 
+// format.js insertLinePrefix 方法体在调用期引用 window.TMConst.BLOCKQUOTE_LINE_RE
+// （引用行口径共享常量，2026-10-25 嵌套引用块收口）。本环境 jsdom window 不走
+// index.html 的 script 链，需显式加载 constants.js 补全（IIFE 顶层无副作用，
+// TauriApi 仅在 dialog 函数调用期惰性引用）。
+require(path.join(ROOT, 'src', 'modules', 'constants.js'));
+
 const CodeMirror = require('codemirror');
 
 // ---- 从源码抽取真实方法（balanced-brace 扫描 + eval）----
@@ -120,6 +126,51 @@ test('A7 选区只占部分列（跨多行）：仍按整行加前缀并递增',
   cm.setSelection({ line: 0, ch: 1 }, { line: 2, ch: 1 });
   insertLinePrefix.call(stub, '1. ', true);
   assert.strictEqual(cm.getValue(), '1. 苹果\n2. 香蕉\n3. 橙子');
+});
+
+// ============================================================
+// A+ 光标行已是引用行：插入引用 = 原位嵌套（2026-10-25 用户反馈「嵌套引用块」：
+//    引用块内 / 插入引用块应在当前块内加一级 >，而非插无前缀空行拆成独立嵌套盒）
+// ============================================================
+
+test('A8 引用行 + 无选区：原位嵌套（行首加一级 >），不插空行拆块', async () => {
+  const cm = mk('> 甲\n> 乙');
+  stub.cm = cm;
+  cm.setCursor({ line: 1, ch: 3 });
+  insertLinePrefix.call(stub, '> ');
+  assert.strictEqual(cm.getValue(), '> 甲\n> > 乙');
+  // CM5 getCursor 带 sticky 字段，按字段断言
+  const c8 = cm.getCursor();
+  assert.strictEqual(c8.line, 1); assert.strictEqual(c8.ch, 5);
+});
+
+test('A9 `> ` 续行（回车产生、正文空）+ 插入引用：原位变 `> > `', async () => {
+  const cm = mk('> 甲\n> ');
+  stub.cm = cm;
+  cm.setCursor({ line: 1, ch: 2 });
+  insertLinePrefix.call(stub, '> ');
+  assert.strictEqual(cm.getValue(), '> 甲\n> > ');
+  const c9 = cm.getCursor();
+  assert.strictEqual(c9.line, 1); assert.strictEqual(c9.ch, 4);
+});
+
+test('A10 深层引用行：再加一级（> > → > > >）', async () => {
+  const cm = mk('> > 甲');
+  stub.cm = cm;
+  cm.setCursor({ line: 0, ch: 4 });
+  insertLinePrefix.call(stub, '> ');
+  assert.strictEqual(cm.getValue(), '> > > 甲');
+  const c10 = cm.getCursor();
+  assert.strictEqual(c10.line, 0); assert.strictEqual(c10.ch, 6);
+});
+
+test('A11 非引用行：保持原「上一行非空 → 换行拆块」行为（回归护栏）', async () => {
+  const cm = mk('段落。\n续行。');
+  stub.cm = cm;
+  cm.setCursor({ line: 1, ch: 0 });
+  insertLinePrefix.call(stub, '> ');
+  assert.strictEqual(cm.getValue(), '段落。\n\n> 续行。');
+  assert.deepStrictEqual(cm.getCursor(), { line: 2, ch: 2 });
 });
 
 // ============================================================

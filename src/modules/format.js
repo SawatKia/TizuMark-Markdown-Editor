@@ -151,6 +151,19 @@
         // 无选区：原单行行为（含上一行非空时自动换行再加前缀）
         const cursor = cm.getCursor();
         const line = cm.getLine(cursor.line);
+        // 2026-10-25 用户反馈（嵌套引用块）：光标行已是引用行（含回车产生的 `> ` 续行）时，
+        // 「插入引用」= 在当前引用块内原位嵌套——行首加一级 `> `（与选区分支「linePrefix + text」
+        // 同一语义：> a → > > a），不走「上一行非空 → 插无前缀空行」路径——那条路径会把引用块
+        // 拆成两块（空行分隔），新块成为外层+1 级的独立嵌套盒（用户截图：引用内 / 插入引用块
+        // 出一排独立盒，末次插入成空盒）。引用行口径收口 constants.js 共享常量（与 wysiwyg.js
+        // RE.quote 同源）；此处用 window.TMConst 因本方法体被 list-insert.test.cjs 抽取 eval
+        // 执行（stub 上下文裸标识符无 TMConst）。
+        if (prefix === '> ' && window.TMConst.BLOCKQUOTE_LINE_RE.test(line)) {
+          cm.replaceRange(prefix, { line: cursor.line, ch: 0 }, { line: cursor.line, ch: 0 });
+          cm.setCursor({ line: cursor.line, ch: cursor.ch + prefix.length });
+          cm.focus();
+          return;
+        }
         const prevLine = cursor.line > 0 ? cm.getLine(cursor.line - 1) : '';
         const needNewline = cursor.line > 0 && prevLine.trim() !== '';
         const newLine = needNewline ? '\n' : '';

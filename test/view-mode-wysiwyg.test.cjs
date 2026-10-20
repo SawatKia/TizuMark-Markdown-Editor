@@ -261,7 +261,7 @@ test('增量更新：change 不得全量重建遮罩（否则每次按键都卡�
   assert.match(wsrc, /_wysiwygMaskTimer = setTimeout\(/, '缺少防抖补齐定时器');
   // 跨块只处理受影响的两个块（旧块恢复遮罩 + 新块撤遮罩）
   // hadPrev/hadIdx 标志同时是锚点补偿的条件（2026-10-18：幻影切换不做补偿，见专项测试）
-  assert.match(wsrc, /const hadPrev = prev >= 0;[\s\S]{0,120}?if \(hadPrev\) \{[\s\S]{0,300}?this\.maskWysiwygBlock\(prev\);/, '未恢复旧块遮罩');
+  assert.match(wsrc, /const hadPrev = prev >= 0;[\s\S]{0,120}?if \(hadPrev\) \{[\s\S]{0,500}?this\.maskWysiwygBlock\(prev\);/, '未恢复旧块遮罩');
   // 旧块在活动期间被编辑过，缓存 html 已过期，恢复遮罩前必须重渲染
   assert.match(wsrc, /b\.html = this\.renderWysiwygBlockHtml\(b\.start, b\.end\);/,
     '旧块恢复遮罩前未按最新源码重渲染（会把编辑前的旧内容盖回去）');
@@ -616,7 +616,9 @@ test('幻影块切换（两端皆无挂/撤遮罩工作）不做锚点补偿（2
   const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   const sIdx = wsrc.indexOf('    setWysiwygActiveBlock(idx) {');
   assert.ok(sIdx > 0, '缺 setWysiwygActiveBlock');
-  const sblk = wsrc.slice(sIdx, sIdx + 2400);
+  // 2026-10-25 引用分段活动态：setWysiwygActiveBlock 新增「分段挂载于锚点补偿前」块
+  //（+4 行），restore 行函数头偏移 2497 → 窗口 2400→3000
+  const sblk = wsrc.slice(sIdx, sIdx + 3000);
   // 幻影切换（如新实例首个 cursorActivity：prev=undefined、idx=-1，两端 no-op）结构未变，
   // 而 operation 内采样的 before 是未落定的陈旧几何；延迟到 operation 末用已落定的 after
   // 相减 = 虚假 delta（实测 24px）滚偏视口 → 点击落点错位。补偿必须条件于真实挂/撤工作。
@@ -713,8 +715,10 @@ test('活动块源文态装饰：标题#前缀/列表符号/代码围栏 + 应�
   // 窗口 6500→8000→11500→12500（2026-10-17：函数头新增代码行排版行类先清后挂块 + 围栏分支扩为
   // 「内容行排版行类」挂法，列表分支被顶后 ~1400 字符；同日列表分支头部再插入嵌套层级
   // 计算 ~1400 字符，ol-paren 标记装饰距函数头 ~10072 字符 → 扩至 11500 覆盖；
-  // 2026-10-22 围栏分支加块底槽位 + details 块判定/行类 ~370 字符 → 扩至 12500 覆盖）
-  const dBlk = wsrc.slice(dIdx, dIdx + 12500);
+  // 2026-10-22 围栏分支加块底槽位 + details 块判定/行类 ~370 字符 → 扩至 12500 覆盖；
+  // 2026-10-28 2026-10-20..28 未提交积累（函数头先清后挂块扩充 + 引用编辑态行类管理等）
+  // 把 ol-paren 从 12003（HEAD）顶到 12499，差 1 字符越出 12500 → 扩至 14000 覆盖）
+  const dBlk = wsrc.slice(dIdx, dIdx + 14000);
   assert.match(dBlk, /add\(b\.start, 0, m\[0\]\.length, 'wysiwyg-heading-hash'\);/, '# 前缀段缺失（应小灰显示）');
   assert.match(dBlk, /wysiwyg-heading-text wysiwyg-heading-text-' \+ level/, '正文段缺失（应渲染尺寸显示）');
   assert.match(dBlk, /b\.end - b\.start === 1 && RE\.heading\.test\(first\)/, '标题分支未按单行块判定');
@@ -1008,9 +1012,10 @@ test('全量视图驻留：直接写 cm.options 扩视口（避开 setOption 的
   // 离开所见即所得恢复默认视口余量（窗口 5800→6600：函数内含批量撤遮罩 + 活动块高亮撤行类 +
   // 正文排版行类撤除 + 块间空行间隙清理（2026-10-17），函数体变长；
   // 2026-10-17 QA 审查又新增光标行状态复位块（~430 字符），5200→5800；
-  // 2026-10-17 代码块灰盒又新增代码行排版行类撤除块（~560 字符），5800→6600）
+  // 2026-10-17 代码块灰盒又新增代码行排版行类撤除块（~560 字符），5800→6600；
+  // 2026-10-25 引用分段清退块（~600 字符），6600→7600）
   const cIdx = wsrc.indexOf('clearWysiwygMasks() {');
-  const cblk = wsrc.slice(cIdx, cIdx + 6600);
+  const cblk = wsrc.slice(cIdx, cIdx + 7600);
   assert.match(cblk, /setOption\('viewportMargin', 10\)/, '离开全量模式未恢复默认视口余量');
   assert.match(cblk, /this\._wysiwygFull = false;/, '离开未复位全量标志');
 });
@@ -3018,4 +3023,213 @@ test('S78 相邻代码块：编辑态块底 16px 槽位（盒底↔下一块 ≡
   assert.match(driver, /灰盒绘制高不变 = 渲染态 pre 高 \+ 2×代码行高/, '驱动缺灰盒绘制高不变断言');
   assert.match(driver, /Math\.abs\(cb\.boxDelta - 16\) < 0\.5/, 'S67 块总高口径未更新（含 16px 底槽）');
   assert.match(driver, /close\.slot === true && close\.padB === '16px'/, 'S67 缺闭围栏行槽位断言');
+});
+
+test('S83 引用/提示块活动态「渲染分段 + 光标行源码」：非光标行渲染态遮罩、光标行源码（2026-10-25 用户要求编辑态样式与渲染态一致）', () => {
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 核心挂载：分段遮罩（上段 [start, cursor) / 下段 (cursor, end]）、清退、幂等判定
+  assert.match(wys, /_wysiwygApplyQuoteSegments\(\) \{/, '缺 _wysiwygApplyQuoteSegments（引用活动态分段遮罩挂载）');
+  assert.match(wys, /_wysiwygClearQuoteSegments\(\) \{/, '缺 _wysiwygClearQuoteSegments（分段遮罩清退）');
+  assert.match(wys, /_wysiwygSegState\s*=\s*\{ idx, cur, topSrc, botSrc \}/, '缺分段幂等状态（idx+cursor+两段源文）');
+  assert.match(wys, /if \(st && st\.idx === idx && st\.cur === cur && st\.topSrc === topSrc && st\.botSrc === botSrc\) return;/, '缺分段幂等 no-op 判定（范围与源文未变不重挂）');
+  // ② 分段组成与渲染：上段 [b.start, cur)、下段 (cur+1, b.end]；下段合成块首标记行
+  assert.match(wys, /mk\(b\.start, cur, 'wysiwyg-quote-seg-top'\)/, '缺上段挂载（[start, cursor)）');
+  assert.match(wys, /mk\(cur \+ 1, b\.end, 'wysiwyg-quote-seg-bottom'\)/, '缺下段挂载（(cursor, end]）');
+  assert.match(wys, /wysiwyg-quote-seg-bottom' \? markerLine : null/, '缺下段合成标记行（callout 下段渲染成完整 alert）');
+  // ②b 分段点击纵比：span+1 半区归一（原 ratio*span 末行只在节点底缘可达，短段下半区
+  //     点击全落倒数第二行）
+  assert.match(wys, /const span = r\.to\.line - r\.from\.line;[\s\S]{0,120}?Math\.min\(span, Math\.floor\(ratio \* \(span \+ 1\)\)\)/, '分段点击纵比缺 span+1 半区归一（末行点击不可达）');
+  // ③ 块类型收口：引用判定与渲染器 getAlertType 同口径（避免散写同义正则）
+  assert.match(wys, /_wysiwygBlockIsQuote\(b\) \{[\s\S]{0,200}?return RE\.quote\.test\(line\);/, '缺 _wysiwygBlockIsQuote（引用判定未收口 RE.quote）');
+  assert.match(wys, /_wysiwygBlockAlertType\(b\) \{[\s\S]{0,200}?line\.startsWith\('> \[!info\]'\)/, '缺 _wysiwygBlockAlertType（callout 类型判定，与渲染器 getAlertType 同口径）');
+  assert.ok((wys.match(/startsWith\('> \[!\w+\]'\)/g) || []).length >= 5, 'callout 类型判定不足 5 类（note/tip/important/warning/caution）');
+  // ④ 渲染收口：renderWysiwygBlockHtml 抽公共渲染方法，两处复用同一管线
+  assert.match(wys, /renderWysiwygBlockHtml\(start, end\) \{[\s\S]{0,200}?this\._wysiwygRenderSource\(lines\.join\('\\n'\)\);/, 'renderWysiwygBlockHtml 未收口到 _wysiwygRenderSource');
+  assert.match(wys, /_wysiwygRenderSource\(src\) \{/, '缺公共渲染方法 _wysiwygRenderSource');
+  // ⑤ 集成点：活动块切换退/挂、光标移动同步、change 钩子、防抖重算 ×2、格编辑/模式清理
+  assert.match(wys, /const hadPrev = prev >= 0;[\s\S]{0,200}?_wysiwygClearQuoteSegments\(\);[\s\S]{0,80}?const b = this\._wysiwygBlocks && this\._wysiwygBlocks\[prev\];[\s\S]{0,160}?this\.maskWysiwygBlock\(prev\);/, 'setWysiwygActiveBlock 退活未先清分段（须在重遮 prev 之前清分段）');
+  assert.match(wys, /if \(hadIdx\) this\._wysiwygApplyQuoteSegments\(\);[\s\S]{0,60}?if \(hadPrev \|\| hadIdx\) this\._restoreWysiwygAnchor\(\);/, 'setWysiwygActiveBlock 新活动块未在锚点补偿前挂分段');
+  assert.match(wys, /this\.setWysiwygActiveBlock\(activeIdx\);[\s\S]{0,200}?this\._wysiwygApplyQuoteSegments\(\);/, 'syncWysiwygActiveBlock 光标移动后未重挂分段');
+  assert.match(wys, /if \(self\._wysiwygBlockIsQuote\(b\)\) self\._wysiwygApplyQuoteSegments\(\);/, 'change 钩子缺分段重挂');
+  assert.match(wys, /if \(delta > 0 && self\._wysiwygBlockIsQuote\(b\) && c\.to\.line === b\.end - 1\)/, 'change 钩子缺引用块 end 同步（回车续行即时扩展，防闪出）');
+  assert.ok(((wys.match(/(?:this|self)\._wysiwygApplyQuoteSegments\(\);/g) || [])).length >= 4, '分段重挂调用点不足（change + sync + 防抖 ×2 至少 4 处）');
+  assert.match(wys, /_wysiwygReMaskActiveForCellEdit\(tableIdx\) \{[\s\S]{0,700}?_wysiwygClearQuoteSegments\(\);\s*\n\s*this\._wysiwygActiveIdx = -1;/, '格编辑重遮前未清分段');
+  assert.match(wys, /this\._wysiwygClearQuoteSegments\(\);\s*\n\s*if \(this\._wysiwygMarks\) \{/, 'clearWysiwygMasks 未清分段遮罩');
+  // ⑥ 选中着色纳入分段遮罩
+  assert.match(wys, /const allMarks = Array\.from\(this\._wysiwygMarks\.values\(\)\);[\s\S]{0,120}?if \(this\._wysiwygSegMarks\) allMarks\.push/, '分段遮罩未纳入选中着色类');
+  // ⑦ CSS：分段接缝（去朝向光标行一侧的 padding/边距/圆角/内环）+ callout 光标行五类配色
+  // 接缝只命中段盒顶层块（子选择器）：段内嵌套 blockquote 的 12/12 padding 是嵌套盒自身
+  // 样式（渲染态恒有），不得清零（2026-10-25 实测后代选择器误伤 → S59 B 残差漂移 12px）
+  assert.match(css, /\.wysiwyg-quote-seg-top > blockquote \{\s*margin-bottom: 0;\s*padding-bottom: 0;\s*border-bottom-right-radius: 0;\s*\}/, '缺上段 blockquote 接缝（底边距/底内距清零，须子选择器）');
+  assert.match(css, /\.wysiwyg-quote-seg-bottom > blockquote \{\s*margin-top: 0;\s*padding-top: 0;\s*border-top-right-radius: 0;\s*\}/, '缺下段 blockquote 接缝（顶边距/顶内距清零，须子选择器）');
+  assert.match(css, /\.wysiwyg-quote-seg-bottom \.alert \.alert-title \{\s*display: none;\s*\}/, '缺下段 alert 重复标题隐藏');
+  assert.match(css, /wysiwyg-quote-line\.wysiwyg-callout-cursor-line \.wysiwyg-quote-slot \{\s*width: 22px;\s*\}/, '缺 callout 光标行槽宽 22px');
+  // 2026-10-25 用户「编辑态与渲染态完全一致、规则不要互相冲突」：
+  // ⑦a 底色单一来源——渲染 .alert-* 盒与光标行背景盒同取 --alert-{type}-bg（原 135deg 渐变
+  //     逐盒重新开始接缝出色带，收平为 0.06 亮/0.09 暗中点值，明暗各一套变量）
+  assert.ok((css.match(/--alert-\w+-bg: rgba\(var\(--alert-\w+-rgb\), 0\.06\);/g) || []).length >= 5, '缺 --alert-{type}-bg 平色变量（亮色 5 类，渐变→平色单一来源）');
+  assert.ok((css.match(/--alert-\w+-bg: rgba\(var\(--alert-\w+-rgb\), 0\.09\);/g) || []).length >= 5, '缺 --alert-{type}-bg 暗色值（5 类）');
+  assert.match(css, /\.alert-note \{\s*background: var\(--alert-note-bg\);/, '渲染态 .alert-note 未走平色变量（仍为渐变）');
+  assert.match(css, /\.alert-caution \{\s*background: var\(--alert-caution-bg\);/, '渲染态 .alert-caution 未走平色变量（仍为渐变）');
+  assert.ok(!/\.alert-note \{\s*background: linear-gradient/.test(css), '渲染态 .alert-note 仍是渐变底色（编辑态无法与渲染态完全一致）');
+  // ⑦b 光标行类型类改名 wysiwyg-callout-{type}（旧 alert-{type} 让 pre 直接命中 .alert-*
+  //     渲染规则：1px inset 内环铺满整行 = 「灰色框」规则冲突根源）
+  assert.ok((css.match(/wysiwyg-callout-cursor-line\.wysiwyg-callout-\w+ \{\s*--qc-bg: var\(--alert-\w+-bg\);\s*--qc-bar:/g) || []).length >= 5, 'callout 光标行五色未收口 --qc-bg/--qc-bar 变量');
+  assert.doesNotMatch(css, /wysiwyg-callout-cursor-line\.alert-\w+/, '光标行类型类仍是 alert-{type}（pre 会命中 .alert-* 渲染规则）');
+  assert.match(css, /pre\.wysiwyg-quote-line \{[^}]*background: var\(--qc-bg, var\(--accent-subtle\)\) no-repeat;/, '光标行背景未走 --qc-bg 变量（callout 五类与引用默认无法收口单一来源）');
+  // ⑦c 边缘行全高左竖条（pre::before）：顶缘行铺满 100%、末缘行收在盒底（100%-16px margin）
+  assert.match(css, /pre\.wysiwyg-quote-line\.wysiwyg-block-edge-top::before \{[^}]*height: 100%;[^}]*var\(--qc-bar, var\(--accent-color\)\)/, '缺顶缘行全高竖条（pre::before）');
+  assert.match(css, /pre\.wysiwyg-quote-line\.wysiwyg-block-edge-bottom::before \{[^}]*height: calc\(100% - 16px\);/, '缺末缘行竖条收盒底（100%-16px margin）');
+  assert.match(css, /pre\.wysiwyg-quote-line\.wysiwyg-block-edge-bottom \{[^}]*background-size: calc\(100% - 2 \* var\(--wysiwyg-line-inset, 32px\)\) calc\(100% - 16px\);/, '末缘行底色未收盒底（margin 区不应铺色）');
+  // ⑦d callout 边缘距按 alert 盒参数（14/30，blockquote 12/28）+ 嵌套边缘组合（26/42）
+  assert.match(css, /wysiwyg-callout-cursor-line\.wysiwyg-block-edge-top \{\s*padding-top: 14px;\s*\}/, 'callout 顶缘行未补 alert padding-top 14px');
+  assert.match(css, /wysiwyg-callout-cursor-line\.wysiwyg-block-edge-bottom \{\s*padding-bottom: 30px;\s*\}/, 'callout 末缘行未补 30px（alert padB 14 + mb 16）');
+  assert.match(css, /wysiwyg-callout-cursor-line\.wysiwyg-quote-nested\.wysiwyg-block-edge-bottom \{\s*padding-bottom: 42px;\s*\}/, 'callout 嵌套末缘行未补 42px（30+12）');
+  // ⑦e 下段盒底距补回（无按钮占 last-child 位，16px 被清零 → 编辑态矮 16px 块下内容上跳）
+  assert.match(css, /\.wysiwyg-quote-seg-bottom > \*:last-child \{\s*margin-bottom: 16px;\s*\}/, '缺下段 16px 底距补回（编辑态比渲染态矮 16px）');
+  // ⑦e2 分段载体行（含 seg widget 的 pre）零样式：自身背景与段盒双重叠加（色差带）、
+  //     边缘 padding 把段盒推离块缘（色差带+角线浮起）、pre::before 与段盒 border-left 重叠
+  assert.match(css, /pre\.wysiwyg-quote-line:has\(span\.CodeMirror-widget \.wysiwyg-block-mask\) \{[^}]*background: none;[^}]*padding-top: 0;[^}]*padding-bottom: 0;/, '缺分段载体行零样式规则（段盒背后双背景/边缘内距推盒）');
+  assert.match(css, /pre\.wysiwyg-quote-line:has\(span\.CodeMirror-widget \.wysiwyg-block-mask\)::before \{[^}]*display: none;/, '缺分段载体行竖条撤除（与段盒 border-left 重叠）');
+  // ⑦e3 引用/提示块光标行撤 CM active-line 底色（codemirror.css #e8f2ff 垫底 → 光标行
+  //     比段盒/渲染盒深一截；app 保留 styleActiveLine，只能按行精确撤）
+  assert.match(css, /\.CodeMirror-linebackground\.CodeMirror-activeline-background:has\(~ pre\.wysiwyg-quote-line\) \{[^}]*background: transparent;/, '缺引用光标行 active-line 底色透明规则（#e8f2ff 垫底色差）');
+  // ⑦f 引用/提示块不挂「编辑」按钮（no-btn-qc 补回渲染 blockquote/.alert 16px 底距）
+  assert.match(wys, /else if \(this\._wysiwygBlockIsQuote\(b\)\) node\.classList\.add\('wysiwyg-mask-no-btn-qc'\);/, '引用/提示块遮罩未挂 no-btn-qc（编辑按钮未去掉）');
+  assert.match(css, /wysiwyg-mask-no-btn-qc > \*:last-child \{ margin-bottom: 16px; \}/, '缺 no-btn-qc 16px 底距补回');
+  // ⑦g 活动态灰底（cm-wysiwyg-active-block）整块跳过引用/提示块——光标行自绘渲染盒本貌，
+  //     整行灰底铺在 pre 背景两侧露出 = 「灰色代码框/背景太乱」根源
+  const hlFn2 = wys.slice(wys.indexOf('_applyWysiwygActiveHighlight() {'), wys.indexOf('_applyWysiwygActiveHighlight() {') + 3000);
+  assert.match(hlFn2, /if \(this\._wysiwygBlockIsQuote\(b\)\) return;/, '活动块高亮未跳过引用/提示块（灰底与渲染盒叠加）');
+  // ⑧ 驱动回归接线
+  assert.match(driver, /=== S83：引用\/提示块 编辑态「渲染分段 \+ 光标行源码」/, '驱动缺 S83 场景');
+  assert.match(driver, /非光标行渲染态 \+ 光标行源码/, '驱动缺 S83 分段/光标行断言');
+  assert.match(driver, /下段渲染 \.alert、标题隐藏/, '驱动缺 S83 callout 下段断言');
+  assert.match(driver, /点下段上部：光标映射段内行/, '驱动缺 S83 分段点击断言');
+  // 2026-10-25 用户「编辑按钮去掉 + 无灰色代码框 + 与渲染态完全一致」的驱动断言接线
+  assert.match(driver, /引用块\/callout 整块掩码无「编辑」按钮/, '驱动缺 S83 无编辑按钮断言');
+  assert.match(driver, /活动态无灰底行（cm-wysiwyg-active-block 不挂引用块）/, '驱动缺 S83 无灰底断言');
+  assert.match(driver, /中间行：无灰底 \+ 渲染盒单层平色（右缘 668 inset）\+ 无 active-line 垫底 \+ 上下接缝无缝 \+ 下段盒底→下一盒顶 16px/, '驱动缺 S83 中间行接缝/间距断言');
+  assert.match(driver, /光标行底色=渲染盒单层平色（2 层背景：竖条\+底色、右缘 668 inset/, '驱动缺 S83 光标行单层同构底色断言（S86：纯色通宽 → 2 层 inset 背景）');
+  assert.match(driver, /引用块编辑态（首行光标）：光标行↔下段无缝 \+ 块盒底→下一盒顶 16px（渲染态同间距）/, '驱动缺 S83 首行光标接缝/间距断言');
+  assert.match(driver, /末行光标：上段↔光标行无缝 \+ 行底→下一盒顶 16px（渲染态同间距）/, '驱动缺 S83 末行光标间距断言');
+  assert.match(driver, /callout 光标行底色 = 渲染 \.alert 平色/, '驱动缺 S83 callout 平色底断言');
+});
+
+test('S84 在引用块内插入引用块 = 原位嵌套（嵌套引用块，2026-10-25 用户反馈：引用内 / 插入引用要嵌套而非独立盒）', () => {
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const fmt = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'format.js'), 'utf8');
+  const cst = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'constants.js'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 引用行口径收口共享常量（单一来源：wysiwyg.js 切块判定 + format.js 嵌套判定同源）
+  assert.match(cst, /BLOCKQUOTE_LINE_RE = \/\^\(\\s\*\)>\/;/, 'constants.js 缺共享常量 BLOCKQUOTE_LINE_RE');
+  assert.match(wys, /quote: TMConst\.BLOCKQUOTE_LINE_RE,/, 'wysiwyg.js RE.quote 未收口共享常量（散写同义正则）');
+  // ② format.js insertLinePrefix：光标行已是引用行 → 行首原位加一级（与选区分支同语义），
+  //    不走「上一行非空 → 插无前缀空行」拆块路径（旧行为：独立嵌套盒 + 末次插入空盒）
+  assert.match(fmt, /if \(prefix === '> ' && window\.TMConst\.BLOCKQUOTE_LINE_RE\.test\(line\)\) \{[\s\S]{0,220}?cm\.replaceRange\(prefix, \{ line: cursor\.line, ch: 0 \}, \{ line: cursor\.line, ch: 0 \}\);/, 'insertLinePrefix 缺引用行原位嵌套分支（引用内 / 插入引用拆成独立盒）');
+  // ③ 驱动回归接线
+  assert.match(driver, /=== S84：在引用块内插入引用块 = 原位嵌套/, '驱动缺 S84 场景');
+  assert.match(driver, /S84 核心：插入引用 = 行 4 原位嵌套 `> > `/);
+  assert.match(driver, /S84 核心：全文源码 = 单层引用块内含两级嵌套（无空行分裂）/);
+  assert.match(driver, /块表：行 2-5 同一引用块/);
+  assert.match(driver, /S84 渲染态：嵌套盒/);
+});
+
+test('S85 嵌套引用光标行 = 渲染嵌套盒同构 + IME 组合竖排修复（2026-10-28 用户反馈：编辑态保持跟渲染态一致 + 拼音竖排）', () => {
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 修复1：嵌套光标行逐层底色 + 全高竖条（styles.css lvl-2..6 规则，与渲染嵌套盒同构）
+  for (const n of [2, 3, 4, 5, 6]) {
+    assert.match(css, new RegExp(
+      'wysiwyg-quote-line\\.wysiwyg-quote-cursor-line\\.wysiwyg-quote-lvl-' + n +
+      ':not\\(\\.wysiwyg-callout-cursor-line\\):not\\(\\.wysiwyg-block-edge-top\\):not\\(\\.wysiwyg-block-edge-bottom\\) \\{'),
+      'styles.css 缺 wysiwyg-quote-lvl-' + n + ' 光标行规则');
+  }
+  // lvl-3 规则 = 6 层背景（3 层 × 竖条 + 底色），层位 80/56/32（渲染盒 border 同位）
+  const lvl3rule = css.match(/wysiwyg-quote-lvl-3:[\s\S]{0,1600}?\n\}/);
+  assert.ok(lvl3rule, 'styles.css lvl-3 规则体未找到');
+  assert.strictEqual((lvl3rule[0].match(/no-repeat/g) || []).length, 6, 'lvl-3 光标行须 6 层背景（3 层 × 竖条 + 底色）');
+  for (const x of [32, 56, 80]) {
+    assert.ok(lvl3rule[0].includes(x + 'px 0 / 4px 100%'), 'lvl-3 规则缺 ' + x + 'px 全高竖条层');
+    assert.ok(lvl3rule[0].includes(x + 'px 0 / calc('), 'lvl-3 规则缺 ' + x + 'px 层底色');
+  }
+  // ② 修复2：IME 组合竖排 = 仅组合期槽 nowrap（wysiwyg-ime-quote 类挂 pre，
+  //    与 2026-10-19 标题组合字号同一 wiring；不可常驻——行尾键入会丢槽内空格，S84 实测）
+  const slotRule = css.match(/\.editor-container\.wysiwyg-mode \.CodeMirror \.wysiwyg-quote-slot \{[\s\S]{0,1200}?\n\}/);
+  assert.ok(slotRule, 'styles.css .wysiwyg-quote-slot 规则未找到');
+  assert.doesNotMatch(slotRule[0], /white-space:/, '引用槽不可常驻 nowrap（行尾键入 CM 差分丢槽内空格，2026-10-28 S84 实测）');
+  assert.match(css, /pre\.wysiwyg-ime-quote \.wysiwyg-quote-slot \{ white-space: nowrap;/,
+    'styles.css 缺组合期作用域 nowrap 规则（pre.wysiwyg-ime-quote .wysiwyg-quote-slot）');
+  assert.match(css, /\.wysiwyg-ol-marker \{[\s\S]{0,2500}?white-space: nowrap;/, '同族先例 .wysiwyg-ol-marker nowrap 不得回退');
+  assert.match(wys, /RE\.quote\.test\(text\) \? 'wysiwyg-ime-quote' : null/, 'wysiwyg.js _wysiwygImeCompositionStart 缺引用行组合期挂类');
+  assert.match(wys, /_wysiwygImeCompositionEnd\(\) \{[\s\S]{0,300}?_wysiwygImeLineCls/, 'wysiwyg.js compositionend 未统一摘类');
+  // ③ JS：lvl-N 行类挂/撤（decor 按 > 数挂、封顶 6；两处引用行类清算随 nested 同撤）
+  assert.match(wys, /wysiwyg-quote-lvl-' \+ Math\.min\(level, 6\)/, 'wysiwyg.js decor 缺 lvl-N 行类挂载');
+  const lvlRmCount = (wys.match(/wysiwyg-quote-lvl-' \+ n/g) || []).length;
+  assert.ok(lvlRmCount >= 3, 'wysiwyg.js lvl-N 先清后挂/清算不足 3 处（decor + 两处行类清算），实际 ' + lvlRmCount);
+  // ④ 驱动回归接线
+  assert.match(driver, /=== S85：嵌套引用光标行 = 渲染嵌套盒同构 \+ IME 组合竖排修复/, '驱动缺 S85 场景');
+  assert.match(driver, /S85 核心：光标行背景 = 6 层（3 层 × 竖条 \+ 底色，渲染嵌套盒同构）/);
+  assert.match(driver, /槽常态 white-space: pre-wrap（nowrap 仅限组合期挂类，防行尾键入丢空格）/);
+  assert.match(driver, /S85 核心：组合期挂 wysiwyg-ime-quote → 槽 nowrap/);
+  assert.match(driver, /S85 核心：组合期槽未被折行撑高/);
+  assert.match(driver, /上屏模型干净：行 9 = `> > > 阿斯蒂芬`、光标 ch10（无需 JS 修复）/);
+  assert.match(driver, /组合期结束摘类（wysiwyg-ime-quote 撤除、槽恢复 pre-wrap）/);
+});
+
+test('S86 嵌套续行末行 = 嵌套盒底缘延续 + 单层光标行右缘 inset（2026-10-28 用户反馈①嵌套换行中间空白 ②引用内 / 无响应 + 蓝底铺到最右）', () => {
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const slash = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'slash.js'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 用户②：单层（lvl-1）光标行右缘 inset（旧基规则纯色 background-size 不生效 → 通宽）
+  assert.match(css, /pre\.wysiwyg-quote-line\.wysiwyg-quote-cursor-line:not\(\.wysiwyg-callout-cursor-line\):not\(\.wysiwyg-quote-nested\):not\(\.wysiwyg-block-edge-bottom\) \{[\s\S]{0,400}?calc\(100% - 64px\) 100% no-repeat[\s\S]{0,80}?\}/,
+    'styles.css 缺 lvl-1 中间行/顶缘 2 层 inset 背景（右缘 668）');
+  assert.match(css, /:not\(\.wysiwyg-quote-nested\):not\(\.wysiwyg-block-edge-top\) \{[\s\S]{0,400}?calc\(100% - 64px\) calc\(100% - 16px\) no-repeat[\s\S]{0,80}?\}/,
+    'styles.css 缺 lvl-1 底缘行 inset 背景（盒底收 16px margin）');
+  // ② 用户①：嵌套末行（edge-bottom + lvl-N）底缘阶梯 + 顶缘（盒 d 顶 = 12d）
+  assert.match(css, /wysiwyg-quote-lvl-2:not\(\.wysiwyg-callout-cursor-line\)\.wysiwyg-block-edge-bottom:not\(\.wysiwyg-block-edge-top\) \{[\s\S]{0,600}?56px 0 \/ 4px calc\(100% - 44px\)[\s\S]{0,300}?calc\(100% - 108px\) calc\(100% - 44px\)[\s\S]{0,300}?32px 0 \/ 4px calc\(100% - 16px\)/,
+    'styles.css 缺 lvl-2 底缘 2 层阶梯（外盒收 16 / 内盒收 44）');
+  assert.match(css, /wysiwyg-quote-lvl-3:not\(\.wysiwyg-callout-cursor-line\)\.wysiwyg-block-edge-top:not\(\.wysiwyg-block-edge-bottom\) \{[\s\S]{0,900}?80px 24px \/ 4px calc\(100% - 24px\)[\s\S]{0,500}?56px 12px \/ 4px calc\(100% - 12px\)/,
+    'styles.css 缺 lvl-3 顶缘阶梯（盒 d 顶 = 12d：80px 24px / 56px 12px）');
+  // ③ 分级边缘距（顶 12N / 底 28N；旧通用 24/40 仅 lvl-2 顶缘恰好正确）
+  for (const [n, px] of [[3, 36], [4, 48], [5, 60], [6, 72]]) {
+    assert.match(css, new RegExp(`wysiwyg-block-edge-top\\.wysiwyg-quote-lvl-${n} \\{ padding-top: ${px}px; \\}`),
+      'styles.css 缺 lvl-' + n + ' 顶缘距 ' + px + 'px（12N）');
+  }
+  for (const [n, px] of [[2, 56], [3, 84], [4, 112], [5, 140], [6, 168]]) {
+    assert.match(css, new RegExp(`wysiwyg-block-edge-bottom\\.wysiwyg-quote-lvl-${n} \\{ padding-bottom: ${px}px; \\}`),
+      'styles.css 缺 lvl-' + n + ' 底缘距 ' + px + 'px（28N）');
+  }
+  // ④ 分段嵌套开口（open-N：层级 2..N 盒朝光标行敞口，消盒↔带 16px 白缝）
+  for (const n of [2, 3, 4, 5, 6]) {
+    assert.ok(css.includes(`wysiwyg-quote-seg-top.wysiwyg-quote-seg-open-${n} > blockquote > blockquote { margin-bottom: 0; padding-bottom: 0;`),
+      'styles.css 缺 seg-top open-' + n + ' 嵌套盒清底');
+    assert.ok(css.includes(`wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-open-${n} > blockquote > blockquote { margin-top: 0; padding-top: 0;`),
+      'styles.css 缺 seg-bottom open-' + n + ' 嵌套盒清顶');
+  }
+  // ④b 接缝深侧（段末/首行比光标深 = 闭合盒紧邻接缝）：开口盒 16px 内距吸收闭合盒 margin
+  assert.match(css, /wysiwyg-quote-seg-top\.wysiwyg-quote-seg-deep\.wysiwyg-quote-seg-open-2 > blockquote > blockquote \{ padding-bottom: 16px; \}/,
+    'styles.css 缺 seg-top deep 开口盒补 16px 底距（闭合盒 margin 逸出 = 盒↔带白条）');
+  assert.match(css, /wysiwyg-quote-seg-top\.wysiwyg-quote-seg-deep\.wysiwyg-quote-seg-open-2 > blockquote > blockquote > blockquote \{ margin-bottom: 0; \}/,
+    'styles.css 缺 seg-top deep 闭合盒（N+1）底距清零');
+  assert.match(css, /wysiwyg-quote-seg-bottom\.wysiwyg-quote-seg-deep\.wysiwyg-quote-seg-open-2 > blockquote > blockquote \{ padding-top: 16px; \}/,
+    'styles.css 缺 seg-bottom deep 开口盒补 16px 顶距');
+  assert.match(wys, /wysiwyg-quote-seg-open-' \+ Math\.min\(curLvl, 6\)/, 'wysiwyg.js 分段节点未挂 open-N 类（按光标行 > 数、封顶 6）');
+  assert.match(wys, /wysiwyg-quote-seg-deep/, 'wysiwyg.js 分段节点未挂 deep 类（段末/首行层级 > 光标层级）');
+  // ⑤ 用户②（slash）：引用前缀 = 行首等价触发（>/ 与 > > > / 可触发；正文斜杠不误触）。
+  // 源里是正则字面量，用字符串断言避免转义歧义
+  assert.ok(slash.includes('const inQuotePrefix = /^'), 'slash.js 缺引用前缀行首等价触发（引用内输 / 没反应）');
+  assert.ok(slash.includes(')*$/.test(line.slice(0, pos.ch - 1))'), 'slash.js 引用前缀判定口径缺失（/ 前只有 > 前缀）');
+  assert.ok(slash.includes('!inQuotePrefix) return;'), 'slash.js 触发条件未并入引用前缀分支');
+  // ⑥ 驱动回归接线
+  assert.match(driver, /=== S86：嵌套续行末行 = 嵌套盒底缘延续/);
+  assert.match(driver, /S86 核心：seg-top 挂 wysiwyg-quote-seg-open-2（嵌套开口方向 = 光标层级）/);
+  assert.match(driver, /S86 核心：上段无白条（seg-top 底 = lvl2 盒底；深侧开口盒 16px 内距吸收闭合 lvl3 盒 margin，底色连续到接缝）/);
+  assert.match(driver, /S86 核心：末行背景 = 4 层底缘阶梯（2 层 × 竖条 \+ 底色，外盒收 16、内盒收 44）/);
+  assert.match(driver, /S86 核心：末行底距 = 56px（28×2，替代旧通用 40px）/);
+  assert.match(driver, /顶缘对照：内层（lvl2）层顶 = 12px（盒 d 顶 = 12d）、高度收 12px/);
 });

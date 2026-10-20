@@ -92,8 +92,11 @@
         const line = cm.getLine(pos.line);
         if (!line || line[pos.ch - 1] !== '/') return;
         const prev = pos.ch > 1 ? line[pos.ch - 2] : '';
-        // 仅行首（/ 位于索引 0）或 / 前为空白字符时触发，避免 and/or 等正文斜杠误触
-        if (pos.ch !== 1 && !/\s/.test(prev)) return;
+        // 仅行首（/ 位于索引 0）或 / 前为空白字符时触发，避免 and/or 等正文斜杠误触；
+        // 引用行（2026-10-28 用户反馈：引用块内输 / 没反应）：/ 前只有 > 前缀（如 `>/`、
+        // `> > > /`）= 行首内容起点（前缀是行标记不是正文）→ 同口径触发
+        const inQuotePrefix = /^\s*(?:>[ \t]?)*$/.test(line.slice(0, pos.ch - 1));
+        if (pos.ch !== 1 && !/\s/.test(prev) && !inQuotePrefix) return;
         this._openSlashPanel(pos);
       },
       _openSlashPanel(pos) {

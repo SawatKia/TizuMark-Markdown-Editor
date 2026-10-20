@@ -62,7 +62,8 @@
     ul: /^(\s*)([-*+])(\s+)/,
     ol: /^(\s*)(\d{1,9})([.)])(\s+)/,
     task: /^(\s*)([-*+])(\s+)\[[ xX]\]\s+/,
-    quote: /^(\s*)>/,
+    // 收口 constants.js 共享常量（format.js insertLinePrefix 的「引用行原位嵌套」判定同口径）
+    quote: TMConst.BLOCKQUOTE_LINE_RE,
     table: /^\s*\|/,
     // setext 标题：上一行文本 + 本行 === / ---
     setext: /^(\s*)(=+|-+)\s*$/,
@@ -605,8 +606,14 @@
       const lines = [];
       const total = cm.lineCount();
       for (let i = start; i < end && i < total; i++) lines.push(cm.getLine(i));
-      const src = lines.join('\n');
-      if (!src.trim()) return '';
+      return this._wysiwygRenderSource(lines.join('\n'));
+    },
+
+    // 渲染任意源码文本（块切片 / 合成源，如 callout 下半段合成的标记行）为 HTML；
+    // 失败返回 ''（调用方据此保持源码态）。renderWysiwygBlockHtml 与本方法共用此口径
+    //（2026-10-25 引用分段遮罩需要按行段 + 合成源渲染，收口一处）。
+    _wysiwygRenderSource(src) {
+      if (!src || !src.trim()) return '';
       try {
         if (typeof UnifiedRenderer === 'undefined' || !UnifiedRenderer.renderMarkdown) return '';
         return UnifiedRenderer.renderMarkdown(src, {
@@ -674,6 +681,10 @@
         // 得 4px，li 底距不会穿越 BFC 底缘外溢）→ 见 styles.css wysiwyg-mask-li-mid 规则。
         if (b.listItem && b.listItemPos !== 'last') node.classList.add('wysiwyg-mask-li-mid');
       } else if (this._wysiwygBlockIsHeading(b)) node.classList.add('wysiwyg-mask-no-btn-heading');
+      // 引用/提示块不挂「编辑」按钮（2026-10-25 用户要求「引用块、提示块的编辑按钮去掉」）：
+      // 遮罩 mousedown 点击映射本就直达源码行（点哪行编辑哪行），块级入口多余；no-btn-qc
+      // 规则把渲染 blockquote/.alert 的 16px 底距补回（与 14px 的 ul/ol/p 族不同值）。
+      else if (this._wysiwygBlockIsQuote(b)) node.classList.add('wysiwyg-mask-no-btn-qc');
       else if (isTocBlock) this._addWysiwygTocDeleteButton(node);
       else if (this._wysiwygMaskIsDefList(node)) node.classList.add('wysiwyg-mask-no-btn-dl');
       else if (this._wysiwygMaskIsPlainText(node)) node.classList.add('wysiwyg-mask-no-btn');
@@ -1030,6 +1041,173 @@
         this._wysiwygPendingAsync.add(node);
         this._scheduleWysiwygAsyncFlush();
       } catch (_) { /* 区间非法则放弃该块遮罩 */ }
+    },
+
+    // ---------------- 引用/提示块（callout）活动态「渲染分段 + 光标行源码」（2026-10-25
+    // 用户要求：引用块、提示块编辑态样式与渲染态一致，光标在哪一行就显示该行源码编辑）----------------
+    // 非光标行不再逐行显示源码，而是按「上段 [start, cursor) / 下段 (cursor, end]」两个
+    // 独立遮罩渲染（与阅读态同一渲染管线），光标行保持源码（既有 > 槽/竖条/背景机制，
+    // > 在光标行可见）。光标块内移动、输入变更（change 钩子）、防抖重算后重算分段边界
+    //（_wysiwygSegState 记录 idx+cursor+两段源文，范围与源文均未变时幂等 no-op）；活动块
+    // 失活（整块重遮）时随 _wysiwygClearQuoteSegments 一并清退。
+    // callout 下半段渲染需合成块首标记行（`> [!TYPE] 标题`，与渲染器 convertAlerts 同一
+    // 口径：无标记行则整段渲染成普通引用），CSS 隐藏其重复的 alert-title。
+    _wysiwygSegSource(s, e, markerLine) {
+      const cm = this.cm;
+      const lines = [];
+      const total = cm.lineCount();
+      for (let i = s; i < e && i < total; i++) lines.push(cm.getLine(i));
+      let src = lines.join('\n');
+      if (markerLine) src = markerLine + '\n' + src;
+      return src;
+    },
+
+    // 块是否为引用（首行 `>` 前缀，与 RE.quote 同一口径；callout 是引用子集同样命中）
+    _wysiwygBlockIsQuote(b) {
+      const cm = this.cm;
+      if (!cm || !b) return false;
+      const line = (b.start < cm.lineCount()) ? cm.getLine(b.start) : '';
+      return RE.quote.test(line);
+    },
+
+    // 块首行的 callout 类型：与渲染器 getAlertType 完全同口径（小写 startsWith、不容
+    // 前导空格——渲染器不认的块分段也不得按 callout 处理，否则分段配色与渲染态不符）。
+    _wysiwygBlockAlertType(b) {
+      const cm = this.cm;
+      if (!cm || !b) return null;
+      const line = ((b.start < cm.lineCount()) ? cm.getLine(b.start) : '').toLowerCase();
+      if (line.startsWith('> [!info]') || line.startsWith('> [!note]')) return 'note';
+      if (line.startsWith('> [!tip]')) return 'tip';
+      if (line.startsWith('> [!important]')) return 'important';
+      if (line.startsWith('> [!warning]')) return 'warning';
+      if (line.startsWith('> [!caution]')) return 'caution';
+      return null;
+    },
+
+    // 清退活动引用块的分段遮罩（整块重遮前 / 离开模式 / 换文档必调，与整块遮罩不重叠）
+    _wysiwygClearQuoteSegments() {
+      if (this._wysiwygSegMarks) {
+        for (const mark of this._wysiwygSegMarks) {
+          try { mark.clear(); } catch (_) { /* 已销毁 */ }
+          const node = mark && mark.replacedWith;
+          if (node && this._wysiwygPendingAsync) this._wysiwygPendingAsync.delete(node);
+        }
+      }
+      this._wysiwygSegMarks = null;
+      this._wysiwygSegState = null;
+    },
+
+    // 按光标行重挂分段遮罩（幂等：见 _wysiwygSegState 判定）。非引用活动块/光标在块外
+    // → 清退并返回。调用点：setWysiwygActiveBlock（激活）、syncWysiwygActiveBlock（光标
+    // 移动）、change 钩子（行号/文本变化）、防抖重算 ×2。
+    _wysiwygApplyQuoteSegments() {
+      const cm = this.cm;
+      const idx = this._wysiwygActiveIdx;
+      const b = (cm && idx >= 0 && this._wysiwygBlocks) ? this._wysiwygBlocks[idx] : null;
+      if (!cm || !b || !this._wysiwygBlockIsQuote(b)) { this._wysiwygClearQuoteSegments(); return; }
+      let cur = null;
+      try { cur = cm.getCursor('head').line; } catch (_) { this._wysiwygClearQuoteSegments(); return; }
+      if (cur < b.start || cur >= b.end) { this._wysiwygClearQuoteSegments(); return; }
+      const markerLine = this._wysiwygBlockAlertType(b) ? cm.getLine(b.start) : null;
+      // 2026-10-28 用户①「嵌套换行中间空白」：嵌套开口方向——光标行层级 N 决定段内哪些
+      // 嵌套盒朝光标行敞口（层级 2..N 的盒在上段清底、下段清顶，见 styles.css seg-open 规则）。
+      // 只清顶层（既有 > blockquote 规则）不够：嵌套盒自身 12px pad + 16px margin 会留在
+      // 接缝（实测嵌套 seg-top mask 底 = 盒底 + 16px 白缝）；深层（> N）盒闭合、保留底缘。
+      // 前缀内 > 计数 = split('>').length − 1（split 语义：N 个 > 切出 N+1 段）
+      const curLvl = (((cm.getLine(cur) || '').match(/^\s*(?:>[ \t]?)+/) || [''])[0].split('>').length - 1);
+      // 接缝深侧（2026-10-28 实测）：段末行比光标深（闭合嵌套盒紧邻接缝）时，其 16px
+      // 底/顶 margin 会从开口盒背景逸出 = 盒↔带 16px 白条（渲染态该区域在开口盒内、有底色）。
+      // deep 标志 → 内层开口盒（层级 N）补 16px 内距吸收该 margin、闭合盒（N+1）margin 清零
+      // （见 styles.css seg-deep 规则）
+      const lvlOf = (ln) => (((cm.getLine(ln) || '').match(/^\s*(?:>[ \t]?)+/) || [''])[0].split('>').length - 1);
+      const deepTop = cur > b.start && lvlOf(cur - 1) > curLvl;
+      const deepBot = cur + 1 < b.end && lvlOf(cur + 1) > curLvl;
+      const openCls = curLvl >= 2
+        ? ' wysiwyg-quote-seg-open-' + Math.min(curLvl, 6)
+        : '';
+      const topSrc = this._wysiwygSegSource(b.start, cur);
+      const botSrc = this._wysiwygSegSource(cur + 1, b.end, markerLine);
+      const st = this._wysiwygSegState;
+      if (st && st.idx === idx && st.cur === cur && st.topSrc === topSrc && st.botSrc === botSrc) return;
+      this._wysiwygClearQuoteSegments();
+      const self = this;
+      const mk = (s, e, cls) => {
+        if (s >= e) return null;
+        const html = this._wysiwygRenderSource(this._wysiwygSegSource(s, e, cls === 'wysiwyg-quote-seg-bottom' ? markerLine : null));
+        if (!html) return null;
+        const node = document.createElement('div');
+        const deepCls = (cls === 'wysiwyg-quote-seg-top' ? deepTop : deepBot) ? ' wysiwyg-quote-seg-deep' : '';
+        node.className = MASK_CLASS + ' preview-content ' + cls + openCls + deepCls;
+        node.innerHTML = html;
+        node.setAttribute('data-block-index', String(idx));
+        node.setAttribute('contenteditable', 'false');
+        this._wysiwygMaskTypography(node);
+        this._postProcessWysiwygNode(node);
+        let mark = null;
+        // 点击分段 = 把光标映射到段内源码行（与整块遮罩同一纵比口径；块本就活动，
+        // setWysiwygActiveBlock 同 idx 早退，仅自愈陈旧状态）；不做表格/TOC/链接分支
+        //（引用段内无这些交互，点哪行即编辑哪行）
+        node.addEventListener('mousedown', (ev) => {
+          ev.stopPropagation();
+          if (self._wysiwygTableDrag) { ev.preventDefault(); return; }
+          ev.preventDefault();
+          try {
+            if (self._wysiwygCellEditing) self._wysiwygEndCellEdit(true, false);
+            const r = mark && mark.find ? mark.find() : null;
+            if (!r) return;
+            const rect = node.getBoundingClientRect();
+            let target = r.from.line;
+            if (rect.height > 0 && r.to.line > r.from.line) {
+              const ratio = Math.min(1, Math.max(0, (ev.clientY - rect.top) / rect.height));
+              // 2026-10-25：纵比改「span+1 半区」归一——原 ratio*span 下末行只在
+              // ratio→1（节点底缘像素）可达，短段（2 源码行）下半区点击全落倒数第二行；
+              // span+1 使每源码行占自己的半区，段内任意位置点击都落到对应行（含末行）
+              const span = r.to.line - r.from.line;
+              target = r.from.line + Math.min(span, Math.floor(ratio * (span + 1)));
+            }
+            const line = Math.min(Math.max(target, 0), cm.lineCount() - 1);
+            let refTop = null;
+            if (rect && rect.height > 0) {
+              refTop = (r.to.line > r.from.line)
+                ? rect.top + (line - r.from.line) * (rect.height / (r.to.line - r.from.line + 1))
+                : rect.top;
+            }
+            self._wysiwygClickAnchor = { y: ev.clientY, line, refTop };
+            // ⚠️ 先清分段再落光标：replacedWith 标记把段内行收成原子单元，段内落点会被
+            // 钳到段缘（同整块遮罩点击前必须 unmask 的口径）。清段后目标行是源码行、
+            // 可寻址；cursorActivity → sync 会在新光标行重挂分段（几何变化后 _applyWysiwygClickAnchor
+            // 按终态几何补偿滚动）。
+            self._wysiwygClearQuoteSegments();
+            self.setWysiwygActiveBlock(self._wysiwygBlockIndexAtFresh(line));
+            cm.setSelection({ line, ch: cm.getLine(line).length },
+              { line, ch: cm.getLine(line).length }, { scroll: false, origin: '*mouse' });
+            cm.focus();
+            self._applyWysiwygClickAnchor();
+          } catch (_) { /* 标记已失效则忽略本次点击 */ }
+        });
+        try {
+          const lastLine = Math.min(e - 1, cm.lineCount() - 1);
+          mark = cm.markText({ line: s, ch: 0 },
+            { line: lastLine, ch: cm.getLine(lastLine).length },
+            { replacedWith: node, clearWhenEmpty: false, inclusiveLeft: false, inclusiveRight: false, atomic: false });
+        } catch (_) { return null; }
+        // 异步 pass 登记（段内图片/图表等，与整块遮罩同机制）
+        this._wysiwygNodeGen = this._wysiwygNodeGen || new Map();
+        this._wysiwygMaskGen = (this._wysiwygMaskGen || 0) + 1;
+        this._wysiwygNodeGen.set(node, this._wysiwygMaskGen);
+        this._wysiwygPendingAsync = this._wysiwygPendingAsync || new Set();
+        this._wysiwygPendingAsync.add(node);
+        this._scheduleWysiwygAsyncFlush();
+        return mark;
+      };
+      const marks = [];
+      const top = mk(b.start, cur, 'wysiwyg-quote-seg-top');
+      if (top) marks.push(top);
+      const bot = mk(cur + 1, b.end, 'wysiwyg-quote-seg-bottom');
+      if (bot) marks.push(bot);
+      this._wysiwygSegMarks = marks;
+      this._wysiwygSegState = { idx, cur, topSrc, botSrc };
+      this._applyWysiwygSelectionMaskClasses();
     },
 
     // 块是否为顶层列表：块首行（前导空格 ≤3）+ 列表标记。块表由 remark 切分，顶层列表块
@@ -1795,6 +1973,8 @@
       }
       // 旧块可能刚被编辑过：缓存 html 过期，重渲（与 setWysiwygActiveBlock 的 prev 处理一致）
       if (b.html !== undefined) { b.html = this.renderWysiwygBlockHtml(b.start, b.end); b.src = this._wysiwygBlockSource(b); }
+      // 活动引用块的分段遮罩先清（与整块遮罩区间重叠，2026-10-25 引用分段口径）
+      this._wysiwygClearQuoteSegments();
       this._wysiwygActiveIdx = -1;
       this.maskWysiwygBlock(prev);
       this._applyWysiwygActiveHighlight();
@@ -2620,6 +2800,11 @@
         }
         return;
       }
+      // 引用/提示块不挂活动行灰底（2026-10-25 用户「编辑态不适用灰色代码框、直接与渲染态
+      // 样式完全一致」）：光标行由 wysiwyg-quote-line 的 pre 背景盒 + 左竖条自绘渲染盒
+      // 本貌，整行 --code-bg 灰底（cm-wysiwyg-active-block）铺在 pre 背景两侧露出 =
+      // 「背景太乱、规则互相冲突」的根源，整块跳过（旧行类已在上方循环撤净）。
+      if (this._wysiwygBlockIsQuote(b)) return;
       const total = cm.lineCount();
       if (b.start >= total) return;
       const last = Math.min(b.end, total) - 1;
@@ -2720,6 +2905,12 @@
               // 引用行类（2026-10-20）：行改写成非引用（删掉 >）后须撤掉背景盒/竖条槽
               cm.removeLineClass(h, 'text', 'wysiwyg-quote-line');
               cm.removeLineClass(h, 'text', 'wysiwyg-quote-nested');
+              for (let n = 2; n <= 6; n++) cm.removeLineClass(h, 'text', 'wysiwyg-quote-lvl-' + n); // 嵌套层级类随 nested 同撤
+              // 注：callout 光标行类（wysiwyg-callout-cursor-line + wysiwyg-callout-{type}）不在此撤——由
+              // syncWysiwygActiveBlock 每 tick 现算挂/撤（同 wysiwyg-quote-cursor-line 机制）：
+              // decor 先清后挂会在 sync 现算**之后**跑（setWysiwygActiveBlock 内部），刚一挂上
+              // 就被清 → 延迟一 tick 闪烁（2026-10-25 实测）。其行号失效清算由
+              // _setWysiwygCalloutCurClass 的 prev/next 差分兜底。
             }
           } catch (_) { /* 行已销毁（安全 no-op） */ }
         }
@@ -2962,6 +3153,14 @@
           if (h) {
             cm.addLineClass(h, 'text', 'wysiwyg-quote-line');
             if (level >= 2) cm.addLineClass(h, 'text', 'wysiwyg-quote-nested');
+            // 嵌套层级类（2026-10-28）：中间行光标行按层级画渲染同构的逐层底色/全高竖条
+            // （styles.css wysiwyg-quote-lvl-N 规则）。先清后挂：层级升降（增/删一层 >）
+            // 须换掉旧类；封顶 6（同列表 wysiwyg-list-lvl-N 口径）。
+            for (let n = 2; n <= 6; n++) cm.removeLineClass(h, 'text', 'wysiwyg-quote-lvl-' + n);
+            if (level >= 2) cm.addLineClass(h, 'text', 'wysiwyg-quote-lvl-' + Math.min(level, 6));
+            // callout 光标行类（2026-10-25 分段口径）不再在此挂：激活时 _wysiwygApplyActiveDecor
+            // 的 curLine 是旧光标（未落目标行），判不准 → 改由 syncWysiwygActiveBlock 现算
+            // 路径 _setWysiwygCalloutCurClass 管理（与 _wysiwygQuoteCurLine 同机制）。
           }
         }
       }
@@ -3109,7 +3308,21 @@
         // 重新遮罩（2026-10-25 用户口径：尾部 ``` 后回车跳出灰盒）。
         const delta = c.text.length - 1 - (c.to.line - c.from.line);
         if (delta !== 0 && self._wysiwygPatchBlockTableForChange(c, delta)) self._applyWysiwygActiveHighlight();
+        // 引用块 end 同步（同围栏 end 扩展的口径，2026-10-25 分段口径配套）：末行之后
+        // 新增的行仍是引用行（回车自动 `> ` 续行 / 粘贴引用段落）→ end 即时扩展。不扩展
+        // 则分段重挂判「光标在块外」清退分段 → 整块闪回源码 250ms（与围栏闪出同根因）。
+        if (delta > 0 && self._wysiwygBlockIsQuote(b) && c.to.line === b.end - 1) {
+          let ext = 0;
+          for (let i = 0; i < delta && b.end + i < cm.lineCount(); i++) {
+            if (RE.quote.test((cm.getLine(b.end + i) || '').trimStart())) ext++;
+            else break;
+          }
+          if (ext > 0) b.end += ext;
+        }
         if (c.from.line < b.end && c.to.line >= b.start) self._wysiwygApplyActiveDecor(idx);
+        // 引用/提示块活动态（渲染分段 + 光标行源码）：行号/文本变化后重算分段边界
+        //（内部幂等：范围与源文未变即 no-op；光标离块 → 清退）
+        if (self._wysiwygBlockIsQuote(b)) self._wysiwygApplyQuoteSegments();
       });
     },
 
@@ -3191,6 +3404,8 @@
       // 点击落点错位。HEAD 同步路径「前后同一套陈旧几何」相减≈0 才侥幸无事。
       const hadPrev = prev >= 0;
       if (hadPrev) {
+        // 活动引用块的分段遮罩先清（与整块重遮的 mark 区间重叠，2026-10-25 分段口径）
+        this._wysiwygClearQuoteSegments();
         // 旧块刚被编辑过，缓存 html 过期，需重渲
         const b = this._wysiwygBlocks && this._wysiwygBlocks[prev];
         if (b && b.html !== undefined) { b.html = this.renderWysiwygBlockHtml(b.start, b.end); b.src = this._wysiwygBlockSource(b); }
@@ -3199,6 +3414,9 @@
       const hadIdx = idx >= 0;
       if (hadIdx) this.unmaskWysiwygBlock(idx);
       this._wysiwygActiveIdx = idx;
+      // 引用/提示块活动态分段遮罩（2026-10-25）：在锚点 restore **之前**挂——分段几何
+      // 变化纳入同一次补偿（cursorActivity 路径无点击锚点时走 capture/restore 差值）。
+      if (hadIdx) this._wysiwygApplyQuoteSegments();
       if (hadPrev || hadIdx) this._restoreWysiwygAnchor();
       else this._wysiwygAnchorY = null; // 幻影切换：丢弃陈旧采样，不做补偿
       // 活动块源文态装饰（Typora 式：标题#/列表符号/代码围栏）：清旧 + 按新活动块重挂
@@ -3244,7 +3462,10 @@
       if (!cm || !this._wysiwygMarks) return;
       const ranges = cm.listSelections();
       const le = (a, b) => a.line < b.line || (a.line === b.line && a.ch <= b.ch);
-      for (const mark of this._wysiwygMarks.values()) {
+      // 分段遮罩（引用活动态，2026-10-25）与整块遮罩同口径着色
+      const allMarks = Array.from(this._wysiwygMarks.values());
+      if (this._wysiwygSegMarks) allMarks.push(...this._wysiwygSegMarks);
+      for (const mark of allMarks) {
         const node = mark && mark.replacedWith;
         if (!node) continue;
         let f = null;
@@ -3365,6 +3586,16 @@
       if (prevQuote != null && prevQuote !== nextQuote) this._setWysiwygQuoteCurClass(prevQuote, false);
       if (nextQuote != null && nextQuote !== prevQuote) this._setWysiwygQuoteCurClass(nextQuote, true);
       this._wysiwygQuoteCurLine = nextQuote;
+      // —— callout 光标行类（2026-10-25 分段口径）：活动块是 callout（首行 [!TYPE]）时，
+      //    光标行的 > 槽竖条/底色按 callout 类型配色（与上下分段遮罩 .alert 盒同一色板）。
+      //    与 _wysiwygQuoteCurLine 同机制：每 tick 现算 prev/next 差分挂/撤——不能用
+      //    _wysiwygApplyActiveDecor 开工时判（激活时光标尚未落到目标行，2026-10-25 实测
+      //    getCursor 读到旧位置），必须在 cursorActivity 现算路径落地。
+      const prevCallout = this._wysiwygCalloutCurLine;
+      const nextCallout = inQuote ? this._wysiwygBlockAlertType(ab) : null;
+      if (prevCallout != null && prevCallout !== nextQuote) this._setWysiwygCalloutCurClass(prevCallout, false);
+      if (nextCallout != null && nextQuote !== prevCallout) this._setWysiwygCalloutCurClass(nextQuote, true, nextCallout);
+      this._wysiwygCalloutCurLine = nextCallout ? nextQuote : null;
       // —— 行内标记光标行类（2026-07-13 用户反馈：①鼠标选中一段文字时编辑态源码消失
       //    ——active-line addon 对**非空选区清掉全部活动行**（updateActiveLines 跳过非空
       //    range），选区期间光标行回渲染外观；②demo.md 的 <ins> 行光标离开整列表才回
@@ -3377,6 +3608,9 @@
       //    addon 本身保留：光标行底色（codemirror.css #e8f2ff）与失步守卫仍用它。
       this._applyWysiwygInlineCurLine();
       this.setWysiwygActiveBlock(activeIdx);
+      // 引用/提示块活动态（2026-10-25 分段口径）：光标块内移动 → 分段边界随光标重算
+      //（内部幂等：光标行/段源未变即 no-op）；光标离块 → 清退
+      this._wysiwygApplyQuoteSegments();
       // active-line addon 失步守卫（2026-10-21；2026-07-13 起行内源码显示已改 JS 行类
       // 载体 wysiwyg-inline-cursor-line——按钳后光标行号直挂、无视觉行解析，天然不失步，
       // 本守卫只护 addon 余下的光标行底色条 #e8f2ff）：光标落进**被遮罩块**（collapsed
@@ -3406,6 +3640,28 @@
     // 控制该行 > 槽字符可见）。
     _setWysiwygQuoteCurClass(n, on) {
       this._setWysiwygCurLineClass(n, 'wysiwyg-quote-cursor-line', on);
+    },
+
+    // callout 光标行类（2026-10-25 分段口径，同日改版：类型类 alert-{type} →
+    // wysiwyg-callout-{type}——pre 带旧类名会直接命中 .alert-{type} 渲染规则
+    // （1px inset 内环铺满整行），与 pre 自身背景规则互搏成「灰色框」）：
+    // wysiwyg-callout-cursor-line（接管引用行默认盒、切换 callout 配色）+
+    // wysiwyg-callout-{type}（note/tip/important/warning/caution 五类，色板经
+    // --qc-bg/--qc-bar 变量与渲染/分段 .alert 盒同源——CSS 按类型设两变量，槽
+    // ::before 与 pre::before 竖条共用）。撤类时不知道旧类型，一把移除全部五类
+    //（幂等，杜绝残留）。
+    _setWysiwygCalloutCurClass(n, on, type) {
+      if (on) {
+        if (type) this._setWysiwygCurLineClass(n, 'wysiwyg-callout-' + type, true);
+        this._setWysiwygCurLineClass(n, 'wysiwyg-callout-cursor-line', true);
+      } else {
+        this._setWysiwygCurLineClass(n, 'wysiwyg-callout-cursor-line', false);
+        this._setWysiwygCurLineClass(n, 'wysiwyg-callout-note', false);
+        this._setWysiwygCurLineClass(n, 'wysiwyg-callout-tip', false);
+        this._setWysiwygCurLineClass(n, 'wysiwyg-callout-important', false);
+        this._setWysiwygCurLineClass(n, 'wysiwyg-callout-warning', false);
+        this._setWysiwygCurLineClass(n, 'wysiwyg-callout-caution', false);
+      }
     },
 
     // 光标行行类挂/撤（2026-10-20 引用 > 槽；2026-07-13 扩展行内标记源码显示）：
@@ -3634,6 +3890,10 @@
         this.updateWysiwygBlankLines();
         this._applyWysiwygActiveHighlight();
         this._wysiwygApplyActiveDecor(this._wysiwygActiveIdx);
+        // 引用/提示块活动态分段（2026-10-25）：renderWysiwygMasks（切模式/重渲）程序化
+        // 激活不触发 cursorActivity（点击路径才触发）→ 无 sync 兜底 → 必须在此显式补挂，
+        // 否则非光标行仍是整块源码 pre（无分段渲染遮罩）。幂等（内部范围/源文未变即 no-op）。
+        this._wysiwygApplyQuoteSegments();
         this._applyWysiwygSelectionMaskClasses();
         // 遮罩挂完后重挂光标行源码显示类（与 clearWysiwygMasks 的复位配对）：
         // 文档/遮罩重建后当前行立即回到源码显示，不必等下一次 cursorActivity。
@@ -3670,22 +3930,34 @@
     // → change → 装饰 span 重挂，这 80ms 空窗里已确认文本仍是基准字号。两者叠加 =
     // H1「32px→16px（组合中）→32px（确认后+80ms）」先缩后胀、H6「14.4px→16px→14.4px」先胀后缩。
     // 修法：compositionstart 给标题行 pre 挂 wysiwyg-ime-heading-{级}（基准字号抬到标题尺寸、
-    // 行内 span 反比缩放，见 styles.css）；compositionend 摘类 + 立即读一次 DOM（跳过 80ms
-    // 空窗，span 同任务内重挂）。由 editor-core 输入域原生事件接线（CM 5.65.18 不触发用户级
-    // composition 编辑器事件，cm.on 是死代码——与 _wysiwygComposing 同一教训）。
+    // 行内 span 反比缩放，见 styles.css）；组合行是引用行时改挂 wysiwyg-ime-quote（槽
+    // nowrap 防组合串竖排，见 styles.css 同名规则）；compositionend 摘类 + 立即读一次
+    // DOM（跳过 80ms 空窗，span 同任务内重挂）。由 editor-core 输入域原生事件接线（CM
+    // 5.65.18 不触发用户级 composition 编辑器事件，cm.on 是死代码——与 _wysiwygComposing
+    // 同一教训）。
     _wysiwygImeCompositionStart() {
       const cm = this.cm;
       if (!cm || this.viewMode !== 'wysiwyg' || this._wysiwygCellEditing) return;
-      this._wysiwygImeHeadingLine = null;
+      this._wysiwygImeLineCls = null;
       try {
         const line = cm.getCursor().line;
-        const m = /^\s{0,3}(#{1,6})(?=\s|$)/.exec(cm.getLine(line) || '');
-        if (!m) return;
+        const text = cm.getLine(line) || '';
+        const m = /^\s{0,3}(#{1,6})(?=\s|$)/.exec(text);
+        // 引用行（任意层级）：组合串落进 24px 槽自己的文本节点（空续行正文无节点，
+        // 2026-10-28 DOM 实测 "> " → "> a's'd'f"）→ pre-wrap 下逐字折行 = 用户截图的
+        // 竖排短线。组合期挂 wysiwyg-ime-quote → 槽 nowrap（单行右溢、overflow 可见）；
+        // compositionend 摘类恢复 pre-wrap——**只能限组合期**：常驻 nowrap 会让行尾键入
+        // 的 CM DOM 差分丢槽内空格（2026-10-28 实测 `> > ` + CJK → `> >内容`，S84 回归），
+        // 与 2026-10-18 列表 marker 竖排同源。组合串在槽文本节点内、上屏模型干净 →
+        // 无需列表式 JS 修复（列表空格在独立零宽 span、会被重排）。
+        const cls = m
+          ? 'wysiwyg-ime-heading-' + m[1].length
+          : (RE.quote.test(text) ? 'wysiwyg-ime-quote' : null);
+        if (!cls) return;
         const node = this._wysiwygLinePreOf(line);
         if (!node || !node.classList) return;
-        const cls = 'wysiwyg-ime-heading-' + m[1].length;
         node.classList.add(cls);
-        this._wysiwygImeHeadingLine = { node, cls };
+        this._wysiwygImeLineCls = { node, cls };
       } catch (_) { /* 挂不上就不挂，不影响输入 */ }
     },
 
@@ -3705,8 +3977,8 @@
     },
 
     _wysiwygImeCompositionEnd() {
-      const h = this._wysiwygImeHeadingLine;
-      this._wysiwygImeHeadingLine = null;
+      const h = this._wysiwygImeLineCls;
+      this._wysiwygImeLineCls = null;
       if (h && h.node && h.node.classList) {
         try { h.node.classList.remove(h.cls); } catch (_) { /* 节点已随重排销毁 */ }
       }
@@ -3772,6 +4044,8 @@
         self.updateWysiwygBlankLines();
         self._applyWysiwygActiveHighlight();
         self._wysiwygApplyActiveDecor(self._wysiwygActiveIdx);
+        // 引用/提示块活动态分段（2026-10-25）：块表重切后按新边界重挂（幂等）
+        self._wysiwygApplyQuoteSegments();
         self._applyWysiwygSelectionMaskClasses();
         // 2026-10-21「输入文字页面乱跳」：兜底同步冲刷——遮罩重渲染（占位高度）与 TOC
         // 同步注入 + 刷新补偿必须在**同一任务**内完成，否则「占位 → 真实高度」的阶跃被
@@ -3880,6 +4154,8 @@
       this.updateWysiwygBlankLines();
       this._applyWysiwygActiveHighlight();
       this._wysiwygApplyActiveDecor(this._wysiwygActiveIdx);
+      // 引用/提示块活动态分段（2026-10-25）：全量增量刷新后按新边界重挂（幂等）
+      this._wysiwygApplyQuoteSegments();
       this._applyWysiwygSelectionMaskClasses();
     },
 
@@ -4492,6 +4768,8 @@
             }
             this._wysiwygActiveDecor = null;
           }
+          // 引用/提示块活动态分段遮罩同批清（2026-10-25 分段口径）
+          this._wysiwygClearQuoteSegments();
           if (this._wysiwygMarks) {
             for (const mark of Array.from(this._wysiwygMarks.values())) {
               try { mark.clear(); } catch (_) { /* 已销毁，忽略 */ }
@@ -4537,6 +4815,11 @@
                   cm.removeLineClass(h, 'text', 'wysiwyg-html-block-line');
                   cm.removeLineClass(h, 'text', 'wysiwyg-quote-line');
                   cm.removeLineClass(h, 'text', 'wysiwyg-quote-nested');
+                  for (let n = 2; n <= 6; n++) cm.removeLineClass(h, 'text', 'wysiwyg-quote-lvl-' + n); // 嵌套层级类随 nested 同撤
+                  // 注：callout 光标行类（wysiwyg-callout-cursor-line + wysiwyg-callout-{type}）不在此撤——
+                  // 同下款 wysiwyg-quote-cursor-line 口径：防抖重渲后 pre 按行对象重建自动带回，
+                  // 撤掉则用户停手（无 cursorActivity 跟随）时光标行 callout 配色丢（2026-10-25
+                  // 实测）；进出由 syncWysiwygActiveBlock 现算差分兜底。
                 }
               } catch (_) { /* 行已销毁（安全 no-op） */ }
             }
