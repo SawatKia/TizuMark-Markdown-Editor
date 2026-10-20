@@ -3193,8 +3193,10 @@ test('S86 嵌套续行末行 = 嵌套盒底缘延续 + 单层光标行右缘 ins
   // ① 用户②：单层（lvl-1）光标行右缘 inset（旧基规则纯色 background-size 不生效 → 通宽）
   assert.match(css, /pre\.wysiwyg-quote-line\.wysiwyg-quote-cursor-line:not\(\.wysiwyg-callout-cursor-line\):not\(\.wysiwyg-quote-nested\):not\(\.wysiwyg-block-edge-bottom\) \{[\s\S]{0,400}?calc\(100% - 64px\) 100% no-repeat[\s\S]{0,80}?\}/,
     'styles.css 缺 lvl-1 中间行/顶缘 2 层 inset 背景（右缘 668）');
-  assert.match(css, /:not\(\.wysiwyg-quote-nested\):not\(\.wysiwyg-block-edge-top\) \{[\s\S]{0,400}?calc\(100% - 64px\) calc\(100% - 16px\) no-repeat[\s\S]{0,80}?\}/,
-    'styles.css 缺 lvl-1 底缘行 inset 背景（盒底收 16px margin）');
+  // S92（2026-10-29）：选择器由 :not(edge-top) 收窄为要求 edge-bottom——旧选择器同时命中
+  // 中间行且文件序在后，覆盖上方全高规则 → lvl-1 中间位光标行底 16px 无底色（白缝）
+  assert.match(css, /:not\(\.wysiwyg-quote-nested\)\.wysiwyg-block-edge-bottom:not\(\.wysiwyg-block-edge-top\) \{[\s\S]{0,400}?calc\(100% - 64px\) calc\(100% - 16px\) no-repeat[\s\S]{0,80}?\}/,
+    'styles.css 缺 lvl-1 底缘行 inset 背景（盒底收 16px margin，S92 起要求 edge-bottom）');
   // ② 用户①：嵌套末行（edge-bottom + lvl-N）底缘阶梯 + 顶缘（盒 d 顶 = 12d）
   assert.match(css, /wysiwyg-quote-lvl-2:not\(\.wysiwyg-callout-cursor-line\)\.wysiwyg-block-edge-bottom:not\(\.wysiwyg-block-edge-top\) \{[\s\S]{0,600}?56px 0 \/ 4px calc\(100% - 44px\)[\s\S]{0,300}?calc\(100% - 108px\) calc\(100% - 44px\)[\s\S]{0,300}?32px 0 \/ 4px calc\(100% - 16px\)/,
     'styles.css 缺 lvl-2 底缘 2 层阶梯（外盒收 16 / 内盒收 44）');
@@ -3375,9 +3377,46 @@ test('S91 引用长行换行留距 + 嵌套弹级渲染修复（2026-10-28 用�
   assert.match(driver, /=== S91：引用长行换行留距 \+ 嵌套弹级渲染修复/);
   assert.match(driver, /S91① lvl-1 长行换行（wikilink 行）：pre pad 56\/52、槽左缘=32、正文各视觉行左=56、右缘≤648、行高=视觉行数×27\.2/);
   assert.match(driver, /S91① lvl-2 长行换行：pre pad 80\/72、槽左缘=32、正文各视觉行左=80、右缘≤628/);
-  assert.match(driver, /S91② 弹级后 seg 重分类（seg-deep、无 seg-open-N、嵌套盒闭合 pb12\/mb16\/圆角6）/);
+  assert.match(driver, /S91② 弹级后 seg 重分类（seg-deep、无 seg-open-N、顶层盒 pb16 接缝上色、闭合嵌套盒 mb0\/pb12\/圆角6）/);
   assert.match(driver, /S91② 光标移开后弹级行内容进 seg 渲染（渲染态可见）/);
   assert.match(driver, /S91③ 渲染器层级回退：> x 独立成外层 P（P\(ABC\) \| BQ\(sdm\) \| P\(x\)）/);
   assert.match(driver, /S91③ 无回退对照不变（P\(ab\) \| BQ\(cd\)）/);
   assert.match(driver, /S91④ 弹级态（光标在末行层级回退行）band = 遮罩高（块高不跳变）/);
+});
+
+test('S92 嵌套空行弹级到最外层后接缝着色（2026-10-29 用户截图：弹级行与上方块之间 16px 白缝、弹级行看似独立成盒）', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // A. seg-top 层级回退（seg-deep 且无 seg-open-N）接缝上色：顶层开口盒补 16px 内距把
+  //    首层嵌套盒的 16px margin 收进自身背景（渲染态该 16px 在外层盒背景内），闭合盒
+  //    margin 清零防双重计入（总高不变 → S90 band 不变式）。:not(seg-open-2..6) 排除
+  //    deep+open-N 态（其顶层盒已有自身 pb16 收 margin，再补会双重计入）。
+  const dropSel = '.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top'
+    + '.wysiwyg-quote-seg-deep:not(.wysiwyg-quote-seg-open-2):not(.wysiwyg-quote-seg-open-3)'
+    + ':not(.wysiwyg-quote-seg-open-4):not(.wysiwyg-quote-seg-open-5):not(.wysiwyg-quote-seg-open-6)';
+  assert.ok(css.includes(dropSel + ' > blockquote { padding-bottom: 16px; }'),
+    'styles.css 缺 seg-top 层级回退顶层盒 pb16 接缝上色规则');
+  assert.ok(css.includes(dropSel + ' > blockquote > blockquote { margin-bottom: 0; }'),
+    'styles.css 缺 seg-top 层级回退闭合嵌套盒 mb0 规则（防双重计入）');
+  // 只命中链首层（子选择器），更深层闭合盒由自身 12px 内距挡住 margin 外逸
+  assert.ok(!css.includes(dropSel + ' > blockquote > blockquote > blockquote { padding-bottom'),
+    'styles.css seg-top 层级回退规则误命中深层盒（只应命中链首层）');
+  // B. lvl-1（非嵌套）光标行底色规则收窄为仅底缘行：原 :not(edge-top) 选择器与全高规则
+  //    同特异性、文件序在后 → 中间行被误扣 16px 白缝（S86 潜伏缺陷，S87 弹级暴露）。
+  assert.ok(css.includes(
+    'pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line):not(.wysiwyg-quote-nested).wysiwyg-block-edge-bottom:not(.wysiwyg-block-edge-top) {'),
+    'styles.css 缺收窄后的 lvl-1 底缘行光标底色规则（要求 wysiwyg-block-edge-bottom）');
+  assert.doesNotMatch(css,
+    /pre\.wysiwyg-quote-line\.wysiwyg-quote-cursor-line:not\(\.wysiwyg-callout-cursor-line\):not\(\.wysiwyg-quote-nested\):not\(\.wysiwyg-block-edge-top\) \{/,
+    'styles.css 残留旧 lvl-1 光标行底色选择器（:not(edge-top) 未要求 edge-bottom，会误扣中间行底 16px）');
+  // 驱动回归接线（两形态：块中弹级 + 块末弹级）
+  assert.match(driver, /=== S92：弹级到最外层后接缝着色（2026-10-29 用户截图两形态）===/);
+  assert.match(driver, /S92⑤ 块中弹级：光标落弹级行（`> sdfsdfsadf`、lvl-1 中间行）/);
+  assert.match(driver, /S92⑤ 块中弹级：中间行光标底色全高（无 calc\(100% - 16px\) 白缝层）/);
+  assert.match(driver, /S92⑤ 块中弹级：seg-top 顶层盒 pb16 收 margin \+ 闭合嵌套盒 mb0（接缝无白条）/);
+  assert.match(driver, /S92⑤ 块中弹级：band = 整块遮罩高（S90 不变式，块高不跳变）/);
+  assert.match(driver, /S92⑥ 块末弹级：光标落弹级行（`> sdfsdfsadf`、edge-bottom）/);
+  assert.match(driver, /S92⑥ 块末弹级：底缘行底色保留 16px 敞口（calc\(100% - 16px\)，S86 设计）/);
+  assert.match(driver, /S92⑥ 块末弹级：seg-top 顶层盒 pb16 收 margin \+ 闭合嵌套盒 mb0（接缝无白条）/);
+  assert.match(driver, /S92⑥ 块末弹级：band = 整块遮罩高（S90 不变式，块高不跳变）/);
 });

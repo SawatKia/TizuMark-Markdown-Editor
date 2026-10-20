@@ -3896,7 +3896,11 @@ body.is-resizing .side-btn {
      linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px 100% no-repeat,
      linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) 100% no-repeat
 }
-.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line):not(.wysiwyg-quote-nested):not(.wysiwyg-block-edge-top) {
+/* S92（2026-10-29）：原选择器 :not(edge-top) 同时命中中间行且文件序在后、覆盖上方
+   中间行全高规则 → lvl-1（非嵌套）中间位光标行底 16px 无底色（白缝，与 seg-top 接缝
+   白缝合成「弹级行看似独立盒」的 2026-10-29 截图视觉）。收窄为仅底缘行（要求
+   edge-bottom）：中间行/顶缘回退上方全高规则。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line):not(.wysiwyg-quote-nested).wysiwyg-block-edge-bottom:not(.wysiwyg-block-edge-top) {
   background:
      linear-gradient(var(--qc-bar, var(--accent-color)), var(--qc-bar, var(--accent-color))) 32px 0 / 4px calc(100% - 16px) no-repeat,
      linear-gradient(var(--qc-bg, var(--accent-subtle)), var(--qc-bg, var(--accent-subtle))) 32px 0 / calc(100% - 64px) calc(100% - 16px) no-repeat
@@ -4174,6 +4178,15 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-5 > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote { margin-top: 0; }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote { padding-top: 16px; }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-bottom.wysiwyg-quote-seg-deep.wysiwyg-quote-seg-open-6 > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote > blockquote { margin-top: 0; }
+/* S92 层级回退接缝着色（2026-10-29 用户截图：嵌套空行回车弹级到最外层后，弹级行与
+   上方块之间 16px 白缝、弹级行看似独立盒）：光标 lvl-1 + 段末更深（seg-deep 且无
+   seg-open-N）→ 首层嵌套盒闭合紧邻接缝，其 16px margin 经顶层盒清零的内距逸出
+   （margin collapse）成白条——渲染态该区域在外层盒背景内。同上方 deep+open 配方：
+   顶层开口盒补 16px 内距把 margin 收进自身背景（白条获得外层底色 + border-left
+   竖条），闭合盒 margin 清零（防双重计入；总高不变 → S90 band 不变式）。只命中链
+   首层（子选择器）；更深层闭合盒由自身 12px 内距挡住 margin 外逸，不涉及。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep:not(.wysiwyg-quote-seg-open-2):not(.wysiwyg-quote-seg-open-3):not(.wysiwyg-quote-seg-open-4):not(.wysiwyg-quote-seg-open-5):not(.wysiwyg-quote-seg-open-6) > blockquote { padding-bottom: 16px; }
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask.wysiwyg-quote-seg-top.wysiwyg-quote-seg-deep:not(.wysiwyg-quote-seg-open-2):not(.wysiwyg-quote-seg-open-3):not(.wysiwyg-quote-seg-open-4):not(.wysiwyg-quote-seg-open-5):not(.wysiwyg-quote-seg-open-6) > blockquote > blockquote { margin-bottom: 0; }
 
 
 

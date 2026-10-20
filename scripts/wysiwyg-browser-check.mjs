@@ -7165,20 +7165,26 @@ try {
       const cm = window.__s91cm;
       const top = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-top');
       const bot = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-bottom');
+      const outer = top ? top.querySelector('blockquote') : null;
       const inner = top ? top.querySelector('blockquote > blockquote') : null;
+      const outerCs = outer ? getComputedStyle(outer) : null;
       const innerCs = inner ? getComputedStyle(inner) : null;
       return {
         line7: cm.getLine(7),
         topCls: top ? top.className : null,
         botCls: bot ? bot.className : null,
+        outer: outerCs ? { pb: outerCs.paddingBottom } : null,
         inner: innerCs ? { pb: innerCs.paddingBottom, mb: innerCs.marginBottom, radius: innerCs.borderBottomRightRadius } : null,
       };
     });
     const segReclass = mS.line7 === '> 上层内容'
       && /wysiwyg-quote-seg-deep/.test(mS.topCls || '') && !/seg-open-\d/.test(mS.topCls || '')
       && /wysiwyg-quote-seg-deep/.test(mS.botCls || '') && !/seg-open-\d/.test(mS.botCls || '')
-      && mS.inner && mS.inner.pb === '12px' && mS.inner.mb === '16px' && mS.inner.radius === '6px';
-    s91checks.push(['S91② 弹级后 seg 重分类（seg-deep、无 seg-open-N、嵌套盒闭合 pb12/mb16/圆角6）', segReclass,
+      // S92 起：seg-top 层级回退（deep 无 open-N）接缝上色——顶层盒补 pb16 收 margin 进自身
+      // 背景、闭合嵌套盒 mb 清零（防双重计入，总高不变）
+      && mS.outer && mS.outer.pb === '16px'
+      && mS.inner && mS.inner.pb === '12px' && mS.inner.mb === '0px' && mS.inner.radius === '6px';
+    s91checks.push(['S91② 弹级后 seg 重分类（seg-deep、无 seg-open-N、顶层盒 pb16 接缝上色、闭合嵌套盒 mb0/pb12/圆角6）', segReclass,
       JSON.stringify(mS)]);
     // 光标移开 → 弹级行（含输入内容）进 seg 渲染（渲染态可见）
     const ptT = await page.evaluate(() => {
@@ -7258,6 +7264,131 @@ try {
       JSON.stringify({ band: bS.band, maskH4, cls: bS.preCls })]);
   }
   for (const [label, ok, extra] of s91checks) {
+    console.log(`  ${ok ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    if (!ok) fail++;
+  }
+
+  // === S92：嵌套空行弹级到最外层后的接缝着色（2026-10-29 用户截图：弹级行与上方块之间
+  // 16px 白缝、弹级行看似独立成盒）===
+  // 根因两处（布局经实测无问题，纯上色）：
+  //  A. seg-top 层级回退（光标 lvl-1 + 段末更深，seg-deep 无 seg-open-N）：首层嵌套盒 16px
+  //     margin 经顶层盒清零的内距逸出成白条 → 顶层开口盒补 pb16 收 margin 进自身背景 +
+  //     闭合盒 mb0（总高不变 → S90 band 不变式）。
+  //  B. lvl-1 中间行光标底色规则 :not(edge-top) 与底缘规则文件序冲突 → 中间行底 16px 无
+  //     底色 → 收窄为仅 edge-bottom 行。
+  console.log('\n=== S92：弹级到最外层后接缝着色（2026-10-29 用户截图两形态）===');
+  const s92checks = [];
+  const s92base = ['# T', '',
+    '> 下文是完整语法演示。想快速体验特色功能，直接跳到 导出功能、数学公式、流程图与图表、查找与替换、文件与工作区、个性化与设置 几个章节即可。',
+    '> sdfsadf', '> asdfasfaf', '> sadsadfs',
+    '> > sdfsdcfsaf', '> > asdfsadf', '> > > asdfsfafas', '> > > asdcfsdfsaf',
+    '> > sdfsdcfsf', '> > asdfsdcf', '> > '];
+  const s92setup = (doc) => page.evaluate((d) => {
+    const { cm, ed } = window.__makeWysiwygEditor(d);
+    window.__s92cm = cm; window.__s92ed = ed;
+    ed.settings.softBreaks = true;
+    cm.options.viewportMargin = 100000;
+    cm.refresh();
+    ed.renderWysiwygMasks();
+  }, doc);
+  const s92measure = () => page.evaluate(() => {
+    const cm = window.__s92cm;
+    const pre = document.querySelector('pre.wysiwyg-quote-cursor-line');
+    const top = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-top');
+    const bot = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-bottom');
+    const outer = top ? top.querySelector('blockquote') : null;
+    const inner = outer ? outer.querySelector(':scope > blockquote') : null;
+    const R = (el) => (el ? { top: +el.getBoundingClientRect().top.toFixed(1), bot: +el.getBoundingClientRect().bottom.toFixed(1) } : null);
+    const cs = (el, p) => (el ? getComputedStyle(el)[p] : null);
+    const t = R(top); const pR = R(pre); const oR = R(outer); const bR = R(bot);
+    const band = t ? +((t.bot - t.top) + (pR ? pR.bot - pR.top : 0) + (bR ? bR.bot - bR.top : 0)).toFixed(1) : null;
+    return {
+      cur: cm.getCursor('head').line, curLine: cm.getLine(cm.getCursor('head').line),
+      preCls: pre ? String(pre.className).replace('CodeMirror-line', '').trim() : null,
+      preBgSize: pre ? getComputedStyle(pre).backgroundSize : null,
+      outerPB: cs(outer, 'paddingBottom'), innerMB: inner ? cs(inner, 'marginBottom') : null,
+      seamA: t && pR ? +(pR.top - t.bot).toFixed(1) : null,
+      seamB: pR && bR ? +(bR.top - pR.bot).toFixed(1) : null,
+      extraBelowOuterBq: oR && t ? +(t.bot - oR.bot).toFixed(1) : null,
+      band,
+    };
+  });
+  // band 参照（S91④ 同口径）：光标移出块（setCursor 到块外行 0，S87 驱动同款安全路径）
+  // → 引用块重新整体遮罩，量单遮罩高。不用独立渲染 div 参照：其宽度（页宽）与编辑器
+  // 宽度不同，长行折行差一行 → 块高差 27.2。
+  const s92maskH = () => page.evaluate(() => {
+    const cm = window.__s92cm;
+    cm.setCursor({ line: 0, ch: 0 }, { scroll: false });
+    cm.focus();
+    return null;
+  }).then(() => page.waitForTimeout(500)).then(() => page.evaluate(() => {
+    const m = document.querySelector('.wysiwyg-block-mask.wysiwyg-mask-no-btn-qc');
+    return m ? +m.getBoundingClientRect().height.toFixed(1) : null;
+  }));
+  {
+    // ⑤ 块中弹级（用户截图 2：弹级行下方还有 lvl-1 行）：点行 12（块 [2,16)、落行公式
+    //    target = 2 + floor(ratio × (N−1))，0.8 → 2 + 10 = 12 = 空 lvl-2 行）→ Enter 弹级
+    //    → 输入。断言：光标行 lvl-1 中间行全高底色（B）、seg-top 顶层盒 pb16/闭合盒 mb0（A）、
+    //    接缝 0 缝隙、外层盒填满 seg-top（无白条）、band = 渲染块高（S90 不变式）。
+    await s92setup(s92base.concat(['> sdfsadf', '> sdfsadf', '> sdfsdfsdfsadf']).join('\n'));
+    await page.waitForTimeout(500);
+    const pt5 = await page.evaluate(() => {
+      const m = document.querySelector('.wysiwyg-block-mask.wysiwyg-mask-no-btn-qc');
+      const r = m.getBoundingClientRect();
+      return { x: r.x + 100, y: r.top + 0.8 * r.height };
+    });
+    await page.mouse.click(pt5.x, pt5.y);
+    await page.waitForTimeout(400);
+    await page.keyboard.press('Enter'); // 行 12 空 lvl-2 → S87 弹级 → `> `
+    await page.waitForTimeout(500);
+    await page.keyboard.type('sdfsdfsadf');
+    await page.waitForTimeout(500);
+    const m5 = await s92measure();
+    s92checks.push(['S92⑤ 块中弹级：光标落弹级行（`> sdfsdfsadf`、lvl-1 中间行）',
+      m5.cur === 12 && m5.curLine === '> sdfsdfsadf' && !/wysiwyg-quote-nested/.test(m5.preCls || ''),
+      JSON.stringify({ cur: m5.cur, curLine: m5.curLine, cls: m5.preCls })]);
+    s92checks.push(['S92⑤ 块中弹级：中间行光标底色全高（无 calc(100% - 16px) 白缝层）',
+      /100%/.test(m5.preBgSize || '') && !/100% - 16px/.test(m5.preBgSize || ''),
+      m5.preBgSize]);
+    s92checks.push(['S92⑤ 块中弹级：seg-top 顶层盒 pb16 收 margin + 闭合嵌套盒 mb0（接缝无白条）',
+      m5.outerPB === '16px' && m5.innerMB === '0px' && m5.seamA === 0 && m5.seamB === 0
+      && m5.extraBelowOuterBq === 0,
+      JSON.stringify({ outerPB: m5.outerPB, innerMB: m5.innerMB, seamA: m5.seamA, seamB: m5.seamB, extra: m5.extraBelowOuterBq })]);
+    // band 不变式（S90/S91④ 同口径）：光标移出块后整块单遮罩高 = 弹级态 band
+    const maskH5 = await s92maskH();
+    s92checks.push(['S92⑤ 块中弹级：band = 整块遮罩高（S90 不变式，块高不跳变）',
+      m5.band !== null && maskH5 !== null && Math.abs(m5.band - maskH5) <= 0.5,
+      JSON.stringify({ band: m5.band, maskH5 })]);
+  }
+  {
+    // ⑥ 块末弹级（用户截图 1：弹级行是块末行）：S87 式 setCursor 到末行空 lvl-2（末行点击
+    //    不可达，S90 口径）→ Enter 弹级 → 输入。断言同上 + 底缘行保留 100%-16 底色（设计）。
+    await s92setup(s92base.join('\n'));
+    await page.waitForTimeout(500);
+    await page.evaluate(() => { window.__s92cm.setCursor({ line: 1, ch: 0 }, { scroll: false }); });
+    await page.waitForTimeout(300);
+    await page.evaluate(() => { const cm = window.__s92cm; cm.focus(); cm.setCursor({ line: 12, ch: 4 }, { scroll: false }); });
+    await page.waitForTimeout(400);
+    await page.keyboard.press('Enter'); // 行 12 空 lvl-2（块末）→ S87 弹级 → `> `
+    await page.waitForTimeout(500);
+    await page.keyboard.type('sdfsdfsadf');
+    await page.waitForTimeout(500);
+    const m6 = await s92measure();
+    s92checks.push(['S92⑥ 块末弹级：光标落弹级行（`> sdfsdfsadf`、edge-bottom）',
+      m6.cur === 12 && m6.curLine === '> sdfsdfsadf' && /wysiwyg-block-edge-bottom/.test(m6.preCls || ''),
+      JSON.stringify({ cur: m6.cur, curLine: m6.curLine, cls: m6.preCls })]);
+    s92checks.push(['S92⑥ 块末弹级：底缘行底色保留 16px 敞口（calc(100% - 16px)，S86 设计）',
+      /100% - 16px/.test(m6.preBgSize || ''), m6.preBgSize]);
+    s92checks.push(['S92⑥ 块末弹级：seg-top 顶层盒 pb16 收 margin + 闭合嵌套盒 mb0（接缝无白条）',
+      m6.outerPB === '16px' && m6.innerMB === '0px' && m6.seamA === 0 && m6.extraBelowOuterBq === 0,
+      JSON.stringify({ outerPB: m6.outerPB, innerMB: m6.innerMB, seamA: m6.seamA, extra: m6.extraBelowOuterBq })]);
+    // band 不变式（S90/S91④ 同口径）：光标移出块后整块单遮罩高 = 弹级态 band
+    const maskH6 = await s92maskH();
+    s92checks.push(['S92⑥ 块末弹级：band = 整块遮罩高（S90 不变式，块高不跳变）',
+      m6.band !== null && maskH6 !== null && Math.abs(m6.band - maskH6) <= 0.5,
+      JSON.stringify({ band: m6.band, maskH6 })]);
+  }
+  for (const [label, ok, extra] of s92checks) {
     console.log(`  ${ok ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
     if (!ok) fail++;
   }
