@@ -3735,6 +3735,69 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-cur-bp-28 {
   padding-bottom: 28px;
 }
+/* S94（2026-10-29 用户截图：引用首/末行高亮更高、高亮有深有暗且宽度与引用盒不一致）：
+   --qc-tp/--qc-pb = 上行盒 padding-top/padding-bottom 的镜像值。选择器与上方各 padding
+   规则逐一对应（同特异性、同源码序 → 解析结果与 padding 完全一致），供光标行高亮带
+   （pre::after，见下方 S94 带规则）定位文本行区域：带顶 = 文本行顶、带高 = 文本行域
+   → 首/末/中间行的高亮带同高。⚠️ 改上方 padding 规则必须同步本镜像。callout 光标行
+   亦挂这些类（其 padding 口径不同：14/30/26/42），但带规则排除 callout、两变量在
+   callout 上不被消费，故不列。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line { --qc-tp: 0px; --qc-pb: 0px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-block-edge-top { --qc-tp: 12px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-block-edge-bottom { --qc-pb: 28px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested { --qc-tp: 12px; --qc-pb: 12px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested.wysiwyg-block-edge-top { --qc-tp: 24px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested.wysiwyg-block-edge-bottom { --qc-pb: 40px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-cur-tp-0 { --qc-tp: 0px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-cur-tp-26 { --qc-tp: 26px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-cur-bp-0 { --qc-pb: 0px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-cur-bp-14 { --qc-pb: 14px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line.wysiwyg-quote-cur-bp-28 { --qc-pb: 28px; }
+/* S86 分级边缘距镜像（L4105-4113 同选择器同值：嵌套顶缘 36/48/60/72、底缘
+   56/84/112/140/168，特异性 (0,8,1) 高于上方 (0,6,1) 条目 → 解析与 padding 一致。
+   顶缘行不挂 cur-tp 类、底缘行不挂 cur-bp 类（JS 口径），故与动态类无交集。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-quote-lvl-3 { --qc-tp: 36px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-quote-lvl-4 { --qc-tp: 48px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-quote-lvl-5 { --qc-tp: 60px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-top.wysiwyg-quote-lvl-6 { --qc-tp: 72px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom.wysiwyg-quote-lvl-2 { --qc-pb: 56px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom.wysiwyg-quote-lvl-3 { --qc-pb: 84px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom.wysiwyg-quote-lvl-4 { --qc-pb: 112px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom.wysiwyg-quote-lvl-5 { --qc-pb: 140px; }
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-nested:not(.wysiwyg-callout-cursor-line).wysiwyg-block-edge-bottom.wysiwyg-quote-lvl-6 { --qc-pb: 168px; }
+/* 光标行高亮（2026-10-29 S94，用户截图三点：① 引用块第一行/最后一行高亮比中间行更高，
+   要一致 ② 高亮颜色有深有暗，一律改灰色 ③ 高亮宽度要与内容所在引用块一致）。
+   替代 2026-10-28 S90② 的「--qc-bg 覆写 18% accent tint」设计（半透明 tint 随底盒叠层/
+   页面背景合成出深浅差；带铺满整行盒——边缘行 12/28/40px padding 区同被着色 → 首/末行
+   更高；嵌套行铺满各级盒 → 比内容所在盒更宽）。新设计 = 唯一一条实色灰带（pre::after）：
+   · 色 = --qc-cursor（主题文字色 14% × 主题底色 实色混合：不透明、不随底色合成 → 任意
+     层级/任意行同色；深浅主题自动适配）。光标行与邻行的唯一色差 = 该灰带；盒底色恢复
+     普通引用 accent-subtle（S85/S86 同构叠层规则原样保留，嵌套深浅外观不变）；
+   · 宽 = 内容所在（最内层）引用盒：left = 盒左缘 32+24×(层级−1)、right = 盒右缘收
+     32+20×(层级−1)（渲染 level-N 盒左右缘口径，见 S91 注释）→ 带 ≡ 内容所在盒；
+   · 高 = 文本行域（100% − --qc-tp − --qc-pb，镜像值见上方 S94 变量）：中间行 27.2，
+     首/末缘行不再铺过 padding → 各行同高（S90① 块高不变式按元素盒测量，不受影响）；
+   · 层序：带在底色层之上、竖条/文本之下（pre 挂 z-index:0 建层叠上下文，::after
+     z-index:-1 收在 pre 内，不坠到邻行盒后）；
+   · > 标记口径不变（只在光标行显示）；callout 光标行排除：其底色/竖条为类型色
+     （--qc-bg/--qc-bar 按类型设置），维持原平色行为。
+   ⚠️ 本块不得移入下方「同身 span 渲染色重申」簇（L4400 区）：测试按该簇的空间窗口
+     断言（锚点 quote-text 重申 +2400 字符内须含 inline-link 等重申规则）。 */
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line) {
+  --qc-cursor: color-mix(in srgb, var(--text-primary) 14%, var(--bg-primary));
+  z-index: 0;
+}
+.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line)::after {
+  content: '';
+  position: absolute;
+  left: calc(var(--wysiwyg-line-inset, 32px) + 24px * (var(--qtext-lvl, 1) - 1));
+  right: calc(var(--wysiwyg-line-inset, 32px) + 20px * (var(--qtext-lvl, 1) - 1));
+  top: var(--qc-tp, 0px);
+  height: calc(100% - var(--qc-tp, 0px) - var(--qc-pb, 0px));
+  background: var(--qc-cursor);
+  z-index: -1;
+  pointer-events: none;
+}
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-quote-slot {
   color: transparent;
   font-family: var(--font-preview);
@@ -4308,13 +4371,40 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-bold { font-weight: var(--preview-bold-weight, 700); }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-italic { font-style: italic; }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-strike { text-decoration: line-through; color: var(--text-secondary); }
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-highlight { background-color: var(--color-warning); border-radius: 3px; }
+/* 高亮（S96 2026-10-29 用户截图：编辑态橙底左右间隔 ≠ 渲染态——渲染 mark padding:
+   1px 4px（左右各 4px），编辑态文字贴橙底缘 → 补横 padding 4px；S97 2026-10-29 用户
+   截图：橙底「高度」也不一致——实测（Edge/WebView2，16px 基准）渲染 mark 盒 29.19
+   （inline-block + 竖 padding 1×2）、遮罩 mark 盒 27.19（竖 padding 被清）、源文态
+   highlight 盒 21（inline 盒 = 字体度量 ~1.31em）→ 统一口径：
+   ① 盒体 = 行盒基准：display:inline-block + 竖 padding 0 → 盒高 27.19（与遮罩 mark 同
+      机制；实测 inline-block 盒 27.19 = 素行 strut，不撑行：行高 41.92 注入前后不变）；
+   ② 视觉加高 2px：box-shadow ±1px 同色（纯绘制零布局）→ 橙底视觉盒 29.19 ≡ 渲染 mark
+      盒高；文字位移 −0.09px（亚像素）。竖 padding 恒 0 保 27.2 行盒不变式（2026-10-21
+      校准，S72/S90 依赖）。左右内距 4px ≡ 渲染 mark（mark 无边框）。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-highlight {
+  display: inline-block;
+  padding: 0 4px;
+  background-color: var(--color-warning);
+  border-radius: 3px;
+  box-shadow: 0 -1px 0 0 var(--color-warning), 0 1px 0 0 var(--color-warning);
+}
 /* 下划线：渲染器放行原生 <u> 标签（unified-renderer L1514），编辑态同观感 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-underline { text-decoration: underline; }
+/* 行内代码 chip（S93 2026-10-29：边框/字号/圆角对齐渲染态 .preview-content code =
+   1px --border-color 边 + 0.88em 字号 + 圆角 4；S95 2026-10-29 用户截图：编辑态 chip
+   内部文字左右间隔 ≠ 渲染态——渲染 chip padding: 2px 6px（左右各 6px），编辑态文字
+   贴边 → 补横 padding 6px：chip 总宽 ≡ 渲染 <code>，同宽同行 → 折行位置与渲染态一致。
+   竖 padding 恒为 0（2026-10-21 行盒校准：2px 竖 padding 会把行盒撑到 27.94px，与源行
+   27.2px 不符，破 S85–S94 块高稳定）。遮罩态 chip（.wysiwyg-block-mask code，见下方
+   规则）本就只清竖 padding 保横 6px → 与本规则自动同宽。旧「横 padding 保持紧凑」
+   决策（2026-10-14）被 S95 用户明确要求覆盖。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-inline-code {
   font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 0 6px;
   background-color: var(--code-bg);
-  border-radius: 3px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-inline-link {
   color: var(--accent-color);
@@ -4380,14 +4470,6 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text.wysiwyg-quote-cursor-line span[class*="wysiwyg-quote-slot-inner"] {
   color: var(--text-secondary);
 }
-/* 2026-10-28 S90 问题 2（用户：光标所在不同行文字背景颜色不一致、高亮很不明显）：光标行
-   （非 callout）覆写 --qc-bg → S85/S86 光标行同构规则的全部逐层底色层（var(--qc-bg)）解算
-   为同一高亮色 = 任意嵌套层级统一且明显的「正在编辑行」高亮（盒竖条仍走 --qc-bar、层宽/
-   位置几何不变，嵌套结构外观保留）。callout 光标行排除：其底色为类型色（--qc-bg/--qc-bar
-   按类型设置）、嵌套 callout 罕见，维持平色。 */
-.editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line.wysiwyg-quote-cursor-line:not(.wysiwyg-callout-cursor-line) {
-  --qc-bg: color-mix(in srgb, var(--accent-color) 18%, transparent);
-}
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-heading-hash"] {
   color: var(--text-secondary);
 }
@@ -4435,10 +4517,18 @@ body.is-resizing .side-btn {
    27.2px → 渲染片段行比源行高，点项进源文态时块下内容位移 0.3~1px（S72 参照行跳）。
    遮罩上下文（.wysiwyg-block-mask）去掉两者竖 padding，行盒统一回正文行高；阅读模式
    .preview-content 规则不受影响。与源文态同观感：活动块内的 wysiwyg-inline-code /
-   wysiwyg-highlight 本就是紧凑底色（无 padding，见上方 L3584/L3587）——遮罩侧去 padding
-   后两态行内底色盒高度一致。 */
+   wysiwyg-highlight 带横 padding 与渲染 chip/mark 同宽，竖向仍 0，S95/S96）——遮罩侧去
+   竖 padding 后两态行内底色盒高度一致。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask code { padding-top: 0; padding-bottom: 0; }
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask mark { padding-top: 0; padding-bottom: 0; }
+/* S97（2026-10-29 用户截图：高亮橙底高度渲染态 ≠ 编辑态）：渲染 mark 盒 = 行盒 27.19
+   + 竖 padding 1×2 = 29.19；遮罩 mark 竖 padding 清零后盒 = 27.19（短 2px）。竖 padding
+   不能恢复（行盒撑高，破 S90① 块高不变式）→ 改用 box-shadow ±1px 同色（纯绘制零布局，
+   遮罩 overflow:visible 不裁剪）→ 视觉橙盒 29.19 ≡ 渲染 mark 盒高，行盒仍 27.19。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask mark {
+  padding-top: 0;
+  padding-bottom: 0;
+  box-shadow: 0 -1px 0 0 var(--color-warning), 0 1px 0 0 var(--color-warning);
+}
 
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask table td.wysiwyg-cell-editing,
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-block-mask table th.wysiwyg-cell-editing {

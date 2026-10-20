@@ -419,7 +419,15 @@
     if (text == null) return spans;
     const s = String(text);
     const push = (from, to, cls) => { if (to > from) spans.push({ from: from, to: to, cls: cls }); };
-    const reCode = /``([^`\n]+)``|`([^`\n]+)`/;
+    // 行内代码（S93，2026-10-29 用户截图 demo.md 松散列表「行内代码」行）：双反引号分支
+    // 内容须允许孤立反引号（CommonMark backtick string：内容可含短于定界串的反引号，
+    // 以「双反引号对」为闭合边界）。旧 `[^`\n]+` 使 `` ` ``（双反引号包单反引号）失配，
+    // 单引号分支随后整行级联误配（" " / " 包裹 — 变量名 " 等假 chip、userName/npm install
+    // 的反引号被吞作定界符丢 chip、光标行裸露反引号——编辑态 ≠ 渲染态）。内容式 =
+    // 非反引号段 +（单反引号 + ≥1 个非反引号段）×n：每个内容反引号后须跟非反引号，
+    // 连续双反引号只能是闭合边界（`` ``` 类病态边缘按 MVP 提前闭合，与渲染态残差
+    // 为罕见输入，注释如实声明）。
+    const reCode = /``([^`\n]*(?:`[^`\n]+)*)``|`([^`\n]+)`/;
     const reLink = /\[([^\[\]\n]+)\]\(([^()\n]*)\)/;
     const reBoldStar = /\*\*([^*\n]+)\*\*/;
     const reBoldUnder = /__([^_\n]+)__/;
@@ -473,9 +481,18 @@
       const end = i + m[0].length;
       if (kind === 'code') {
         const tick = (m[1] !== undefined) ? 2 : 1;
-        push(start, start + tick, 'wysiwyg-inline-marker');
-        push(start + tick, end - tick, 'wysiwyg-inline-code');
-        push(end - tick, end, 'wysiwyg-inline-marker');
+        let cFrom = start + tick;
+        let cTo = end - tick;
+        // CommonMark 边缘空格规则（S93）：内容首尾各带一个空格（且非全空格）→ 各剥掉
+        // 一个，与渲染 <code> 文本一致（remark 同剥）→ 编辑态 chip 宽度 ≡ 渲染态
+        // （`` ` `` chip 只包单反引号；剥掉的空格留在 marker span 内，保真实宽度）。
+        if (cTo - cFrom >= 2 && s.charAt(cFrom) === ' ' && s.charAt(cTo - 1) === ' ' && s.slice(cFrom + 1, cTo - 1).trim() !== '') {
+          cFrom++;
+          cTo--;
+        }
+        push(start, cFrom, 'wysiwyg-inline-marker');
+        push(cFrom, cTo, 'wysiwyg-inline-code');
+        push(cTo, end, 'wysiwyg-inline-marker');
       } else if (kind === 'link') {
         push(start, start + 1, 'wysiwyg-inline-marker');
         push(start + 1, start + 1 + m[1].length, 'wysiwyg-inline-link');

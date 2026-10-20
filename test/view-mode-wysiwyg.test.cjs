@@ -1189,7 +1189,60 @@ test('引用 + 行内语法渲染化：活动块 > 前缀灰显/左竖条，行�
   // 列表符号/任务前缀不得被本规则波及（各有专槽与 ::before 符号）
   assert.doesNotMatch(css, /\.wysiwyg-inline-marker[^{]*,\s*\n\s*\.wysiwyg-list-bullet/, '行内标记零宽规则误挂列表符号类');
   assert.doesNotMatch(css, /\.wysiwyg-list-bullet \{[^}]*width: 0/, '列表符号被零宽（会破坏 ::before 画圆几何）');
-  assert.doesNotMatch(css, /\.wysiwyg-inline-code \{[^}]*padding/, '行内代码不应加 padding（会干扰光标 x 测量）');
+  // S95（2026-10-29 用户截图：编辑态 chip 内部文字左右间隔 ≠ 渲染态）：横 padding 各 6px
+  // ≡ 渲染 .preview-content code（2px 6px）；竖 padding 必须 0（行盒 27.2px 不变式）
+  assert.match(css, /\.wysiwyg-inline-code \{[^}]*padding: 0 6px;/,
+    '行内代码 chip 左右内距须 6px ≡ 渲染态（padding: 0 6px，竖向 0 保行盒，S95）');
+  // S96（2026-10-29 用户截图：高亮橙底内部文字左右间隔 ≠ 渲染态 mark padding: 1px 4px）
+  assert.match(css, /\.wysiwyg-highlight \{[^}]*padding: 0 4px;/,
+    '高亮左右内距须 4px ≡ 渲染 mark（padding: 0 4px，竖向 0 保行盒，S96）');
+  // S97（2026-10-29 用户截图：高亮橙底高度不一致——实测 16px 基准渲染 mark 盒 29.19 /
+  // 遮罩 mark 盒 27.19 / 源文态 inline 盒 21）：
+  // ① 源文态 highlight = inline-block（盒 = 行盒基准 27.19，实测行盒不撑）+ padding 0 4px；
+  // ② 遮罩/源文态视觉加高 2px 一律 box-shadow ±1px（纯绘制零布局；竖 padding 恢复会撑
+  //    行盒破 S90① 块高不变式，禁用）
+  assert.match(css, /\.wysiwyg-highlight \{[^}]*display: inline-block;/,
+    '源文态高亮须 inline-block（盒 = 行盒基准 27.19，inline 盒 = 字体度量 21 会矮 6px，S97）');
+  assert.match(css, /\.wysiwyg-highlight \{[^}]*box-shadow: 0 -1px 0 0 var\(--color-warning\), 0 1px 0 0 var\(--color-warning\);/,
+    '源文态高亮视觉盒高须 box-shadow ±1px 加到 ≡ 渲染 mark 29.19（竖 padding 0 保行盒，S97）');
+  assert.match(css, /\.wysiwyg-block-mask mark \{[^}]*padding-top: 0;[^}]*padding-bottom: 0;[^}]*box-shadow: 0 -1px 0 0 var\(--color-warning\), 0 1px 0 0 var\(--color-warning\);/,
+    '遮罩 mark 竖 padding 须 0 + box-shadow ±1px（视觉盒 ≡ 渲染 mark、行盒不变，S97）');
+});
+
+test('行内代码双反引号 code span + 边缘空格剥离（2026-10-29 S93：demo.md `` ` `` 行编辑态 ≡ 渲染态）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const pIdx = wsrc.indexOf('function parseWysiwygInlineSpans(text) {');
+  assert.ok(pIdx > 0, '缺 parseWysiwygInlineSpans');
+  const pblk = wsrc.slice(pIdx, pIdx + 4200);
+  // 双反引号分支内容须允许孤立反引号（CommonMark backtick string）：旧 `[^`\n]+` 使
+  // `` ` `` 失配 → 单引号分支整行级联误配（假 chip + 相邻代码 span 丢 chip，S93 复现）
+  assert.match(pblk, /reCode = \/``\(\[\^`\\n\]\*\(\?:`\[\^`\\n\]\+\)\*\)``\|`\(\[\^`\\n\]\+\)`\//,
+    'reCode 双反引号分支不容内容反引号（`` ` `` 失配会级联误配整行）');
+  // CommonMark 边缘空格规则：内容首尾空格（非全空格）各剥一个，chip 宽 ≡ 渲染 <code>
+  assert.match(pblk, /cTo - cFrom >= 2 && s\.charAt\(cFrom\) === ' ' && s\.charAt\(cTo - 1\) === ' ' && s\.slice\(cFrom \+ 1, cTo - 1\)\.trim\(\) !== ''/,
+    '缺 code span CommonMark 边缘空格剥离（编辑态 chip 比渲染 <code> 宽，编辑≠渲染）');
+  // 行为（同 L1273 guardMathBlocks 提取先例：纯函数、无闭包依赖，直接从源提取执行）
+  const eIdx = wsrc.indexOf('\n  const mixin = {', pIdx);
+  assert.ok(eIdx > pIdx, 'parseWysiwygInlineSpans 函数尾未定位');
+  const fnSrc = wsrc.slice(pIdx, eIdx).trim();
+  const fn = eval('(' + fnSrc + ')');
+  assert.equal(typeof fn, 'function', '提取的 parseWysiwygInlineSpans 不是函数');
+  const t1 = '用 `` ` `` 包裹';
+  const c1 = fn(t1).filter((x) => x.cls === 'wysiwyg-inline-code');
+  assert.equal(c1.length, 1, '`` ` `` 应恰产生 1 个 code span（修复前为 3 个跨行级联假 span）');
+  assert.equal(t1.slice(c1[0].from, c1[0].to), '`', 'code span 内容 = 单反引号（边缘空格剥离，≡ 渲染 <code>`</code>）');
+  const t2 = '变量名 `userName`、命令 `npm install`';
+  const c2 = fn(t2).filter((x) => x.cls === 'wysiwyg-inline-code');
+  assert.deepEqual(c2.map((x) => t2.slice(x.from, x.to)), ['userName', 'npm install'],
+    '单引号代码 span 回归（修复前该两 span 的反引号被 `` ` `` 失配后的级联吞掉）');
+  const t3 = '前 ` b ` 后';
+  const c3 = fn(t3).filter((x) => x.cls === 'wysiwyg-inline-code');
+  assert.equal(c3.length, 1, '单引号 code span 数');
+  assert.equal(t3.slice(c3[0].from, c3[0].to), 'b', '单引号 code span 边缘空格剥离（CommonMark，≡ 渲染）');
+  const t4 = '`**text**` 与 **粗体**';
+  const c4 = fn(t4).filter((x) => x.cls === 'wysiwyg-inline-code');
+  assert.deepEqual(c4.map((x) => t4.slice(x.from, x.to)), ['**text**'], '回归：`**text**` 代码 span 内容不变');
+  assert.ok(fn(t4).some((x) => x.cls === 'wysiwyg-bold'), '回归：bold span 不受扫描器改动影响');
 });
 
 test('底部滚动余量：padding-bottom 50vh 且特异性须压过 codemirror.css（2026-10-14 + 2026-10-17 真机：文末贴底缘）', () => {
@@ -3309,10 +3362,11 @@ test('S90 引用块编辑三修复（块高稳定 / 光标行底色统一 / 输�
       'wysiwyg-quote-cursor-line\\.' + cls + ' \\{\\s*' + pad.replace(';', ';\\s*')),
       'styles.css 缺光标行动态 padding 规则 ' + cls);
   }
-  // ② 光标行底色统一 tint：--qc-bg 变量（18% accent）覆盖所有 fill 层（各级各层级规则都用 var(--qc-bg)），
-  //   callout 光标行排除（保持类型色）
-  assert.match(css, /wysiwyg-quote-cursor-line:not\(\.wysiwyg-callout-cursor-line\) \{\s*--qc-bg: color-mix\(in srgb, var\(--accent-color\) 18%, transparent\);\s*\}/,
-    'styles.css 缺光标行统一 tint 规则（--qc-bg = 18% accent，排除 callout）');
+  // ② 光标行高亮 = S94 实色灰带（2026-10-29 用户截图：首/末行更高、有深有暗、宽度与盒不一致
+  //   → 替代 2026-10-28 的 --qc-bg 18% accent tint 覆写设计；详见 S94 专项测试）。
+  //   旧 tint 规则不得残留（半透明 tint 随底色合成出深浅差）。
+  assert.ok(!css.includes('--qc-bg: color-mix(in srgb, var(--accent-color) 18%, transparent);'),
+    'styles.css 残留 S90② 旧 tint 规则（--qc-bg = 18% accent）');
   // ③ 输入延迟：行内非结构编辑判定 + 安全标志累积 + 防抖 safeSkip；change 监听透传变更对象
   assert.ok(wys.includes('_wysiwygChangeIsBoundarySafe'), 'wysiwyg.js 缺行内非结构编辑判定 _wysiwygChangeIsBoundarySafe');
   assert.ok(wys.includes('_wysiwygSafeSinceParse'), 'wysiwyg.js 缺自上次解析以来的安全标志累积 _wysiwygSafeSinceParse');
@@ -3322,7 +3376,7 @@ test('S90 引用块编辑三修复（块高稳定 / 光标行底色统一 / 输�
   // 驱动回归接线
   assert.match(driver, /=== S90：引用块编辑三修复/);
   assert.match(driver, /S90① 10 个光标行 band（seg-top\+pre\+seg-bottom）均 = 遮罩高（块高不随光标行跳变，容差 0\.5px）/);
-  assert.match(driver, /S90② 光标行底色统一（10 行 --qc-bg 同值 = color-mix 18% accent tint）/);
+  assert.match(driver, /S90② 光标行高亮 = 统一实色灰带（S94：10 行同值中性灰、不透明）/);
   assert.match(driver, /S90③ 行内输入 5 字 \+ 250ms 停顿 → 零整篇重解析/);
 });
 
@@ -3419,4 +3473,53 @@ test('S92 嵌套空行弹级到最外层后接缝着色（2026-10-29 用户截�
   assert.match(driver, /S92⑥ 块末弹级：底缘行底色保留 16px 敞口（calc\(100% - 16px\)，S86 设计）/);
   assert.match(driver, /S92⑥ 块末弹级：seg-top 顶层盒 pb16 收 margin \+ 闭合嵌套盒 mb0（接缝无白条）/);
   assert.match(driver, /S92⑥ 块末弹级：band = 整块遮罩高（S90 不变式，块高不跳变）/);
+});
+
+test('S94 引用光标行高亮 = 统一实色灰带（2026-10-29 用户截图：首/末行更高、有深有暗、宽度与内容所在盒不一致）', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // ① 灰带 = 光标行（非 callout）pre::after 实色带：色 --qc-cursor（14% 文字色×底色，
+  //   不透明 → 不随底色合成出深浅差）、左/右 = 最内层盒缘（32+24×(N−1) / 32+20×(N−1)）、
+  //   顶/高 = 文本行域（--qc-tp/--qc-pb 镜像行 padding → 首/末/中间行同高）、
+  //   z-index:-1 + pre z-index:0（带在底色上、竖条/文本下）。
+  assert.match(css, /pre\.wysiwyg-quote-line\.wysiwyg-quote-cursor-line:not\(\.wysiwyg-callout-cursor-line\) \{\s*--qc-cursor: color-mix\(in srgb, var\(--text-primary\) 14%, var\(--bg-primary\)\);\s*z-index: 0;\s*\}/,
+    'styles.css 缺光标行 --qc-cursor 实色灰定义 + z-index:0 层叠上下文');
+  assert.match(css, /pre\.wysiwyg-quote-line\.wysiwyg-quote-cursor-line:not\(\.wysiwyg-callout-cursor-line\)::after \{\s*content: '';\s*position: absolute;\s*left: calc\(var\(--wysiwyg-line-inset, 32px\) \+ 24px \* \(var\(--qtext-lvl, 1\) - 1\)\);\s*right: calc\(var\(--wysiwyg-line-inset, 32px\) \+ 20px \* \(var\(--qtext-lvl, 1\) - 1\)\);\s*top: var\(--qc-tp, 0px\);\s*height: calc\(100% - var\(--qc-tp, 0px\) - var\(--qc-pb, 0px\)\);\s*background: var\(--qc-cursor\);\s*z-index: -1;\s*pointer-events: none;\s*\}/,
+    'styles.css 缺灰带 ::after 规则（最内层盒宽 × 文本行域、带下层序、无事件穿透）');
+  // ② --qc-tp/--qc-pb 镜像 = 行盒 padding 的逐条对应（选择器/值与 padding 规则一一对应；
+  //   含 S90 动态 cur-tp/cur-bp 与 S86 分级边缘距 —— 缺任一条 → 该形态行灰带高 ≠ 27.2）
+  const mirrorCases = [
+    ['pre\\.wysiwyg-quote-line \\{ --qc-tp: 0px; --qc-pb: 0px; \\}', '基准 0/0'],
+    ['pre\\.wysiwyg-quote-line\\.wysiwyg-block-edge-top \\{ --qc-tp: 12px; \\}', '顶缘 tp12'],
+    ['pre\\.wysiwyg-quote-line\\.wysiwyg-block-edge-bottom \\{ --qc-pb: 28px; \\}', '底缘 pb28'],
+    ['pre\\.wysiwyg-quote-line\\.wysiwyg-quote-nested \\{ --qc-tp: 12px; --qc-pb: 12px; \\}', '嵌套 12/12'],
+    ['pre\\.wysiwyg-quote-line\\.wysiwyg-quote-nested\\.wysiwyg-block-edge-top \\{ --qc-tp: 24px; \\}', '嵌套顶缘 tp24'],
+    ['pre\\.wysiwyg-quote-line\\.wysiwyg-quote-nested\\.wysiwyg-block-edge-bottom \\{ --qc-pb: 40px; \\}', '嵌套底缘 pb40'],
+    ['pre\\.wysiwyg-quote-line\\.wysiwyg-quote-cursor-line\\.wysiwyg-quote-cur-tp-0 \\{ --qc-tp: 0px; \\}', '动态 tp0'],
+    ['pre\\.wysiwyg-quote-line\\.wysiwyg-quote-cursor-line\\.wysiwyg-quote-cur-tp-26 \\{ --qc-tp: 26px; \\}', '动态 tp26'],
+    ['pre\\.wysiwyg-quote-line\\.wysiwyg-quote-cursor-line\\.wysiwyg-quote-cur-bp-0 \\{ --qc-pb: 0px; \\}', '动态 pb0'],
+    ['pre\\.wysiwyg-quote-line\\.wysiwyg-quote-cursor-line\\.wysiwyg-quote-cur-bp-14 \\{ --qc-pb: 14px; \\}', '动态 pb14'],
+    ['pre\\.wysiwyg-quote-line\\.wysiwyg-quote-cursor-line\\.wysiwyg-quote-cur-bp-28 \\{ --qc-pb: 28px; \\}', '动态 pb28'],
+  ];
+  for (const [re, name] of mirrorCases) {
+    assert.match(css, new RegExp(re), 'styles.css 缺 --qc-tp/--qc-pb 镜像 ' + name);
+  }
+  // S86 分级边缘距镜像（嵌套顶缘 36/48/60/72、底缘 56/84/112/140/168；缺则嵌套末行带高失真）
+  for (const [lvl, v] of [[3, '36px'], [4, '48px'], [5, '60px'], [6, '72px']]) {
+    assert.match(css, new RegExp(
+      'wysiwyg-quote-nested:not\\(\\.wysiwyg-callout-cursor-line\\)\\.wysiwyg-block-edge-top\\.wysiwyg-quote-lvl-' + lvl + ' \\{ --qc-tp: ' + v + '; \\}'),
+      'styles.css 缺 S86 分级顶缘镜像 tp' + v + '（lvl-' + lvl + '）');
+  }
+  for (const [lvl, v] of [[2, '56px'], [3, '84px'], [4, '112px'], [5, '140px'], [6, '168px']]) {
+    assert.match(css, new RegExp(
+      'wysiwyg-quote-nested:not\\(\\.wysiwyg-callout-cursor-line\\)\\.wysiwyg-block-edge-bottom\\.wysiwyg-quote-lvl-' + lvl + ' \\{ --qc-pb: ' + v + '; \\}'),
+      'styles.css 缺 S86 分级底缘镜像 pb' + v + '（lvl-' + lvl + '）');
+  }
+  // ③ 驱动回归接线（用户原文档 4 光标位：顶/中/嵌套/底缘；S90 十行口径同步换新）
+  assert.match(driver, /=== S94：引用光标行高亮（首\/中\/末行同高 \/ 统一灰 \/ 宽 ≡ 内容所在盒） ===/);
+  assert.match(driver, /S94① 高亮高度各行一致 = 27\.2（顶\/中间\/嵌套\/底缘行同高，带顶 ≡ 行 padding-top）/);
+  assert.match(driver, /S94② 高亮 = 统一实色中性灰（4 位置同值、不透明，深浅主题自适应）/);
+  assert.match(driver, /S94③ 高亮宽度 ≡ 内容所在引用块（4 位置带左右缘 = 渲染同级盒左右缘，Δ≤1px）/);
+  assert.match(driver, /S94④ 块高 = 遮罩高（S90① 不变式：高亮改动不破坏块高稳定，容差 0\.5px）/);
+  assert.match(driver, /S90② 高亮几何（S94：带顶\/底 ≡ 行 padding、带高 27\.2 各行一致、带左右 ≡ 最内层盒）/);
 });

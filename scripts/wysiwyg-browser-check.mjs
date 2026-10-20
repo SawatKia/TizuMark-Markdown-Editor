@@ -62,6 +62,20 @@ try {
   }
 }
 let fail = 0;
+// S94 共用：解析计算背景色（rgb()/rgba() 与 color(srgb r g b [a])——Edge 对 color-mix
+// 的计算值两种形式都出现过）→ {r,g,b,a}（r/g/b 归一到 0-255）。
+function parseComputedStyleColor(v) {
+  let m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(v || '');
+  if (m) return { r: +m[1], g: +m[2], b: +m[3], a: m[4] === undefined ? 1 : +m[4] };
+  m = /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*(?:([\d.]+)\s*)?\)$/.exec(v || '');
+  if (m) return { r: +m[1] * 255, g: +m[2] * 255, b: +m[3] * 255, a: m[4] === undefined ? 1 : +m[4] };
+  return null;
+}
+// S94：中性灰判定（|r−g|≤2 且 |g−b|≤2、不透明）——「高亮一律灰色」口径。
+function isNeutralGrayColor(v) {
+  const c = parseComputedStyleColor(v);
+  return !!c && Math.abs(c.r - c.g) <= 2 && Math.abs(c.g - c.b) <= 2 && c.a >= 0.99;
+}
 try {
   const page = await browser.newPage();
   const errors = [];
@@ -6457,6 +6471,7 @@ try {
         const pre = node && (node.querySelector('pre') || node);
         if (!pre) return { found: false, curLine: cur.line };
         const cs = getComputedStyle(pre);
+        const af = getComputedStyle(pre, '::after');
         const slots = [...pre.querySelectorAll('.wysiwyg-quote-slot')];
         return {
           found: true, curLine: cur.line,
@@ -6464,6 +6479,12 @@ try {
           bgLayers: (cs.backgroundImage.match(/linear-gradient\(/g) || []).length,
           bgPos: cs.backgroundPosition,
           slotWs: slots.map((s) => getComputedStyle(s).whiteSpace),
+          // S94：灰带（pre::after）几何 + 行盒 padding
+          hl: {
+            left: af.left, top: af.top, width: af.width, height: af.height, bg: af.backgroundColor,
+            padT: cs.paddingTop, preW: +pre.getBoundingClientRect().width.toFixed(1),
+            preH: +pre.getBoundingClientRect().height.toFixed(1),
+          },
         };
       });
       s85checks.push(['光标落行 6（三级中间行 `> > > 阿斯顿发射点`）', s85geo.found === true && s85geo.curLine === 6]);
@@ -6475,7 +6496,18 @@ try {
         s85geo.bgPos.includes('32px') && s85geo.bgPos.includes('56px') && s85geo.bgPos.includes('80px')]);
       s85checks.push(['槽常态 white-space: pre-wrap（nowrap 仅限组合期挂类，防行尾键入丢空格）',
         s85geo.slotWs.length === 3 && s85geo.slotWs.every((w) => w === 'pre-wrap')]);
-      // 证据截图：嵌套光标行编辑态（多层叠色 + 连续竖条）
+      // S94（2026-10-29 用户截图）：嵌套光标行高亮 = 最内层（lvl-3）盒 × 文本行域的实色灰带——
+      // 左缘 80px（lvl-3 盒左缘）、宽 = preW−64−44×2（lvl-3 盒宽）、高 27.2 = 文本行高（行盒
+      // 51.2 的 12/12 嵌套 padding 区不被着色 → 与外层行同高）、实色中性灰（不随底色合成）。
+      {
+        const hl = s85geo.hl;
+        s85checks.push(['S94 嵌套光标行灰带 = 最内层盒 × 文本行（左 80px、宽 preW−152、高 27.2、实色中性灰）',
+          !!hl && hl.left === '80px' && Math.abs(parseFloat(hl.width) - (hl.preW - 152)) <= 0.6
+          && Math.abs(parseFloat(hl.height) - 27.2) <= 0.6 && hl.top === hl.padT
+          && isNeutralGrayColor(hl && hl.bg),
+          hl ? JSON.stringify({ left: hl.left, w: hl.width, h: hl.height, top: hl.top, bg: hl.bg }) : 'no hl']);
+      }
+      // 证据截图：嵌套光标行编辑态（多层叠色 + 连续竖条 + S94 灰带）
       const s85shot = path.join(root, 'screenshots', 's85-nested-edit.png');
       fs.mkdirSync(path.dirname(s85shot), { recursive: true });
       await page.screenshot({ path: s85shot });
@@ -6972,15 +7004,28 @@ try {
         const topM = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-top');
         const botM = document.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-bottom');
         const H = (el) => (el ? el.getBoundingClientRect().height : 0);
+        let band = null;
+        if (pre) {
+          const cs = getComputedStyle(pre);
+          const af = getComputedStyle(pre, '::after');
+          band = {
+            // S94：高亮 = pre::after 实色灰带（左/右 = 最内层盒缘、顶/高 = 文本行域）
+            left: af.left, top: af.top, width: af.width, height: af.height,
+            padT: cs.paddingTop, padB: cs.paddingBottom, preW: +pre.getBoundingClientRect().width.toFixed(1),
+            preH: +pre.getBoundingClientRect().height.toFixed(1),
+            bg: af.backgroundColor,
+            lvl: (pre.className.match(/wysiwyg-quote-lvl-(\d)/) || [])[1] || '1',
+          };
+        }
         return {
           landed: cur.line,
           band: +((H(topM) + (pre ? pre.getBoundingClientRect().height : 0) + H(botM)).toFixed(1)),
           cursorCls: pre ? pre.className.indexOf('wysiwyg-quote-cursor-line') >= 0 : false,
-          qcBg: pre ? getComputedStyle(pre).getPropertyValue('--qc-bg').trim() : '',
+          hl: band,
         };
       }, ln);
       if (m90.band !== undefined) {
-        bands[ln] = { maskH, band: m90.band, qcBg: m90.qcBg, cursorCls: m90.cursorCls };
+        bands[ln] = { maskH, band: m90.band, hl: m90.hl, cursorCls: m90.cursorCls };
         if (ln === 7) {
           const s90shot = path.join(root, 'screenshots', 's90-quote-cursor-line.png');
           fs.mkdirSync(path.dirname(s90shot), { recursive: true });
@@ -6995,9 +7040,30 @@ try {
       (v) => Math.abs(v.band - v.maskH) <= 0.5 && v.cursorCls);
     s90checks.push(['S90① 10 个光标行 band（seg-top+pre+seg-bottom）均 = 遮罩高（块高不随光标行跳变，容差 0.5px）', allStable,
       JSON.stringify(Object.keys(bands).map((k) => bands[k].band)) + ' maskH=' + (bands[2] ? bands[2].maskH : '?')]);
-    const tintSet = new Set(Object.values(bands).map((v) => v.qcBg));
-    s90checks.push(['S90② 光标行底色统一（10 行 --qc-bg 同值 = color-mix 18% accent tint）',
-      tintSet.size === 1 && [...tintSet][0].indexOf('color-mix') >= 0, JSON.stringify([...tintSet])]);
+    // ②（2026-10-29 S94 更新，替代 18% accent tint 口径）：光标行高亮 = pre::after 实色灰带——
+    //    a) 10 行带色同值且为中性灰（不透明、不随底色合成 → 无「有深有暗」）；
+    //    b) 带顶/底 ≡ 行 padding（带顶 = 文本行顶、带高 = 文本行域 = 27.2 各行同高 →
+    //       首/末缘行不再比中间行高）；
+    //    c) 带左右 ≡ 最内层引用盒（left = 32+24×(层级−1)、width = preW−64−44×(层级−1)
+    //       = 渲染 level-N 盒宽 → 高亮宽度 ≡ 内容所在引用块）。
+    const hlSet = new Set(Object.values(bands).map((v) => (v.hl && v.hl.bg) || ''));
+    s90checks.push(['S90② 光标行高亮 = 统一实色灰带（S94：10 行同值中性灰、不透明）',
+      hlSet.size === 1 && [...hlSet][0] !== '' && isNeutralGrayColor([...hlSet][0]), JSON.stringify([...hlSet])]);
+    const s90hlGeomOk = Object.values(bands).every((v) => {
+      if (!v.hl) return false;
+      const lvl = +v.hl.lvl;
+      const wantW = v.hl.preW - 64 - 44 * (lvl - 1);
+      const expLeft = String(32 + 24 * (lvl - 1) + 'px');
+      return v.hl.top === v.hl.padT && v.hl.left === expLeft
+        && Math.abs(parseFloat(v.hl.width) - wantW) <= 0.6
+        && Math.abs(parseFloat(v.hl.height) - (v.hl.preH - parseFloat(v.hl.padT) - parseFloat(v.hl.padB))) <= 0.6
+        && Math.abs(parseFloat(v.hl.height) - 27.2) <= 0.6; // S94①：各行带高同 = 27.2 文本行高
+    });
+    s90checks.push(['S90② 高亮几何（S94：带顶/底 ≡ 行 padding、带高 27.2 各行一致、带左右 ≡ 最内层盒）', s90hlGeomOk,
+      JSON.stringify(Object.keys(bands).map((k) => {
+        const v = bands[k].hl;
+        return v ? v.lvl + ':' + v.left + '/' + Math.round(parseFloat(v.width)) + 'x' + Math.round(parseFloat(v.height)) + '@top' + v.top : '?';
+      }))]);
   }
   {
     // ③ 输入延迟：mask 点击落行尾（wysiwyg.js setSelection ch=行长）→ 行内输入 = 非结构编辑
@@ -7391,6 +7457,649 @@ try {
   for (const [label, ok, extra] of s92checks) {
     console.log(`  ${ok ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
     if (!ok) fail++;
+  }
+
+  // ---------- S93：松散列表编辑态 ≡ 渲染态（2026-10-29 用户截图 demo.md「基础文本格式」节） ----------
+  // 用户反馈「无序列表中有文本样式时，编辑态和渲染态显示的样式不一样，优化一下」。
+  // 用户文档 = 松散列表（项间 2 空格行 → 整块单块，点项整块进源文态；逐项切块只限紧凑
+  // 列表，wysiwyg.js L227 !loose）。第 4 项含 `` ` ``（双反引号包单反引号）+ userName /
+  // npm install 两个代码 span。复现（_wysiwyg_compare + markedSpans API）确认两根因：
+  // ① 扫描器 reCode 双引号分支旧 `[^`\n]+` 不容内容反引号 → `` ` `` 失配后单引号分支
+  //    级联误配（" " / " 包裹 — 变量名 " / "、命令 " 假 chip、userName/npm install 的
+  //    反引号被吞作定界符丢 chip、裸反引号外露）；② 编辑态 chip 无边框/无 0.88em
+  //    （渲染 chip = 1px 边 + 0.88em + 圆角 4）。
+  // 断言：行内代码行 4 个代码 span 内容恰为 [行内代码, `, userName, npm install]（≡ 渲染
+  // <code> 集）、chip 边框/字号对齐渲染态、光标行标记真宽/非光标行零宽（S58 口径不回退）、
+  // 项行行高 27.2 不变（chip 边框不改行盒）。
+  {
+    console.log('\n=== S93：松散列表编辑态 ≡ 渲染态（行内代码双反引号 + chip 对齐） ===');
+    // 列表前后加锚定块（复现 demo.md 上下文：列表不是首块——挂载时首块自动活动化撤罩，
+    // 首块若是列表则遮罩不存在，无法点遮罩进块）。行号：列表 = 行 2–10（5 项 + 4 个
+    // 2 空格空行），行内代码项 = 行 8。
+    const s93doc = [
+      '# 行内样式',
+      '',
+      '- **粗体文本**：用 `**text**` 包裹 — 这是 **重点强调** 的内容',
+      '  ',
+      '- *斜体文本*：用 `*text*` 包裹 — 这是 *需要区分* 的术语',
+      '  ',
+      '- ~~删除线~~：用 `~~text~~` 包裹 — 表示 ~~已废弃~~ 的内容',
+      '  ',
+      '- `行内代码`：用 `` ` `` 包裹 — 变量名 `userName`、命令 `npm install`',
+      '  ',
+      '- ==高亮标记==：用 `==text==` 包裹 — 这是 ==重点段落==，像荧光笔一样醒目',
+      '',
+      '段尾锚定文字。',
+    ].join('\n');
+    const s93 = await page.evaluate(async (doc) => {
+      const { cm, ed } = window.__makeWysiwygEditor(doc);
+      window.__s93cm = cm; window.__s93ed = ed;
+      await new Promise((res) => setTimeout(res, 400));
+      const out = {};
+      // 松散列表 = 单块（无 listItem 逐项切块）
+      out.blocks = (ed._wysiwygBlocks || []).map((b) => ({ s: b.start, e: b.end, li: !!b.listItem }));
+      // 渲染态基准：本编辑器内列表遮罩 5 个 li；行内代码项（li 4）应含 4 个 <code>
+      // （限定在 wrapper 内查——页面累积了前面场景的编辑器，document 级查询会命中别家）
+      const wrap = cm.getWrapperElement();
+      const lis = Array.from(wrap.querySelectorAll('.wysiwyg-block-mask ul li'));
+      out.maskLi = lis.length;
+      out.liH = lis.map((li) => Math.round(li.getBoundingClientRect().height * 100) / 100);
+      const li4 = lis[3];
+      out.renderCodes = li4 ? Array.from(li4.querySelectorAll('code')).map((c) => c.textContent) : null;
+      // 先滚进视口再量坐标（新编辑器在页面底部，elementFromPoint/视口点击都要求可见）
+      wrap.scrollIntoView({ block: 'start' });
+      await new Promise((res) => setTimeout(res, 300));
+      const maskUl = wrap.querySelector('.wysiwyg-block-mask ul');
+      if (!maskUl) return { err: '列表遮罩未找到' };
+      const mr = maskUl.getBoundingClientRect();
+      out.maskH = Math.round(mr.height * 10) / 10;
+      const x = mr.x + 60, y = mr.y + 8; // 首项第一行内（避开块末：末行点击不可达）
+      return { blocks: out.blocks, maskLi: out.maskLi, liH: out.liH, renderCodes: out.renderCodes, maskH: out.maskH, pt: { x, y } };
+    }, s93doc);
+    if (s93.err) {
+      console.log('  ⚠ S93 初始化失败: ' + s93.err);
+      fail++;
+    } else {
+      await page.mouse.click(s93.pt.x, s93.pt.y);
+      await page.waitForTimeout(500);
+      // 光标落行内代码项（行 8 = 第 4 项）= 光标行（源文态显示）
+      await page.evaluate(() => {
+        const cm = window.__s93cm;
+        cm.focus();
+        cm.setCursor({ line: 8, ch: 3 }, { scroll: false });
+      });
+      await page.waitForTimeout(500);
+      const m93 = await page.evaluate(() => {
+        const cm = window.__s93cm;
+        const preOf = (n) => {
+          const h = cm.getLineHandle(n);
+          for (const lv of cm.display.view) {
+            if (lv && lv.line === h) {
+              const el = lv.node;
+              return el.tagName === 'PRE' ? el : (el.querySelector ? el.querySelector('pre.CodeMirror-line') : null);
+            }
+          }
+          return null;
+        };
+        const pre8 = preOf(8), pre2 = preOf(2);
+        if (!pre8 || !pre2) return { err: '活动行 pre 未物化' };
+        const codes = Array.from(pre8.querySelectorAll('.wysiwyg-inline-code'))
+          .map((sp) => ({ text: sp.textContent, cls: String(sp.className) }));
+        const markers8 = Array.from(pre8.querySelectorAll('span'))
+          .filter((s) => String(s.className).includes('wysiwyg-inline-marker'))
+          .map((s) => Math.round(s.getBoundingClientRect().width * 100) / 100);
+        const markers2 = Array.from(pre2.querySelectorAll('span'))
+          .filter((s) => String(s.className).includes('wysiwyg-inline-marker'))
+          .map((s) => Math.round(s.getBoundingClientRect().width * 100) / 100);
+        const chip = pre8.querySelector('.wysiwyg-inline-code');
+        const cs = chip ? getComputedStyle(chip) : null;
+        const hOf = (pre) => pre ? Math.round(pre.getBoundingClientRect().height * 100) / 100 : null;
+        return {
+          err: null,
+          codes: codes.map((c) => c.text),
+          codeSpanCount: codes.length,
+          chipBorder: cs ? cs.borderTopWidth + '/' + cs.borderTopStyle : null,
+          chipFontSize: cs ? cs.fontSize : null,
+          markers8: markers8,
+          markers2: markers2,
+          preH: [pre2, preOf(4), preOf(6), pre8, preOf(10)].map(hOf),
+          curLine: cm.getCursor().line,
+        };
+      });
+      const push93 = (label, ok, extra) => {
+        const pass = !!ok;
+        if (!pass) fail++;
+        console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+      };
+      push93('松散列表 = 单块（未逐项切块；项间 2 空格行触发 loose；前后锚定块独立）',
+        Array.isArray(s93.blocks) && s93.blocks.length === 3
+        && s93.blocks[1].s === 2 && s93.blocks[1].e === 11 && !s93.blocks[1].li,
+        JSON.stringify(s93.blocks));
+      push93('渲染态基准：5 个 li，行内代码项 4 个 <code>（行内代码/`/userName/npm install）',
+        s93.maskLi === 5 && JSON.stringify(s93.renderCodes) === JSON.stringify(['行内代码', '`', 'userName', 'npm install']),
+        JSON.stringify(s93.renderCodes));
+      if (m93.err) {
+        console.log('  ⚠ S93 活动态未量到: ' + m93.err);
+        fail++;
+      } else {
+        push93('点击进块 + 光标落行内代码项（行 8）', m93.curLine === 8, 'cur=' + m93.curLine);
+        push93('行内代码行 4 个代码 span 内容 ≡ 渲染 <code> 集（修复前为 [行内代码, " ", " 包裹 — 变量名 ", "、命令 "]）',
+          m93.codeSpanCount === 4 && JSON.stringify(m93.codes) === JSON.stringify(['行内代码', '`', 'userName', 'npm install']),
+          JSON.stringify(m93.codes));
+        push93('`` ` `` chip 内容 = 单反引号（CommonMark 边缘空格剥离，chip 宽 ≡ 渲染态）',
+          m93.codes[1] === '`', 'code[1]=' + JSON.stringify(m93.codes[1]));
+        push93('编辑态 chip 边框 1px solid（对齐渲染 chip；修复前无边框）',
+          m93.chipBorder === '1px/solid', m93.chipBorder);
+        push93('编辑态 chip 字号 0.88em（16px 下 ≈14.08px；对齐渲染 chip）',
+          m93.chipFontSize != null && Math.abs(parseFloat(m93.chipFontSize) - 14.08) < 0.3, m93.chipFontSize);
+        push93('光标行（行 8）标记 span 真宽（2026-10-21 光标行源文态不回退）',
+          (m93.markers8 || []).length >= 8 && m93.markers8.every((w) => w > 0.5),
+          'n=' + (m93.markers8 || []).length + ' minW=' + Math.min(99, ...(m93.markers8 || [99])));
+        push93('非光标行（行 2）标记 span 零宽（S58 口径不回退）',
+          (m93.markers2 || []).length >= 4 && m93.markers2.every((w) => w < 0.5),
+          'n=' + (m93.markers2 || []).length + ' maxW=' + Math.max(0, ...(m93.markers2 || [0])));
+        // 行高口径（S58 同款按行比行数）：活动项行 = 行盒 27.2 + wysiwyg-list-line
+        // padding-bottom 4px（= 渲染 li 的 p mb 4px；末行另有块底缘槽 padding）→
+        // 逐项断言「活动视觉行数 ≡ 渲染 li 视觉行数」（chip 边框/字号不改行盒、不多折行）。
+        // 整块总高另有 4px 结构残差（5×padding 不塌缩 vs 4×margin 塌缩，先存几何，不属本修）。
+        const linesOf = (h, extra) => Math.max(1, Math.round((h - 4 - (extra || 0)) / 27.2));
+        const activeLines = (m93.preH || []).map((h, k) => linesOf(h, k === 4 ? 10 : 0));
+        const maskLines = (s93.liH || []).map((h) => linesOf(h));
+        push93('5 个项：活动态视觉行数 ≡ 渲染 li 视觉行数（chip 改动不改行盒、不多折行）',
+          (m93.preH || []).length === 5 && activeLines.length === maskLines.length
+          && activeLines.every((l, k) => l === maskLines[k]),
+          'active=' + JSON.stringify(m93.preH) + ' activeLines=' + JSON.stringify(activeLines)
+          + ' maskLines=' + JSON.stringify(maskLines));
+      }
+    }
+  }
+
+  // ---------- S94：引用光标行高亮（2026-10-29 用户截图：两级嵌套引用块） ----------
+  // 用户反馈两点：① 引用块第一行/最后一行高亮比中间行更高，改为一致；② 高亮颜色有深有
+  // 暗，一律改灰色，且高亮宽度要与内容所在引用块一致。用户文档 = lvl-1 7 行 + lvl-2 3 行
+  // 嵌套引用（块 行 2–11）。修复 = 光标行灰带（pre::after，替代 S90② 18% accent tint 覆写）：
+  //   色 = 主题文字色 14% × 主题底色 实色混合（不透明、不随底色合成 → 无深浅差）；
+  //   宽 = 内容所在（最内层）盒：左缘 32+24×(层级−1)、右缘收 32+20×(层级−1)；
+  //   高 = 文本行域（100% − 行 padding，--qc-tp/--qc-pb 镜像 padding）→ 27.2 各行同高。
+  // 断言（光标位 顶缘行 / lvl-1 中间行 / lvl-2 中间行 / 底缘行）：
+  //   a) 带左右 ≡ 渲染同级盒（seg 遮罩内对应层级 blockquote rect，Δ≤1px）；
+  //   b) 带高 = 27.2 四位置一致（首/末缘行不再更高）；
+  //   c) 带色 = 不透明中性灰、四位置同值；
+  //   d) 块高 = 遮罩高（S90① 不变式，元素盒口径，高亮改动不破坏块高稳定）。
+  {
+    console.log('\n=== S94：引用光标行高亮（首/中/末行同高 / 统一灰 / 宽 ≡ 内容所在盒） ===');
+    const s94doc = [
+      '上文段落。',
+      '',
+      '> sadfasf',
+      '> asdfasdf',
+      '> asdfasdfdaf',
+      '> asfasfas',
+      '> asdfsaf',
+      '> > fasdfasfas',
+      '> > asfasfas',
+      '> > asdfsa',
+      '> asfasdf',
+      '> asdfasfas',
+      '',
+      '下文段落。',
+    ].join('\n');
+    const s94 = await page.evaluate(async (doc) => {
+      const { cm, ed } = window.__makeWysiwygEditor(doc);
+      window.__s94cm = cm; window.__s94ed = ed;
+      ed.settings.softBreaks = true; // 用户环境口径：同级行一个 <p> + <br>（行高 27.2 基准，S83/S90 同款）
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      ed.renderWysiwygMasks();
+      await new Promise((res) => setTimeout(res, 400));
+      const wrap = cm.getWrapperElement();
+      wrap.scrollIntoView({ block: 'start' });
+      await new Promise((res) => setTimeout(res, 300));
+      const mask = wrap.querySelector('.wysiwyg-block-mask');
+      if (!mask) return { err: '引用遮罩未找到' };
+      const mr = mask.getBoundingClientRect();
+      return {
+        blocks: (ed._wysiwygBlocks || []).map((b) => ({ s: b.start, e: b.end })),
+        maskH: Math.round(mr.height * 10) / 10,
+        pt: { x: mr.x + 80, y: mr.y + 8 },
+      };
+    }, s94doc);
+    const push94 = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    if (s94.err) {
+      console.log('  ⚠ S94 初始化失败: ' + s94.err);
+      fail++;
+    } else {
+      push94('引用块 = 行 2–12 单块（10 行两级嵌套）',
+        s94.blocks.length >= 1 && s94.blocks.some((b) => b.s === 2 && b.e === 12),
+        JSON.stringify(s94.blocks));
+      // 每目标行新建编辑器 + 整块遮罩纵比点击进块（S90 实证口径：块内 setCursor 受
+      // 锚点钳制不可靠；整块遮罩点击映射 = from + floor(ratio×(to−from))，末行单击
+      // 不可达 → 次末行点击 + ArrowDown）。
+      const s94targets = [
+        { ln: 2, name: '顶缘行 lvl-1', lvl: 1 },
+        { ln: 4, name: 'lvl-1 中间行', lvl: 1 },
+        { ln: 8, name: 'lvl-2 中间行（嵌套）', lvl: 2 },
+        { ln: 11, name: '底缘行 lvl-1', lvl: 1 },
+      ];
+      const s94ms = [];
+      for (const t of s94targets) {
+        const s94e = await page.evaluate(async (a) => {
+          const doc = a.doc, from = a.from, to = a.to, ln = a.ln;
+          const { cm, ed } = window.__makeWysiwygEditor(doc);
+          window.__s94cm = cm;
+          ed.settings.softBreaks = true; // 同上：用户环境口径
+          cm.options.viewportMargin = 100000;
+          cm.refresh();
+          ed.renderWysiwygMasks();
+          await new Promise((res) => setTimeout(res, 400));
+          const wrap = cm.getWrapperElement();
+          wrap.scrollIntoView({ block: 'start' });
+          await new Promise((res) => setTimeout(res, 300));
+          const mask = wrap.querySelector('.wysiwyg-block-mask');
+          if (!mask) return { err: '引用遮罩未找到' };
+          const r = mask.getBoundingClientRect();
+          // 纵比落行（wysiwyg.js L928：target = from.line + floor(ratio×(to.line−from.line))，
+          // 其中 to.line = 末行本身 → 分母 = 块行数−1 = (to−from)−1，S90 实测口径）；
+          // 末行 = to−1 单击不可达（ratio→1 单点）→ 点次末行（to−2）区域 + ArrowDown；
+          // 其余行按纵比落行
+          const last = to - 1;
+          const target = ln === last ? last - 1 : ln;
+          const ratio = (target - from + 0.5) / (last - from);
+          return { pt: { x: r.x + 80, y: r.top + ratio * r.height }, arrow: ln === last };
+        }, { doc: s94doc, from: 2, to: 12, ln: t.ln });
+        if (s94e.err) { s94ms.push({ err: s94e.err }); continue; }
+        await page.mouse.click(s94e.pt.x, s94e.pt.y);
+        await page.waitForTimeout(500);
+        if (s94e.arrow) {
+          await page.keyboard.press('ArrowDown');
+          await page.waitForTimeout(400);
+        }
+        const m94 = await page.evaluate((a) => {
+          const k = a.k, lvl = a.lvl;
+          const cm = window.__s94cm;
+          const cur = cm.getCursor('head');
+          if (cur.line !== k) return { err: 'landed=' + cur.line + ' want=' + k };
+          const h = cm.getLineHandle(cur.line);
+          let pre = null;
+          for (const lv of cm.display.view) {
+            if (lv && lv.line === h) {
+              const el = lv.node;
+              pre = el.tagName === 'PRE' ? el : (el.querySelector ? el.querySelector('pre.CodeMirror-line') : null);
+              break;
+            }
+          }
+          if (!pre) return { err: '活动行 pre 未物化' };
+          const wrap = cm.getWrapperElement();
+          const cs = getComputedStyle(pre);
+          const af = getComputedStyle(pre, '::after');
+          const pr = pre.getBoundingClientRect();
+          // 渲染盒参照：seg 遮罩（光标行上/下段渲染）内含 ≥ lvl 层 blockquote → 取第 lvl 层
+          let box = null;
+          for (const seg of wrap.querySelectorAll('.wysiwyg-block-mask.wysiwyg-quote-seg-top, .wysiwyg-block-mask.wysiwyg-quote-seg-bottom')) {
+            const bqs = seg.querySelectorAll('blockquote');
+            if (bqs.length >= lvl) {
+              const r = bqs[lvl - 1].getBoundingClientRect();
+              box = { x: Math.round(r.x * 100) / 100, right: Math.round(r.right * 100) / 100 };
+              break;
+            }
+          }
+          // S90① 不变式：seg-top + 光标行 pre + seg-bottom = 遮罩高（元素盒口径）
+          const segTop = wrap.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-top');
+          const segBot = wrap.querySelector('.wysiwyg-block-mask.wysiwyg-quote-seg-bottom');
+          const H = (el) => (el ? el.getBoundingClientRect().height : 0);
+          return {
+            err: null,
+            box,
+            bandL: Math.round((pr.x + parseFloat(af.left)) * 100) / 100,
+            bandR: Math.round((pr.x + parseFloat(af.left) + parseFloat(af.width)) * 100) / 100,
+            bandH: Math.round(parseFloat(af.height) * 100) / 100,
+            bandTop: af.top, padT: cs.paddingTop, padB: cs.paddingBottom,
+            bg: af.backgroundColor,
+            blockH: Math.round((H(segTop) + pr.height + H(segBot)) * 10) / 10,
+          };
+        }, { k: t.ln, lvl: t.lvl });
+        s94ms.push(m94);
+        // 证据截图：嵌套（lvl-2）光标行灰带（当前光标即该行）
+        if (t.ln === 8 && !m94.err) {
+          const s94shot = path.join(root, 'screenshots', 's94-quote-cursor-band.png');
+          fs.mkdirSync(path.dirname(s94shot), { recursive: true });
+          await page.screenshot({ path: s94shot });
+          console.log('  截图: ' + path.relative(root, s94shot));
+        }
+      }
+      const s94ok = s94ms.every((m) => !m.err);
+      if (!s94ok) {
+        s94ms.forEach((m, i) => {
+          if (m && m.err) push94('S94 ' + s94targets[i].name + '：光标落位', false, m.err);
+        });
+      } else {
+        // a) 带左右 ≡ 渲染同级盒（Δ≤1px）；b) 带高 27.2 四位置一致；c) 带色不透明中性灰同值；
+        //    d) 块高 = 遮罩高（S90① 不变式）。
+        push94('S94③ 高亮宽度 ≡ 内容所在引用块（4 位置带左右缘 = 渲染同级盒左右缘，Δ≤1px）',
+          s94ms.every((m) => m.box
+            && Math.abs(m.bandL - m.box.x) <= 1 && Math.abs(m.bandR - m.box.right) <= 1),
+          JSON.stringify(s94ms.map((m) => (m.box ? [m.bandL, m.bandR, m.box.x, m.box.right] : '?'))));
+        push94('S94① 高亮高度各行一致 = 27.2（顶/中间/嵌套/底缘行同高，带顶 ≡ 行 padding-top）',
+          s94ms.every((m) => Math.abs(m.bandH - 27.2) <= 0.6 && m.bandTop === m.padT),
+          JSON.stringify(s94ms.map((m) => m.bandH + '@top' + m.bandTop)));
+        const bgSet = new Set(s94ms.map((m) => m.bg));
+        push94('S94② 高亮 = 统一实色中性灰（4 位置同值、不透明，深浅主题自适应）',
+          bgSet.size === 1 && isNeutralGrayColor([...bgSet][0]), JSON.stringify([...bgSet]));
+        push94('S94④ 块高 = 遮罩高（S90① 不变式：高亮改动不破坏块高稳定，容差 0.5px）',
+          s94ms.every((m) => Math.abs(m.blockH - s94.maskH) <= 0.5),
+          'maskH=' + s94.maskH + ' blockHs=' + JSON.stringify(s94ms.map((m) => m.blockH)));
+      }
+    }
+  }
+
+  // ---------- S95：无序列表编辑态行内代码 chip 左右内距 ≡ 渲染态（2026-10-29 用户截图） ----------
+  // 用户反馈：渲染态与编辑态样式不完全一致（光标行除外），差异 = 行内代码灰色背景内部
+  // 文字左右两侧间隔不同——渲染 .preview-content code { padding: 2px 6px }（左右各 6px），
+  // 编辑 .wysiwyg-inline-code 原无 padding（文字贴边）。修复 = 编辑 chip 补 padding: 0 6px
+  //（竖向 0 保 27.2 行盒不变式）。用户文档 = 5 项紧凑无序列表（逐项切块，非光标项渲染
+  // mask，光标项源文态）。断言（光标落「行内代码」项）：
+  //   ① 4 个 chip 左右内距各 = 6px（chip span 缘 − 文本 range 缘，±0.5）；
+  //   ② 4 个 chip 边框盒宽 ≡ 渲染态 <code> 宽（±0.5px，逐 chip 对内容）；
+  //   ③ 光标行 pre 高 = 该项遮罩高（行盒不变式：补横 padding 不改变行高/折行）；
+  //   ④ 非光标项 mask 的 chip 内距保持 6px（.wysiwyg-block-mask code 只清竖 padding，回归）。
+  {
+    console.log('\n=== S95：无序列表编辑态行内代码 chip 左右内距 ≡ 渲染态 ===');
+    const s95doc = [
+      '- **粗体文本**：用 `**text**` 包裹 — 这是 **重点强调** 的内容',
+      '- *斜体文本*：用 `*text*` 包裹 — 这是 *需要区分* 的术语',
+      '- ~~删除线~~：用 `~~text~~` 包裹 — 表示 ~~已废弃~~ 的内容',
+      '- `行内代码`：用 `` ` `` 包裹 — 变量名 `userName`、命令 `npm install`',
+      '- ==高亮标记==：用 `==text==` 包裹 — 这是 ==重点段落==，像荧光笔一样醒目',
+    ].join('\n');
+    const push95 = (label, ok, extra) => {
+      const pass = !!ok;
+      if (!pass) fail++;
+      console.log(`  ${pass ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+    };
+    // ① 渲染态参照：编辑器挂载后首项自激活（行 0），项 4（行内代码，行 3）为 mask →
+    //    量其 <code> 边框盒宽 + 文本内距（渲染口径 6px）+ mask 高（行盒参照）
+    const s95ref = await page.evaluate(async (doc) => {
+      const { cm, ed } = window.__makeWysiwygEditor(doc);
+      ed.settings.softBreaks = true;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+      ed.renderWysiwygMasks();
+      await new Promise((res) => setTimeout(res, 400));
+      const wrap = cm.getWrapperElement();
+      wrap.scrollIntoView({ block: 'start' });
+      await new Promise((res) => setTimeout(res, 200));
+      // 紧凑列表逐项切块：mask 序 = 项2,项3,项4,项5（项1 自激活无 mask）→ 项4 = 第 3 个
+      const masks = Array.from(wrap.querySelectorAll('.wysiwyg-block-mask'));
+      const m4 = masks[2];
+      if (!m4 || !m4.querySelector('ul')) return { err: '项4 mask 未找到' };
+      const out = { codes: [], maskH: Math.round(m4.getBoundingClientRect().height * 100) / 100 };
+      for (const code of m4.querySelectorAll('code')) {
+        const cr = code.getBoundingClientRect();
+        const rng = document.createRange();
+        rng.selectNodeContents(code);
+        const tr = rng.getBoundingClientRect();
+        out.codes.push({
+          t: code.textContent,
+          w: Math.round(cr.width * 100) / 100,
+          innerL: Math.round((tr.x - cr.x) * 100) / 100,
+          innerR: Math.round((cr.right - tr.right) * 100) / 100,
+        });
+      }
+      return out;
+    }, s95doc);
+    if (s95ref.err) {
+      console.log('  ⚠ S95 初始化失败: ' + s95ref.err);
+      fail++;
+    } else {
+      push95('渲染态参照：项4 遮罩 4 个 <code>（行内代码/`/userName/npm install）',
+        s95ref.codes.length === 4,
+        JSON.stringify(s95ref.codes.map((c) => c.t + ':' + c.w + 'px(内距' + c.innerL + '/' + c.innerR + ')')));
+      // ② 编辑态：新编辑器（复用 host），点项4 mask 进块 → 光标行 = 行 3（源文态）
+      const s95e = await page.evaluate(async (doc) => {
+        const { cm, ed } = window.__makeWysiwygEditor(doc);
+        window.__s95cm = cm;
+        ed.settings.softBreaks = true;
+        cm.options.viewportMargin = 100000;
+        cm.refresh();
+        ed.renderWysiwygMasks();
+        await new Promise((res) => setTimeout(res, 400));
+        const wrap = cm.getWrapperElement();
+        wrap.scrollIntoView({ block: 'start' });
+        await new Promise((res) => setTimeout(res, 200));
+        const masks = Array.from(wrap.querySelectorAll('.wysiwyg-block-mask'));
+        const m4 = masks[2];
+        if (!m4) return { err: '项4 mask 未找到' };
+        const r = m4.getBoundingClientRect();
+        return { pt: { x: r.x + 80, y: r.top + 0.5 * r.height } };
+      }, s95doc);
+      if (s95e.err) {
+        console.log('  ⚠ S95 进块失败: ' + s95e.err);
+        fail++;
+      } else {
+        await page.mouse.click(s95e.pt.x, s95e.pt.y);
+        await page.waitForTimeout(500);
+        const m95 = await page.evaluate(() => {
+          const cm = window.__s95cm;
+          const cur = cm.getCursor('head');
+          if (cur.line !== 3) return { err: 'landed=' + cur.line + ' want=3' };
+          const h = cm.getLineHandle(cur.line);
+          let pre = null;
+          for (const lv of cm.display.view) {
+            if (lv && lv.line === h) {
+              const el = lv.node;
+              pre = el.tagName === 'PRE' ? el : (el.querySelector ? el.querySelector('pre.CodeMirror-line') : null);
+              break;
+            }
+          }
+          if (!pre) return { err: '光标行 pre 未物化' };
+          const out = { preH: Math.round(pre.getBoundingClientRect().height * 100) / 100, chips: [], maskChip: null };
+          for (const s of pre.querySelectorAll('span.wysiwyg-inline-code')) {
+            const sr = s.getBoundingClientRect();
+            const rng = document.createRange();
+            rng.selectNodeContents(s.firstChild);
+            const tr = rng.getBoundingClientRect();
+            out.chips.push({
+              t: s.textContent,
+              w: Math.round(sr.width * 100) / 100,
+              innerL: Math.round((tr.x - sr.x) * 100) / 100,
+              innerR: Math.round((sr.right - tr.right) * 100) / 100,
+            });
+          }
+          // 非光标项 mask chip 回归：项1（粗体文本，自激活前已撤 mask？——光标在项4，项1 是 mask）
+          const wrap = cm.getWrapperElement();
+          const masks = Array.from(wrap.querySelectorAll('.wysiwyg-block-mask'));
+          const m1 = masks[0];
+          if (m1 && m1.querySelector('code')) {
+            const code = m1.querySelector('code');
+            const cr = code.getBoundingClientRect();
+            const rng2 = document.createRange();
+            rng2.selectNodeContents(code);
+            const tr2 = rng2.getBoundingClientRect();
+            out.maskChip = {
+              t: code.textContent,
+              w: Math.round(cr.width * 100) / 100,
+              innerL: Math.round((tr2.x - cr.x) * 100) / 100,
+              innerR: Math.round((cr.right - tr2.right) * 100) / 100,
+            };
+          }
+          return out;
+        });
+        if (m95.err) {
+          console.log('  ⚠ S95 光标落位失败: ' + m95.err);
+          fail++;
+        } else {
+          const s95shot = path.join(root, 'screenshots', 's95-list-chip-padding.png');
+          fs.mkdirSync(path.dirname(s95shot), { recursive: true });
+          await page.screenshot({ path: s95shot });
+          console.log('  截图: ' + path.relative(root, s95shot));
+          const byContent = (arr, t) => arr.find((c) => c.t === t);
+          // 内距口径 = 边框盒缘 − 文本缘 = 1px 边框 + 6px padding = 7px（渲染 .preview-content
+          // code 同口径同值，S95④ 参照实测 7/7）→ 相对 ≡ 渲染参照 + 绝对 ≈ 7 双断言
+          const innerMatch = s95ref.codes.every((rc) => {
+            const ec = byContent(m95.chips, rc.t);
+            return ec && Math.abs(ec.innerL - rc.innerL) <= 0.5 && Math.abs(ec.innerR - rc.innerR) <= 0.5;
+          });
+          push95('S95① 光标行 4 个 chip 左右内距 ≡ 渲染态参照（边框盒→文本 = 边框 1 + padding 6 ≈ 7px）',
+            m95.chips.length === 4 && innerMatch && m95.chips.every((c) => Math.abs(c.innerL - 7) <= 0.5 && Math.abs(c.innerR - 7) <= 0.5),
+            JSON.stringify(m95.chips.map((c) => c.t + ':' + c.innerL + '/' + c.innerR + '(渲染' + (byContent(s95ref.codes, c.t) || {}).innerL + '/' + (byContent(s95ref.codes, c.t) || {}).innerR + ')')));
+          const widthMatch = s95ref.codes.every((rc) => {
+            const ec = byContent(m95.chips, rc.t);
+            return ec && Math.abs(ec.w - rc.w) <= 0.5;
+          });
+          push95('S95② 光标行 4 个 chip 边框盒宽 ≡ 渲染态 <code>（±0.5px，逐内容对）',
+            m95.chips.length === 4 && widthMatch,
+            JSON.stringify(s95ref.codes.map((rc) => rc.t + ':渲染' + rc.w + '/编辑' + (byContent(m95.chips, rc.t) ? byContent(m95.chips, rc.t).w : '?'))));
+          push95('S95③ 光标行 pre 高 = 项4 遮罩高（行盒不变式：横 padding 不改行高/折行）',
+            Math.abs(m95.preH - s95ref.maskH) <= 0.5,
+            'preH=' + m95.preH + ' maskH=' + s95ref.maskH);
+          push95('S95④ 非光标项 mask chip 内距 ≡ 渲染参照（mask code 只清竖 padding 保横 6px，回归）',
+            !!m95.maskChip && s95ref.codes.length > 0
+              && Math.abs(m95.maskChip.innerL - s95ref.codes[0].innerL) <= 0.5
+              && Math.abs(m95.maskChip.innerR - s95ref.codes[0].innerR) <= 0.5,
+            JSON.stringify(m95.maskChip));
+          // ---------- S96：高亮（==text==）橙底左右内距 ≡ 渲染 mark（padding: 1px 4px） ----------
+          // 用户 2026-10-29 追加截图：高亮标记行编辑态橙底贴文字、渲染态橙底有左右 4px。
+          // 修复 = .wysiwyg-highlight 补 padding: 0 4px（竖 0 保行盒）。光标落项5（高亮
+          // 标记，末项 = 行 4）：断言 ① 2 个高亮 span 左右内距 ≡ 渲染 mark 参照（无边框
+          // → 4px，±0.5）② 盒宽 ≡ 渲染 mark 宽（±0.5）③ 光标行 pre 高 = 项5 遮罩高（行盒
+          // 不变式；末项含 14px 列表底距口径）。
+          const s96m = await page.evaluate(async (doc) => {
+            const { cm, ed } = window.__makeWysiwygEditor(doc);
+            window.__s96cm = cm;
+            ed.settings.softBreaks = true;
+            cm.options.viewportMargin = 100000;
+            cm.refresh();
+            ed.renderWysiwygMasks();
+            await new Promise((res) => setTimeout(res, 400));
+            const wrap = cm.getWrapperElement();
+            const masks = Array.from(wrap.querySelectorAll('.wysiwyg-block-mask'));
+            const m5 = masks[3]; // 项5 = 高亮标记（项1 自激活，mask 序 项2..项5）
+            if (!m5) return { err: '项5 mask 未找到' };
+            const out = {};
+            // 渲染参照：项5 mask 内 <mark>（高亮标记/重点段落）
+            out.marks = [];
+            for (const mk of m5.querySelectorAll('mark')) {
+              const cr = mk.getBoundingClientRect();
+              const rng = document.createRange();
+              rng.selectNodeContents(mk);
+              const tr = rng.getBoundingClientRect();
+              out.marks.push({
+                t: mk.textContent,
+                w: Math.round(cr.width * 100) / 100,
+                h: Math.round(cr.height * 100) / 100,
+                innerL: Math.round((tr.x - cr.x) * 100) / 100,
+                innerR: Math.round((cr.right - tr.right) * 100) / 100,
+              });
+            }
+            out.maskShadow = getComputedStyle(m5.querySelector('mark')).boxShadow;
+            out.maskH = Math.round(m5.getBoundingClientRect().height * 100) / 100;
+            out.pt = { x: m5.getBoundingClientRect().x + 80, y: m5.getBoundingClientRect().top + 0.5 * m5.getBoundingClientRect().height };
+            return out;
+          }, s95doc);
+          if (s96m.err || !s96m.pt) {
+            console.log('  ⚠ S96 项5 mask 未找到: ' + (s96m.err || 'no pt'));
+            fail++;
+          } else {
+            await page.mouse.click(s96m.pt.x, s96m.pt.y);
+            await page.waitForTimeout(500);
+            const m96 = await page.evaluate(() => {
+              const cm = window.__s96cm;
+              const cur = cm.getCursor('head');
+              if (cur.line !== 4) return { err: 'landed=' + cur.line + ' want=4' };
+              const h = cm.getLineHandle(cur.line);
+              let pre = null;
+              for (const lv of cm.display.view) {
+                if (lv && lv.line === h) {
+                  const el = lv.node;
+                  pre = el.tagName === 'PRE' ? el : (el.querySelector ? el.querySelector('pre.CodeMirror-line') : null);
+                  break;
+                }
+              }
+              if (!pre) return { err: '光标行 pre 未物化' };
+              const out = { preH: Math.round(pre.getBoundingClientRect().height * 100) / 100, hls: [] };
+              for (const s of pre.querySelectorAll('span.wysiwyg-highlight')) {
+                const sr = s.getBoundingClientRect();
+                const rng = document.createRange();
+                rng.selectNodeContents(s.firstChild);
+                const tr = rng.getBoundingClientRect();
+                out.hls.push({
+                  t: s.textContent,
+                  w: Math.round(sr.width * 100) / 100,
+                  h: Math.round(sr.height * 100) / 100,
+                  innerL: Math.round((tr.x - sr.x) * 100) / 100,
+                  innerR: Math.round((sr.right - tr.right) * 100) / 100,
+                });
+              }
+              const cs97 = getComputedStyle(pre.querySelector('span.wysiwyg-highlight'));
+              out.hlDisplay = cs97.display;
+              out.hlShadow = cs97.boxShadow;
+              return out;
+            });
+            const s96shot = path.join(root, 'screenshots', 's96-highlight-padding.png');
+            fs.mkdirSync(path.dirname(s96shot), { recursive: true });
+            await page.screenshot({ path: s96shot });
+            console.log('  截图: ' + path.relative(root, s96shot));
+            if (m96.err) {
+              console.log('  ⚠ S96 光标落位失败: ' + m96.err);
+              fail++;
+            } else {
+              const find96 = (arr, t) => arr.find((c) => c.t === t);
+              const inner96 = s96m.marks.every((rc) => {
+                const ec = find96(m96.hls, rc.t);
+                return ec && Math.abs(ec.innerL - rc.innerL) <= 0.5 && Math.abs(ec.innerR - rc.innerR) <= 0.5;
+              });
+              push95('S96① 光标行 2 个高亮左右内距 ≡ 渲染 mark 参照（padding 4px，无边框，±0.5）',
+                m96.hls.length === 2 && inner96 && m96.hls.every((c) => Math.abs(c.innerL - 4) <= 0.5 && Math.abs(c.innerR - 4) <= 0.5),
+                JSON.stringify(m96.hls.map((c) => c.t + ':' + c.innerL + '/' + c.innerR + '(渲染' + (find96(s96m.marks, c.t) || {}).innerL + '/' + (find96(s96m.marks, c.t) || {}).innerR + ')')));
+              const width96 = s96m.marks.every((rc) => {
+                const ec = find96(m96.hls, rc.t);
+                return ec && Math.abs(ec.w - rc.w) <= 0.5;
+              });
+              push95('S96② 光标行 2 个高亮盒宽 ≡ 渲染 mark（±0.5px）',
+                m96.hls.length === 2 && width96,
+                JSON.stringify(s96m.marks.map((rc) => rc.t + ':渲染' + rc.w + '/编辑' + (find96(m96.hls, rc.t) ? find96(m96.hls, rc.t).w : '?'))));
+              push95('S96③ 光标行 pre 高 = 项5 遮罩高（行盒不变式：高亮横 padding 不改行高/折行）',
+                Math.abs(m96.preH - s96m.maskH) <= 0.5,
+                'preH=' + m96.preH + ' maskH=' + s96m.maskH);
+              // ---------- S97：高亮橙底「盒高」≡ 渲染 mark（用户 2026-10-29 追加截图） ----------
+              // 实测（Edge/WebView2，16px 基准）：渲染 mark 盒 29.19（inline-block+竖 pad 1×2，
+              // 行盒亦 29.19）/ 遮罩 mark 盒 27.19（竖 pad 清零）/ 源文态 inline 盒 21。修复 =
+              // 源文态改 inline-block（盒=行盒基准 27.19，行盒不撑）+ 遮罩/源文态各加
+              // box-shadow ±1px（纯绘制零布局）→ 视觉橙盒 29.19 三态一致。断言：
+              //   ① 遮罩橙盒 rect + 阴影 2px ≡ 阅读态 mark rect（±0.5）且阴影生效；
+              //   ② 源文态橙盒 rect + 阴影 2px ≡ 阅读态 mark rect 且 inline-block+阴影。
+              const r97 = await page.evaluate(async (doc) => {
+                const reading = document.getElementById('reading');
+                reading.style.fontSize = '16px'; reading.style.lineHeight = '1.7';
+                reading.innerHTML = window.UnifiedRenderer.renderMarkdown(doc, { softBreaks: true, tabSize: 4 });
+                await new Promise((res) => setTimeout(res, 200));
+                const mk = reading.querySelector('mark');
+                if (!mk) return { err: '阅读态 mark 未找到' };
+                return { renderMarkH: Math.round(mk.getBoundingClientRect().height * 100) / 100 };
+              }, s95doc);
+              if (r97.err) {
+                console.log('  ⚠ S97 阅读态参照失败: ' + r97.err);
+                fail++;
+              } else {
+                const sh97 = (s) => !!s && s !== 'none' && s.includes('-1px');
+                push95('S97① 遮罩态橙盒视觉高 ≡ 阅读态 mark（rect + box-shadow 2px，±0.5）',
+                  Math.abs(r97.renderMarkH - (s96m.marks[0].h + 2)) <= 0.5 && sh97(s96m.maskShadow),
+                  '渲染' + r97.renderMarkH + ' 遮罩rect' + s96m.marks[0].h + '+2 阴影=' + (sh97(s96m.maskShadow) ? '生效' : '失效'));
+                push95('S97② 源文态橙盒视觉高 ≡ 阅读态 mark（inline-block rect + box-shadow 2px，±0.5）',
+                  m96.hls.every((c) => Math.abs(r97.renderMarkH - (c.h + 2)) <= 0.5)
+                    && m96.hlDisplay === 'inline-block' && sh97(m96.hlShadow),
+                  '渲染' + r97.renderMarkH + ' 源文rect' + JSON.stringify(m96.hls.map((c) => c.h))
+                    + ' display=' + m96.hlDisplay + ' 阴影=' + (sh97(m96.hlShadow) ? '生效' : '失效'));
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
   if (errors.length) {
