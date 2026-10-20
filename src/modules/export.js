@@ -141,7 +141,7 @@
         blockquote { padding: 12px 20px; margin: 0 0 16px 0; border-left: 4px solid #2563eb; background: #f6f5f4; border-radius: 0 6px 6px 0; color: #5e5e62; }
         blockquote p:last-child { margin-bottom: 0; }
         table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
-        th, td { padding: 8px 12px; border: 1px solid #d4d4d8; text-align: left; }
+        th, td { padding: 8px 12px; border: 1px solid #d4d4d8; text-align: left; overflow-wrap: break-word; word-break: break-word; }
         th { background: #f0efee; font-weight: 600; }
         img { max-width: 100%; }
         hr { border: none; border-top: 1px solid #d4d4d8; margin: 24px 0; }
@@ -150,7 +150,9 @@
         mark { display: inline-block; background: #fbbf24; color: #1a1a1a; padding: 1px 4px; border-radius: 3px; }
         kbd { display: inline-block; padding: 2px 7px; font-size: 0.82em; font-family: "SF Mono", "Fira Code", monospace; background: #f0efee; border: 1px solid #d4d4d8; border-bottom-width: 2px; border-radius: 4px; line-height: 1.5; }
         abbr { text-decoration: underline dotted; cursor: help; }
-        .mermaid-container { text-align: center; margin: 16px 0; padding: 16px; max-width: 100%; background: #f0efee; border-radius: 8px; border: 1px solid #d4d4d8; overflow-x: auto; }
+        /* 2026-10-28 用户要求：导出时不得因滚动/裁切丢失内容——图表容器解除横向滚动
+           （svg 自带 max-width:100% 自适应缩放，无裁切） */
+        .mermaid-container { text-align: center; margin: 16px 0; padding: 16px; max-width: 100%; background: #f0efee; border-radius: 8px; border: 1px solid #d4d4d8; overflow: visible; }
         .mermaid-container svg { max-width: 100%; height: auto; }
         .alert { border-radius: 10px; padding: 14px 18px; margin: 16px 0; max-width: 100%; border-left: 4px solid; overflow-wrap: break-word; }
         .alert-title { font-weight: 700; margin-bottom: 6px; font-size: 0.95em; display: flex; align-items: center; gap: 8px; }
@@ -161,7 +163,7 @@
         .alert-important { background: rgba(139,92,246,0.06); border-left-color: #8b5cf6; }
         .alert-warning { background: rgba(245,158,11,0.06); border-left-color: #f59e0b; }
         .alert-caution { background: rgba(239,68,68,0.06); border-left-color: #ef4444; }
-        .math-display { display: block; text-align: center; margin: 16px 0; overflow-x: auto; }
+        .math-display { display: block; text-align: center; margin: 16px 0; overflow: visible; }
         .toc-wrapper { padding: 12px 16px; margin: 16px 0; background: #f6f5f4; border-radius: 8px; border: 1px solid #d4d4d8; }
         .toc-list ul { list-style: none; padding-left: 16px; margin: 2px 0; }
         .toc-list li { margin-bottom: 3px; line-height: 1.6; }
@@ -173,6 +175,31 @@
         input[type="checkbox"]:checked::after { content: ''; position: absolute; left: 4px; top: 1px; width: 5px; height: 9px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg); }
         details { margin-bottom: 14px; padding: 8px 12px; background: #f6f5f4; border-radius: 6px; border: 1px solid #d4d4d8; }
         summary { font-weight: 600; cursor: pointer; }`;
+      },
+      // 导出「全量展开」公共口径（2026-10-28 用户要求：不管设置里代码块是「滚动」还是「全部」，
+      // 导出长图/PDF/DOCX 时所有超长滚动容器都必须展开显示全部，任何导出不得丢失内容）。
+      // 渲染态的滚动/裁切容器（styles.css）：
+      //   .code-scroll        代码块 max-height:300px + overflow-y（「代码块滚动条」设置开时）
+      //   table               display:block + overflow-x:auto（宽表横向滚动）
+      //   .katex-display-wrapper / .math-display / .katex-display  overflow-x:auto（宽公式）
+      //   .mermaid-container  overflow-x:auto（宽图表，svg max-width:100% 自适应缩放）
+      //   .md2-error pre      overflow-x:auto（表格解析错误回显）
+      // 展开策略：纵向裁切直接解除（max-height:none + overflow:visible）；代码/表格强制 pre-wrap
+      // 换行（代码块行白名单外的 no-wrap 模式同样收口）；表格恢复 table 布局（display:block 会
+      // 破坏表格排版），单元格长 token 断词保证压缩换行不溢出；公式/图表容器解除横向裁切。
+      // scope = 选择器前缀（长图 clone 用 '#tm-png-export-root'、PDF 打印帧用 '.preview-content'、
+      // 无 scope 时用空串），各导出链路共用本方法避免口径漂移。
+      _exportExpandRules(scope) {
+        const p = scope ? scope + ' ' : '';
+        return `${p}.code-scroll { max-height: none !important; overflow: visible !important; }
+        ${p}pre { white-space: pre-wrap !important; word-wrap: break-word !important; word-break: break-word !important; overflow: visible !important; }
+        ${p}pre code { white-space: pre-wrap !important; word-wrap: break-word !important; word-break: break-word !important; }
+        ${p}.code-line-text { white-space: pre-wrap !important; word-wrap: break-word !important; word-break: break-word !important; }
+        ${p}table { display: table !important; overflow: visible !important; }
+        ${p}td, ${p}th { overflow-wrap: break-word !important; word-break: break-word !important; }
+        ${p}.mermaid-container { overflow: visible !important; }
+        ${p}.katex-display-wrapper, ${p}.math-display, ${p}.katex-display { overflow: visible !important; }
+        ${p}.md2-error pre { overflow: visible !important; }`;
       },
       // 裁剪 canvas 四周空白/透明/背景色边距，仅保留有内容的区域。
       // backgroundColor 为 null 时只裁剪完全透明像素；传入 {r,g,b} 时按颜色裁剪（容差 15）。
@@ -1106,6 +1133,7 @@
         }
   
         let clone = null;
+        let expandStyle = null;
         try {
           this.setStatus(this.t('generatingImg'));
   
@@ -1120,6 +1148,15 @@
           clone.style.overflow = 'visible';
           clone.style.height = 'auto';
           document.body.appendChild(clone);
+          // 2026-10-28 用户要求：导出长图时所有超长滚动容器（代码块/宽表/宽公式）一律展开显示全部，
+          // 不管设置里代码块选的是「滚动」还是「全部」。clone 在同一文档内，渲染态 styles.css 规则
+          // （.code-scroll 300px 裁切、table display:block+overflow-x 等）同样作用于它 → 注入
+          // 按 clone id 作用域的展开 CSS（不污染活动预览），finally 移除。
+          clone.id = 'tm-png-export-root';
+          expandStyle = document.createElement('style');
+          expandStyle.id = 'tm-export-expand-style';
+          expandStyle.textContent = this._exportExpandRules('#tm-png-export-root');
+          document.head.appendChild(expandStyle);
   
           // 图片加载策略与实时预览 processImages 保持一致：
           // data:/http(s):/file:/blob: 直接保留；绝对路径直接读取；相对路径按当前文档目录解析
@@ -1154,14 +1191,18 @@
           await Promise.all(imagePromises);
           await new Promise(r => setTimeout(r, 300));
   
+          // 展开后内容可能宽于 800（超宽公式等）：画布按内容宽度兜底放大，保证不裁切
+          // （2026-10-28 用户要求：任何导出不得丢失信息）
+          const exportW = Math.max(800, clone.scrollWidth);
+  
           const canvas = await html2canvas(clone, {
             scale: 2,
             useCORS: true,
             allowTaint: true,
             logging: false,
             backgroundColor: this.isDark ? '#1a1b1e' : '#ffffff',
-            width: 800,
-            windowWidth: 800
+            width: exportW,
+            windowWidth: exportW
           });
   
           const imgData = canvas.toDataURL('image/png');
@@ -1187,6 +1228,9 @@
         } catch (error) {
           this.setStatus(`${this.t('exportFailed')}: ${error}`);
         } finally {
+          if (expandStyle && expandStyle.parentNode) {
+            expandStyle.parentNode.removeChild(expandStyle);
+          }
           if (clone && clone.parentNode) {
             clone.parentNode.removeChild(clone);
           }
@@ -1298,18 +1342,19 @@
     @page { margin: 1.5cm; }
     html, body { margin: 0 !important; padding: 0 !important; background: white !important; }
     .preview-content { max-width: 680px !important; margin: 0 auto !important; padding: 16px 24px !important; font-family: ${this._exportPdfFontStack()} !important; }
-    .preview-content pre { white-space: pre-wrap !important; word-wrap: break-word !important; word-break: break-word !important; overflow: visible !important; }
-    .preview-content pre code { white-space: pre-wrap !important; word-wrap: break-word !important; word-break: break-word !important; }
+    /* 2026-10-28 用户要求：导出 PDF 时所有超长滚动容器展开显示全部（代码块/宽表/宽公式/图表），
+       与长图导出共用 _exportExpandRules 口径——打印帧载入了完整 styles.css（渲染态滚动规则
+       生效），必须在此覆盖。宽表在固定页宽下按 table 布局压缩换行（不裁切、不丢内容）。 */
+    ${this._exportExpandRules('.preview-content')}
     /* 代码块 hljs 默认主题里 .hljs 元素带 background:#ffffff，会盖住 pre 的灰色形成"内白外灰"。
        强制透明 + 12px 内边距，让整个代码块统一是 pre 的 --code-bg 灰色（与软件预览一致）。 */
     .preview-content pre code.hljs,
     .preview-content pre .hljs { background: transparent !important; padding: 12px 16px !important; }
     /* 代码块行结构（导出 iframe 没载入 styles.css，code-block.js 输出的 .code-line 必须显式块级化） */
-    .code-scroll { max-height: none !important; overflow: visible !important; }
     .code-line { display: flex !important; line-height: 1.8 !important; min-width: 0 !important; }
     .code-line-num { flex-shrink: 0 !important; width: 3em !important; text-align: right !important; padding-right: 0.8em !important; color: #888 !important; user-select: none !important; display: none !important; }
     .preview-content.code-line-numbers .code-line-num { display: inline !important; }
-    .code-line-text { white-space: pre-wrap !important; word-wrap: break-word !important; word-break: break-word !important; flex: 1 1 auto !important; min-width: 0 !important; }
+    .code-line-text { flex: 1 1 auto !important; min-width: 0 !important; }
     .mermaid-container { margin: 8px 0 !important; max-width: 100% !important; overflow: hidden !important; break-inside: avoid; page-break-inside: avoid; }
     .mermaid-container svg { width: auto !important; max-width: 100% !important; height: auto !important; display: block !important; margin: 0 auto !important; }
     .mermaid-container svg text, .mermaid-container svg .nodeLabel, .mermaid-container svg .edgeLabel, .mermaid-container svg .label, .mermaid-container svg textPath { font-size: 14px !important; }

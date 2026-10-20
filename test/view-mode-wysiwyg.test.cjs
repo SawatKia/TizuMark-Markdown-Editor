@@ -1176,7 +1176,9 @@ test('引用 + 行内语法渲染化：活动块 > 前缀灰显/左竖条，行�
   assert.match(css, /pre\.wysiwyg-quote-line\.wysiwyg-block-edge-bottom \{[^}]*padding-bottom: 28px/, '引用末行未补 28px（盒 padB 12 + BFC 收进遮罩的盒 mb 16，缺了进编辑态块下内容上跳）');
   assert.match(css, /wysiwyg-quote-nested\.wysiwyg-block-edge-bottom \{[^}]*padding-bottom: 40px/, '嵌套末行未相加各段 padding（12 嵌套 + 12 盒 + 16 盒 mb）');
   assert.match(css, /span\[class\*="wysiwyg-quote-slot"\] \{\s*\n\s*color: transparent;/, '引用 > 槽默认未透明（应只在光标行显示）');
-  assert.match(css, /wysiwyg-quote-cursor-line span\[class\*="wysiwyg-quote-slot"\] \{[^}]*var\(--text-secondary\)/, '光标行 > 标志未显色');
+  // 2026-10-28 S89 口径更新：嵌套光标行只显最内层一个 >（slot-inner 标记），外层各层 >
+  // 在光标行也透明 → 显色规则从「光标行全部槽」收口到「光标行 slot-inner 槽」
+  assert.match(css, /wysiwyg-quote-cursor-line span\[class\*="wysiwyg-quote-slot-inner"\] \{[^}]*var\(--text-secondary\)/, '光标行 > 标志未显色（S89：仅最内层 slot-inner）');
   assert.match(css, /\.wysiwyg-inline-marker \{[^}]*color: transparent/, '行内标记未透明');
   // 标记须零宽（2026-10-20 用户截图 demo.md：渲染态与编辑态差异巨大——透明保留宽度
   // 每对 ** 留 14.6px 空隙、密集 token 行被撑多折一行）；口径同 .wysiwyg-ol-space：
@@ -2606,8 +2608,10 @@ test('不跳顶修复⑤（2026-10-21）：ensure-vendor 再生 vendor 后重打
   const vendor = fs.readFileSync(path.join(ROOT, 'scripts', 'ensure-vendor.mjs'), 'utf8');
   assert.match(vendor, /function applyTizuMarkCm5Patches\(\) \{/,
     'ensure-vendor 缺 CM5 补丁重打步骤（vendor 再生会抹掉不跳顶修复）');
-  assert.match(vendor, /applyTizuMarkCm5Patches\(\);\s*\n\s*console\.log\('\[ensure-vendor\] vendor 同步完成/,
-    'ensure-vendor 的 CM5 补丁步骤未在 vendor 同步完成前调用');
+  // 补丁调用顺序：CM5 核心 → continuelist addon → vendor 同步完成（2026-10-28 新增 continuelist
+  // 逐级退出补丁，须同在同步完成前重打，否则 npm install 抹掉修复）
+  assert.match(vendor, /applyTizuMarkCm5Patches\(\);[\s\S]{0,4000}?applyTizuMarkContinuelistPatch\(\);\s*\n\s*console\.log\('\[ensure-vendor\] vendor 同步完成/,
+    'ensure-vendor 的 CM5/continuelist 补丁步骤未在 vendor 同步完成前调用');
   // 两个补丁项的幂等 marker（已打则跳过；锚点丢失则 exit 1，绝不静默）
   assert.match(vendor, /marker: 'if \(rendered\.has\(line\)\) return;'/,
     'ensure-vendor CM5 补丁项一（estimateLineHeights 跳过已渲染行）缺 marker');
@@ -3232,4 +3236,53 @@ test('S86 嵌套续行末行 = 嵌套盒底缘延续 + 单层光标行右缘 ins
   assert.match(driver, /S86 核心：末行背景 = 4 层底缘阶梯（2 层 × 竖条 \+ 底色，外盒收 16、内盒收 44）/);
   assert.match(driver, /S86 核心：末行底距 = 56px（28×2，替代旧通用 40px）/);
   assert.match(driver, /顶缘对照：内层（lvl2）层顶 = 12px（盒 d 顶 = 12d）、高度收 12px/);
+});
+
+test('S87 空嵌套引用行回车逐级退出（2026-10-28 用户反馈：最内层空行回车应到上级引用块新增一行，无上级才跳出）', () => {
+  const addon = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'codemirror', 'addon', 'edit', 'continuelist.js'), 'utf8');
+  const vendorScript = fs.readFileSync(path.join(ROOT, 'scripts', 'ensure-vendor.mjs'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // 修复点在内置 CM addon 的 emptyListRE 分支（空行项出口）：原实现一次删光前缀
+  // （嵌套引用直接跳出所有层级）→ 现按 match[2] 里 > 数逐级弹（lvl-N → lvl-N-1、光标留本行）。
+  // addon 是 vendor 再生文件（.gitignore 内）——持久化 = ensure-vendor.mjs 再生后自动重打的补丁
+  // （与 CM5 不跳顶补丁同一口径），断言两个层面：补丁源（受跟踪）+ 再生产物（本机状态）
+  assert.ok(vendorScript.includes('function applyTizuMarkContinuelistPatch() {'),
+    'ensure-vendor.mjs 缺 continuelist 补丁重打步骤（npm install 再生会抹掉逐级退出修复）');
+  assert.ok(vendorScript.includes("marker: 'var quoteLvl = (match[2].match(/>/g) || []).length;'"),
+    'ensure-vendor.mjs continuelist 补丁缺幂等 marker（锚点丢失须 exit 1，不得静默）');
+  assert.ok(addon.includes('var quoteLvl = (match[2].match(/>/g) || []).length;'),
+    'continuelist.js 空行分支未按引用前缀 > 数判定层级（逐级退出缺失）');
+  assert.ok(addon.includes('for (var k = 0; k < quoteLvl - 1; k++) newPrefix += "> ";'),
+    'continuelist.js 缺弹级重建前缀（新前缀 = 原层级 - 1）');
+  assert.ok(addon.includes('replacements[i] = "";  // 不另插新行：光标停在弹级后的本行'),
+    'continuelist.js 弹级后未留在本行（应不另插新行）');
+  // 原行为保留：无上级（空 lvl-1）/ 空列表项 = 清行 + 光标落下方新行
+  assert.ok((addon.match(/replacements\[i\] = "\\n";/g) || []).length >= 2,
+    'continuelist.js 空 lvl-1 行/空列表项完全跳出（清行+新行）原行为丢失');
+  // 驱动回归接线
+  assert.match(driver, /=== S87：空嵌套引用行回车逐级退出/);
+  assert.match(driver, /空 lvl-3 行回车 = 弹到 lvl-2（本行变 `> > `、光标留本行 ch4、行数不变）/);
+  assert.match(driver, /空 lvl-1 行回车 = 完全跳出引用（本行清空、光标落下方新行、行数 \+1 = 原行为）/);
+});
+
+test('S89 嵌套引用光标行只显一个 >（2026-10-28 用户反馈：只在当前编辑的引用块的当前行显示一个 >）', () => {
+  const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
+  // 修复点：最内层槽挂 slot-inner 标记（外层槽无标记）；光标行显色规则只认该标记
+  assert.ok(wys.includes("const lvlCount = (qm[1].match(/>/g) || []).length;"),
+    'wysiwyg.js 未按行前缀 > 数判定最内层槽');
+  assert.ok(wys.includes("add(lineNo, gt, end, 'wysiwyg-quote-slot' + (level === lvlCount ? ' wysiwyg-quote-slot-inner' : ''));"),
+    'wysiwyg.js 最内层槽未挂 wysiwyg-quote-slot-inner 标记');
+  assert.match(css, /wysiwyg-quote-cursor-line span\[class\*="wysiwyg-quote-slot-inner"\] \{\s*color: var\(--text-secondary\);\s*\}/,
+    'styles.css 光标行 > 显色未限定到 slot-inner（嵌套行外层 > 仍会全显）');
+  // 旧的全槽显色规则不得残留（会盖过 slot-inner 口径）
+  assert.ok(!css.includes('.wysiwyg-quote-cursor-line span[class*="wysiwyg-quote-slot"] {'),
+    'styles.css 残留旧的全槽光标行显色规则（嵌套行每层 > 都显）');
+  // 基线透明规则保持（非光标行、光标行外层槽都靠它透明）
+  assert.ok(css.includes('.wysiwyg-plain-text span[class*="wysiwyg-quote-slot"] {'),
+    'styles.css 缺槽 > 默认透明基线规则');
+  // 驱动回归接线
+  assert.match(driver, /=== S89：嵌套引用光标行只显一个 >/);
+  assert.match(driver, /S89 核心：光标行只显最内层一个 >（外层两层 > 透明）/);
 });

@@ -3138,6 +3138,10 @@
           if (!line || line.trim() === '') continue; // callout 内空行不装饰
           const qm = /^(\s*(?:>[ \t]?)+)/.exec(line);
           if (!qm) continue;
+          // 2026-10-28 用户要求：嵌套引用光标行只显一个 >（当前编辑的引用块 = 最内层），
+          // 外层每层的 > 不再重复显示。最内层槽额外挂 wysiwyg-quote-slot-inner 标记，
+          // 光标行显色规则（styles.css）只认这个标记 → 单层行行为不变（唯一槽即最内层）。
+          const lvlCount = (qm[1].match(/>/g) || []).length;
           let level = 0, pos = 0;
           while (pos < qm[1].length) {
             const gt = line.indexOf('>', pos);
@@ -3145,7 +3149,7 @@
             level++;
             let end = gt + 1;
             if (line[end] === ' ' || line[end] === '\t') end++; // 空格进槽（caret 锚定，见上）
-            add(lineNo, gt, end, 'wysiwyg-quote-slot');
+            add(lineNo, gt, end, 'wysiwyg-quote-slot' + (level === lvlCount ? ' wysiwyg-quote-slot-inner' : ''));
             pos = end;
           }
           add(lineNo, qm[1].length, line.length, 'wysiwyg-quote-text');

@@ -6725,6 +6725,185 @@ try {
     }
   }
 
+  // === S87：空嵌套引用行回车逐级退出（2026-10-28 用户反馈：「光标在最内部的嵌套引用块，
+  // 在新行中按回车，光标应该到上级引用块中新增一行，而不是直接跳出所有引用块，如果没有
+  // 上级引用块的情况下再跳出引用块」）===
+  // 文档 = 用户截图：lvl-1 三行 + lvl-2 三行 + 空 lvl-3 行（光标）；块 = 行 2-8。
+  // 修复 = 内置 CM addon（src/lib/codemirror/addon/edit/continuelist.js）emptyListRE 分支：
+  // 空引用行原一次删光全部 > 前缀（直接跳出所有引用层级）→ 现 lvl-N 弹到 lvl-N-1
+  // （光标留本行、落新前缀后可直接敲上级内容）；仅空 lvl-1 行完全跳出（清行 + 光标落
+  // 下方新行 = 原行为）。空列表项（前缀无 >）走原分支不受影响（probe-pop2 实测）。
+  console.log('\n=== S87：空嵌套引用行回车逐级退出（lvl-3 → lvl-2 → lvl-1 → 出引用，2026-10-28 用户反馈）===');
+  const s87doc = [
+    '# T',
+    '',
+    '> asdfsaffsdfs',
+    '> fasdfasdfsfa',
+    '> asdfasdf',
+    '> > asdfasdfdsadfsdf',
+    '> > sadfas',
+    '> > asdfasd',
+    '> > > ',
+    '',
+    '参照段。',
+  ].join('\n');
+  const s87checks = [];
+  const s87setup = await page.evaluate((d) => {
+    const { cm, ed } = window.__makeWysiwygEditor(d);
+    window.__s87cm = cm; window.__s87ed = ed;
+    cm.options.viewportMargin = 100000;
+    cm.refresh();
+    return new Promise((res) => setTimeout(() => {
+      cm.setCursor({ line: 10, ch: 0 }, { scroll: false });
+      setTimeout(() => res(null), 400);
+    }, 400));
+  }, s87doc);
+  if (s87setup) {
+    console.log('  ⚠ 场景失败: ' + s87setup);
+    fail++;
+  } else {
+    await page.evaluate(() => { const cm = window.__s87cm; cm.focus(); cm.setCursor({ line: 8, ch: 6 }, { scroll: false }); });
+    await page.waitForTimeout(300);
+    const s87read = () => page.evaluate(() => {
+      const cm = window.__s87cm;
+      const c = cm.getCursor('head');
+      const h = cm.getLineHandle(c.line);
+      let pre = null;
+      for (const lv of cm.display.view) {
+        if (lv && lv.line === h) { const el = lv.node; pre = el.tagName === 'PRE' ? el : el.querySelector('pre'); break; }
+      }
+      return {
+        line: cm.getLine(c.line), cur: c.line, ch: c.ch, lines: cm.lineCount(),
+        cls: pre ? pre.className : '',
+        quoteMask: !![...document.querySelectorAll('.wysiwyg-block-mask')].find((m) => (m.textContent || '').indexOf('asdfsaffsdfs') >= 0),
+      };
+    });
+    // ① 空 lvl-3 回车 → 弹到 lvl-2（用户期望：到上级引用块新增一行，不跳出）
+    const s87a0 = await s87read();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(350);
+    const s87a1 = await s87read();
+    s87checks.push(['空 lvl-3 行回车 = 弹到 lvl-2（本行变 `> > `、光标留本行 ch4、行数不变）',
+      s87a0.line === '> > > ' && s87a1.line === '> > ' && s87a1.cur === 8 && s87a1.ch === 4
+      && s87a1.lines === s87a0.lines,
+      JSON.stringify({ before: s87a0.line, after: s87a1.line, ch: s87a1.ch, lines: s87a1.lines })]);
+    s87checks.push(['弹级后光标行 = lvl-2 同构样式（wysiwyg-quote-line + wysiwyg-quote-lvl-2）',
+      s87a1.cls.includes('wysiwyg-quote-line') && s87a1.cls.includes('wysiwyg-quote-lvl-2'),
+      s87a1.cls]);
+    s87checks.push(['弹级后活动引用块保持（块遮罩仍在，未退出编辑态）', s87a1.quoteMask === true]);
+    const s87shot = path.join(root, 'screenshots', 's87-nested-pop.png');
+    fs.mkdirSync(path.dirname(s87shot), { recursive: true });
+    await page.screenshot({ path: s87shot });
+    console.log('  截图: ' + path.relative(root, s87shot));
+    // ② 空 lvl-2 回车 → 弹到 lvl-1
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(350);
+    const s87b1 = await s87read();
+    s87checks.push(['空 lvl-2 行回车 = 弹到 lvl-1（本行变 `> `、光标留本行 ch2、行数不变）',
+      s87b1.line === '> ' && s87b1.cur === 8 && s87b1.ch === 2
+      && s87b1.lines === s87a1.lines,
+      JSON.stringify({ line: s87b1.line, ch: s87b1.ch, lines: s87b1.lines })]);
+    // ③ 空 lvl-1 回车 → 无上级，完全跳出（原行为：清行 + 光标落下方新行）
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(350);
+    const s87c1 = await s87read();
+    s87checks.push(['空 lvl-1 行回车 = 完全跳出引用（本行清空、光标落下方新行、行数 +1 = 原行为）',
+      s87c1.line === '' && s87c1.cur === 9 && s87c1.ch === 0
+      && s87c1.lines === s87b1.lines + 1,
+      JSON.stringify({ line: s87c1.line, cur: s87c1.cur, ch: s87c1.ch, lines: s87c1.lines })]);
+    for (const [label, ok, extra] of s87checks) {
+      console.log(`  ${ok ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+      if (!ok) fail++;
+    }
+  }
+
+  // === S89：嵌套引用光标行只显一个 >（2026-10-28 用户反馈：「嵌套引用块编辑时，所在行的每个
+  // 引用块都显示了一个 >，改为只在当前编辑的引用块的当前行显示一个 >」）===
+  // 修复：wysiwyg.js 装饰时最内层槽额外挂 wysiwyg-quote-slot-inner；光标行显色规则
+  // （styles.css）只认该标记 → lvl-N 光标行只显最内层一个 >，外层各层 > 在光标行也透明
+  // （24px 槽 + 逐层竖条几何不变）。单层行唯一槽即最内层 → 行为不变（2026-10-20 口径保持）。
+  console.log('\n=== S89：嵌套引用光标行只显一个 >（最内层），外层透明（2026-10-28 用户反馈）===');
+  const s89doc = [
+    '# T',
+    '',
+    '> asdfsfsf',
+    '> 阿斯蒂芬萨芬是方式',
+    '> > 啊撒旦氵洒飞洒地方',
+    '> > > 啊沙沙沙收到',
+  ].join('\n');
+  const s89checks = [];
+  const s89setup = await page.evaluate((d) => {
+    const { cm, ed } = window.__makeWysiwygEditor(d);
+    window.__s89cm = cm; window.__s89ed = ed;
+    cm.options.viewportMargin = 100000;
+    cm.refresh();
+    return new Promise((res) => setTimeout(() => {
+      cm.setCursor({ line: 5, ch: 11 }, { scroll: false });
+      setTimeout(() => res(null), 400);
+    }, 400));
+  }, s89doc);
+  const s89readSlots = () => page.evaluate(() => {
+    const cm = window.__s89cm;
+    const cur = cm.getCursor('head');
+    const h = cm.getLineHandle(cur.line);
+    let pre = null;
+    for (const lv of cm.display.view) {
+      if (lv && lv.line === h) { const el = lv.node; pre = el.tagName === 'PRE' ? el : el.querySelector('pre'); break; }
+    }
+    if (!pre) return { found: false, curLine: cur.line };
+    const slots = [...pre.querySelectorAll('[class*="wysiwyg-quote-slot"]')];
+    return {
+      found: true, curLine: cur.line, cls: pre.className,
+      slotCount: slots.length,
+      innerIdx: slots.findIndex((s) => s.className.indexOf('wysiwyg-quote-slot-inner') >= 0),
+      colors: slots.map((s) => getComputedStyle(s).color),
+    };
+  });
+  const s89transparent = (c) => /rgba\(0,\s*0,\s*0,\s*0\)|^transparent$/.test(c);
+  if (s89setup) {
+    console.log('  ⚠ 场景失败: ' + s89setup);
+    fail++;
+  } else {
+    await page.evaluate(() => { const cm = window.__s89cm; cm.focus(); cm.setCursor({ line: 5, ch: 11 }, { scroll: false }); });
+    await page.waitForTimeout(400);
+    const s89a = await s89readSlots();
+    s89checks.push(['光标落 lvl-3 行（`> > > 啊沙沙沙收到`）且挂 cursor-line 类',
+      s89a.found === true && s89a.curLine === 5 && s89a.cls.includes('wysiwyg-quote-cursor-line')]);
+    s89checks.push(['S89 核心：3 个 24px 槽几何不变，最内层槽（idx 2）挂 wysiwyg-quote-slot-inner',
+      s89a.slotCount === 3 && s89a.innerIdx === 2]);
+    s89checks.push(['S89 核心：光标行只显最内层一个 >（外层两层 > 透明）',
+      s89a.colors.length === 3 && s89transparent(s89a.colors[0]) && s89transparent(s89a.colors[1])
+      && !s89transparent(s89a.colors[2]),
+      JSON.stringify(s89a.colors)]);
+    const s89shot = path.join(root, 'screenshots', 's89-nested-one-gt.png');
+    fs.mkdirSync(path.dirname(s89shot), { recursive: true });
+    await page.screenshot({ path: s89shot });
+    console.log('  截图: ' + path.relative(root, s89shot));
+    // 单层对照：光标在 lvl-1 引用行 → 唯一槽 = 最内层 → > 照显（2026-10-20 口径不回归）。
+    // 用第二个新编辑器（makeEditor 复用 host 会清掉第一个 CM 的 DOM，核心数据已取完）：
+    // 块内光标重定位受渲染遮罩锚点影响（2026-10-28 实测：setCursor 落回块存储锚点行），
+    // 而新建编辑器后首次 setCursor 可落块内任意行（与上面核心步同一机制）。
+    await page.evaluate(() => {
+      const d = ['# T', '', '> asdfsfsf', '> 阿斯蒂芬萨芬是方式', '', '参照段。'].join('\n');
+      const { cm, ed } = window.__makeWysiwygEditor(d);
+      window.__s89cm = cm; window.__s89ed = ed;
+      cm.options.viewportMargin = 100000;
+      cm.refresh();
+    });
+    await page.waitForTimeout(400);
+    await page.evaluate(() => { const cm = window.__s89cm; cm.focus(); cm.setCursor({ line: 3, ch: 10 }, { scroll: false }); });
+    await page.waitForTimeout(400);
+    const s89b = await s89readSlots();
+    s89checks.push(['单层对照：lvl-1 光标行唯一槽 = slot-inner 且 > 可见（行为不变）',
+      s89b.found === true && s89b.curLine === 3 && s89b.slotCount === 1
+      && s89b.innerIdx === 0 && !s89transparent(s89b.colors[0]),
+      JSON.stringify(s89b.colors)]);
+    for (const [label, ok, extra] of s89checks) {
+      console.log(`  ${ok ? '✓' : '✗'} ${label}` + (extra !== undefined ? '  ' + extra : ''));
+      if (!ok) fail++;
+    }
+  }
+
   if (errors.length) {
     console.log('\n页面错误:');
     for (const e of errors) console.log('  ' + e);

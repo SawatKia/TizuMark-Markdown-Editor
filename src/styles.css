@@ -4310,7 +4310,10 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-quote-slot"] {
   color: transparent;
 }
-.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text.wysiwyg-quote-cursor-line span[class*="wysiwyg-quote-slot"] {
+/* 2026-10-28 用户要求：嵌套引用光标行只显最内层（当前编辑的引用块）一个 >，外层各层 >
+   在光标行也保持透明。slot-inner = 最内层槽标记（wysiwyg.js 装饰处挂）；单层行唯一槽即
+   slot-inner，行为不变。特异性与上方透明规则同级、顺序在后 → 稳赢。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text.wysiwyg-quote-cursor-line span[class*="wysiwyg-quote-slot-inner"] {
   color: var(--text-secondary);
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-heading-hash"] {

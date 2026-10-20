@@ -289,4 +289,77 @@ function applyTizuMarkCm5Patches() {
 
 applyTizuMarkCm5Patches();
 
+// TizuMark continuelist addon 本地补丁（2026-10-28 用户要求：空嵌套引用行回车逐级退出）：
+// addon/edit/continuelist.js 同样由本脚本从 node_modules 再生（不进 git），修复只存在于
+// 再生后打的补丁里——口径与 applyTizuMarkCm5Patches 一致：marker 幂等跳过；锚点消失且无
+// marker = vendor 源码变了（CM 升级等）→ 失败显式报出，绝不静默跳过。
+// 行为：emptyListRE（空行项）出口原实现一次删光整行前缀——嵌套引用（> > > 空行）直接跳出
+// 所有引用层级。现按 match[2] 里 > 数逐级弹（lvl-N → lvl-N-1，光标留本行、落新前缀之后可
+// 直接敲上级内容）；仅空 lvl-1 行完全跳出（清行 + 光标落下方新行 = 原行为）。空列表项
+// （前缀无 >，quoteLvl=0）走原分支不受影响。
+function applyTizuMarkContinuelistPatch() {
+  const dest = path.join(LIB, 'codemirror', 'addon', 'edit', 'continuelist.js');
+  let code = fs.readFileSync(dest, 'utf8');
+  const patches = [
+    {
+      name: '空嵌套引用行回车逐级退出（lvl-N → lvl-N-1，无上级才跳出）',
+      marker: 'var quoteLvl = (match[2].match(/>/g) || []).length;',
+      from: `        if (endOfQuote || endOfList) cm.replaceRange("", {
+          line: pos.line, ch: 0
+        }, {
+          line: pos.line, ch: pos.ch + 1
+        });
+        replacements[i] = "\\n";`,
+      to: `        if (endOfQuote || endOfList) {
+          // 2026-10-28 用户要求：空嵌套引用行回车 = 逐级退出（lvl-N → lvl-N-1，光标留在
+          // 本行、落在新前缀之后可直接敲上级内容）；仅无上级（空 lvl-1 行）才完全跳出
+          // 引用（原行为：清行、光标落下方新行）。原实现空引用行一次删光全部 > 直接跳出
+          // 所有引用层级（嵌套引用只能手动删 > 逐层出）。match[2] = 完整引用前缀
+          // （"> " × N，可带尾空格）；空列表项不含 >（quoteLvl=0）→ 走原行为不动。
+          var quoteLvl = (match[2].match(/>/g) || []).length;
+          if (quoteLvl >= 2) {
+            var newPrefix = "";
+            for (var k = 0; k < quoteLvl - 1; k++) newPrefix += "> ";
+            cm.replaceRange(newPrefix, {
+              line: pos.line, ch: 0
+            }, {
+              line: pos.line, ch: pos.ch + 1
+            });
+            replacements[i] = "";  // 不另插新行：光标停在弹级后的本行
+          } else {
+            cm.replaceRange("", {
+              line: pos.line, ch: 0
+            }, {
+              line: pos.line, ch: pos.ch + 1
+            });
+            replacements[i] = "\\n";
+          }
+        } else {
+          replacements[i] = "\\n";
+        }`,
+    },
+  ];
+  let bad = 0;
+  for (const p of patches) {
+    if (code.indexOf(p.marker) !== -1) {
+      console.log('[ensure-vendor] continuelist 补丁已在（幂等跳过）：' + p.name);
+      continue;
+    }
+    if (code.indexOf(p.from) === -1) {
+      console.error(`[ensure-vendor] continuelist 补丁锚点未找到：${p.name}（vendor 源码已变化，须更新补丁；拒绝继续以免修复静默丢失）`);
+      bad++;
+      continue;
+    }
+    code = code.replace(p.from, p.to);
+    console.log('[ensure-vendor] continuelist 补丁已应用：' + p.name);
+  }
+  fs.writeFileSync(dest, code);
+  if (bad > 0) {
+    console.error(`[ensure-vendor] ${bad} 个 continuelist 补丁未应用，vendor 不完整`);
+    process.exit(1);
+  }
+}
+
+applyTizuMarkContinuelistPatch();
+
 console.log('[ensure-vendor] vendor 同步完成：src/lib（codemirror/katex/mermaid/html2canvas/markdown-it/highlight.js）');
