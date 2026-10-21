@@ -10,6 +10,12 @@ const assert = require('node:assert');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+// wysiwyg.js L66 加载期引用裸全局 TMConst（098bc7b 2026-10-20 把引用行口径收口进
+// constants.js 共享常量 BLOCKQUOTE_LINE_RE）。Node 独立 require 没有 index.html 的
+// script 链 → 先备最小 window（constants.js IIFE 写 window.TMConst = 裸全局），
+// 显式加载 constants.js 补全（同 list-insert.test.cjs L44-48 先例）。
+global.window = global.window || globalThis;
+require(path.join(ROOT, 'src', 'modules', 'constants.js'));
 const { splitBlocks, splitTableRow, editTableRowCell } = require(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'));
 
 const split = (md) => splitBlocks(md.split('\n')).map(b => b.lines);
