@@ -46,7 +46,7 @@ const puppeteer = require('puppeteer-core');
   };
 
   try {
-    await page.goto(URL, { waitUntil: 'networkidle0', timeout: 30000 });
+    await page.goto(URL, { waitUntil: 'networkidle2', timeout: 30000 });
     await page.waitForFunction("window.editor && window.editor.preview", { timeout: 30000 });
 
     // 1) 横幅与按钮初始存在
@@ -54,8 +54,11 @@ const puppeteer = require('puppeteer-core');
     assert('存在「不再提醒」按钮', hasBtn);
 
     // 2) 初始会话标志为 false → showLargeFileNotice 应显示横幅
+    //    注意：构造函数默认 viewMode='preview'，而 showLargeFileNotice 对纯预览模式
+    //    直接 hide 后 return（注释见 src/app.js），故必须切到 edit 才能覆盖提示路径。
     const showsInitially = await page.evaluate(() => {
       const ed = window.editor;
+      ed.viewMode = 'edit';
       ed._largeFileNoticeSessionSuppressed = false;
       ed._largeFileNoticeDismissed = false;
       ed._largeFileNoticeKey = null;
@@ -82,8 +85,11 @@ const puppeteer = require('puppeteer-core');
     // 4) 会话标志为 true 后，再次打开大文件不再弹（本次应用运行期间）
     const staysHidden = await page.evaluate(() => {
       const ed = window.editor;
+      ed.viewMode = 'edit';
       const banner = document.getElementById('large-file-banner');
-      banner.classList.remove('hidden');
+      // 前置：真实流程里打开文档前横幅已被 hideLargeFileNotice 置为隐藏
+      // （见 src/controllers/preview-controller.js 非截断分支），故从 hidden 起步。
+      banner.classList.add('hidden');
       ed.showLargeFileNotice('perf-banner', 60000, 1024 * 1024 * 9);
       return banner.classList.contains('hidden');
     });
@@ -92,6 +98,7 @@ const puppeteer = require('puppeteer-core');
     // 5) 「不再提醒」必须是会话级：重新实例化（模拟重启）后标志复位为 false 仍可弹
     const resetsOnRestart = await page.evaluate(() => {
       const ed = window.editor;
+      ed.viewMode = 'edit';
       // 模拟应用重启：标志回到初始 false（构造函数里初始化为 false）
       ed._largeFileNoticeSessionSuppressed = false;
       const banner = document.getElementById('large-file-banner');
@@ -100,6 +107,20 @@ const puppeteer = require('puppeteer-core');
       return !banner.classList.contains('hidden');
     });
     assert('模拟重启（标志复位）后打开大文件仍会提醒', resetsOnRestart);
+
+    // 6) 纯预览模式走虚拟滚动可拖到任意位置，产品约定不弹横幅（src/app.js early-return 分支）
+    const previewSuppressed = await page.evaluate(() => {
+      const ed = window.editor;
+      ed.viewMode = 'preview';
+      ed._largeFileNoticeSessionSuppressed = false;
+      ed._largeFileNoticeDismissed = false;
+      ed._largeFileNoticeKey = null;
+      const banner = document.getElementById('large-file-banner');
+      banner.classList.remove('hidden');
+      ed.showLargeFileNotice('perf-banner', 50000, 1024 * 1024 * 8);
+      return banner.classList.contains('hidden');
+    });
+    assert('纯预览模式不弹横幅（虚拟滚动可查看全文）', previewSuppressed);
 
   } catch (e) {
     console.error('测试执行异常：', e);
