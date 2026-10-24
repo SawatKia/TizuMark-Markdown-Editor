@@ -51,17 +51,39 @@
         } else {
           this.isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
         }
-        document.documentElement.setAttribute('data-theme', this.isDark ? 'dark' : 'light');
+        this._applyThemeToDom();
+        await this.rerenderMermaid();
+      },
+      // 把当前 isDark 落到 DOM / 编辑器 —— 主题生效的**唯一出口**。
+      // 存在的理由：applyThemeMode（按设置算 isDark）与 toggleTheme（翻转 isDark）此前各抄
+      // 一份同样的六步（data-theme / data-color-scheme / 原生 color-scheme / CM 主题 /
+      // 主题图标 / 代码高亮 CSS），2026-10-25 加 color-scheme 时就出现过「只改一处会不一致」
+      // 的风险（点在按钮上切主题与按设置应用走的是两条路径）。收成一处后新增属性只改这里。
+      _applyThemeToDom() {
+        const dark = this.isDark;
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
         document.documentElement.setAttribute('data-color-scheme', this.settings.colorScheme || 'default');
-        this.cm.setOption('theme', this.isDark ? 'material-darker' : 'default');
+        this._syncNativeColorScheme();
+        this.cm.setOption('theme', dark ? 'material-darker' : 'default');
         this.updateThemeIcon();
         const highlightTheme = document.getElementById('highlight-theme');
         if (highlightTheme) {
-          highlightTheme.href = this.isDark
+          highlightTheme.href = dark
             ? 'lib/highlight.js/github-dark.min.css'
             : 'lib/highlight.js/github.min.css';
         }
-        await this.rerenderMermaid();
+      },
+      // 浏览器原生 UI 的用色系（滚动条 / 原生表单控件 / 文本 I 型指针）跟随**应用**主题。
+      // index.html 的 <meta name="color-scheme" content="light dark"> 只是声明「两套都支持」，
+      // 实际用哪套由 UA 按系统的 prefers-color-scheme 决定 —— 应用选亮色、系统却是暗色时，
+      // 原生插入符/指针会按暗色渲染成浅色，在白色正文上几乎看不见（2026-10-25 用户反馈
+      // 「亮色主题、实时预览模式下鼠标显示成白色，白底上看不到」）。显式写 color-scheme
+      // 后 UA 一律按应用当前明暗选原生配色，不再与 OS 主题打架；反方向（暗色应用 + 亮色
+      // 系统）同理，原生元素也不会再是亮色。
+      _syncNativeColorScheme() {
+        try {
+          document.documentElement.style.colorScheme = this.isDark ? 'dark' : 'light';
+        } catch (_) { /* 老内核不支持则保持 meta 默认行为 */ }
       },
       async rerenderMermaid() {
         if (typeof mermaid === 'undefined') return;
@@ -250,18 +272,8 @@
           this.settings.themeMode = this.isDark ? 'dark' : 'light';
           if (this._selects && this._selects.themeMode) this._selects.themeMode.setValue(this.settings.themeMode, true);
           this.saveSettings();
-          document.documentElement.setAttribute('data-theme', this.isDark ? 'dark' : 'light');
-          document.documentElement.setAttribute('data-color-scheme', this.settings.colorScheme || 'default');
-          this.cm.setOption('theme', this.isDark ? 'material-darker' : 'default');
-          this.updateThemeIcon();
-  
-          const highlightTheme = document.getElementById('highlight-theme');
-          if (highlightTheme) {
-            highlightTheme.href = this.isDark
-              ? 'lib/highlight.js/github-dark.min.css'
-              : 'lib/highlight.js/github.min.css';
-          }
-  
+          this._applyThemeToDom();
+
           await this.rerenderMermaid();
         } finally {
           // 最小显示时长：图表少/切换很快时遮罩也不一闪而过，保证用户能看清 loading 界面

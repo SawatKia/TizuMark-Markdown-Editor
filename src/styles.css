@@ -4341,17 +4341,31 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line:has(span.CodeMirror-widget .wysiwyg-block-mask)::before {
   display: none;
 }
-/* 引用/提示块光标行撤 CM active-line 底色（2026-10-25 用户「直接与渲染态样式完全一致」）：
-   app 保留 styleActiveLine（editor-core L172；光标行底色 codemirror.css #e8f2ff + 失步守卫
-   仍依赖 addon 本体，见 wysiwyg.js「光标行类改挂 pre」注释）。#e8f2ff 不透明底色垫在光标
-   pre 背景（--qc-bg/accent-subtle）之下 → 光标行比上下段盒/渲染盒深一截的色差（实测
-   (218,231,254) vs 盒 (240,244,254)）。引用块光标行底色即渲染盒本貌，再垫 #e8f2ff 属
-   规则叠加 → 该行 active-line 背景透明（仅引用光标行：光标行 DOM 为
-   div.CodeMirror-activeline > [linebackground, 0 宽 gutter-background, pre]——pre 是
-   linebackground 的后续兄弟（中间隔着 gutter 垫底 div），须用 ~ 而非 + 命中；
-   非引用行 active-line 底色不受影响）。 */
-.editor-container.wysiwyg-mode .CodeMirror .CodeMirror-linebackground.CodeMirror-activeline-background:has(~ pre.wysiwyg-quote-line) {
+/* WYSIWYG 里 CM 的 active-line 底色（codemirror.css:145 `#e8f2ff`）一律不画。
+   编辑中那一行的指示由 JS 挂在**同一个** linebackground 元素上的 cm-wysiwyg-active-block
+   （灰 --code-bg / 代码盒 / 折叠盒 ::before）负责，蓝底纯属叠加；而 addon 是按「CM 光标行」
+   挂的，与「这行此刻是否真在编辑」并不一一对应，于是蓝底会跑到不该出现的行上：
+     · 光标停在某块 → 该块被重新上遮罩（点表格格触发 _wysiwygReMaskActiveForCellEdit 重遮
+       上一块，且 _applyWysiwygActiveHighlight 在格编辑期按设计不挂灰底）→ 该行只剩蓝底，
+       透在已渲染的标题/段落下面 = 用户反馈「编辑表格时上面一行会变成蓝色」；
+     · 格编辑提交后光标归位的瞬间，活动块表尚未跟上 → 同样只剩蓝底（灰底下一拍才回来）；
+     · 引用/提示块光标行原本要单独撤底（#e8f2ff 垫在 --qc-bg 下形成色差），一并由本条覆盖。
+   灰底不受影响：cm-wysiwyg-active-block / cm-wysiwyg-code-box 那些选择器多一个元素选择器
+   div，特异性 (0,5,1) 高于本条 (0,5,0)，照样赢。
+   只撤底色、不动 addon 本体 —— 同步逻辑仍靠 state.activeLines 做遮罩失步守卫。 */
+.editor-container.wysiwyg-mode .CodeMirror .CodeMirror-linebackground.CodeMirror-activeline-background {
   background: transparent;
+}
+
+/* WYSIWYG 光标（I 型插入符）颜色：caret-color 是继承属性，默认 auto = currentColor。
+   活动块的「隐藏标记」span 自身 color: transparent（渲染符号由 ::before 另画：列表圆点 `- `、
+   任务框 `[x] `、引用 `> ` 槽等），光标一落进这些字符就继承到透明 —— 真机实测 ul 行 ch0、
+   task 行 ch0~ch4 的 computed caret-color 都是 rgba(0,0,0,0)，即「光标看不见」
+   （2026-10-25 用户反馈「亮色主题下鼠标变白，白色背景上看不到」）。
+   在这里写死具体颜色：var 在 .CodeMirror 上解析成实色后再继承，后代只会继承结果，
+   隐藏标记再透明也影响不到光标。取 --text-primary，明暗两套主题自动对底色反色。 */
+.editor-container.wysiwyg-mode .CodeMirror {
+  caret-color: var(--text-primary);
 }
 
 /* callout 光标行（.wysiwyg-callout-cursor-line + .wysiwyg-callout-{type}，仅光标行挂；

@@ -3245,8 +3245,9 @@ test('S83 引用/提示块活动态「渲染分段 + 光标行源码」：非光
   assert.match(css, /pre\.wysiwyg-quote-line:has\(span\.CodeMirror-widget \.wysiwyg-block-mask\) \{[^}]*background: none;[^}]*padding-top: 0;[^}]*padding-bottom: 0;/, '缺分段载体行零样式规则（段盒背后双背景/边缘内距推盒）');
   assert.match(css, /pre\.wysiwyg-quote-line:has\(span\.CodeMirror-widget \.wysiwyg-block-mask\)::before \{[^}]*display: none;/, '缺分段载体行竖条撤除（与段盒 border-left 重叠）');
   // ⑦e3 引用/提示块光标行撤 CM active-line 底色（codemirror.css #e8f2ff 垫底 → 光标行
-  //     比段盒/渲染盒深一截；app 保留 styleActiveLine，只能按行精确撤）
-  assert.match(css, /\.CodeMirror-linebackground\.CodeMirror-activeline-background:has\(~ pre\.wysiwyg-quote-line\) \{[^}]*background: transparent;/, '缺引用光标行 active-line 底色透明规则（#e8f2ff 垫底色差）');
+  //     比段盒/渲染盒深一截）。2026-10-25 收口为「WYSIWYG 下 active-line 底色一律不画」，
+  //     引用光标行由这条通用规则覆盖（不再有单独的 :has(~ pre.wysiwyg-quote-line) 变体）
+  assert.match(css, /\.editor-container\.wysiwyg-mode \.CodeMirror \.CodeMirror-linebackground\.CodeMirror-activeline-background \{[^}]*background: transparent;/, '缺 WYSIWYG active-line 底色透明规则（#e8f2ff 垫底：引用行色差 / 表格上一行变蓝）');
   // ⑦f 引用/提示块不挂「编辑」按钮（no-btn-qc 补回渲染 blockquote/.alert 16px 底距）
   assert.match(wys, /else if \(this\._wysiwygBlockIsQuote\(b\)\) node\.classList\.add\('wysiwyg-mask-no-btn-qc'\);/, '引用/提示块遮罩未挂 no-btn-qc（编辑按钮未去掉）');
   assert.match(css, /wysiwyg-mask-no-btn-qc > \*:last-child \{ margin-bottom: 16px; \}/, '缺 no-btn-qc 16px 底距补回');
@@ -3627,4 +3628,41 @@ test('S98 行内语法 span 边界对齐：驱动回归接线（编辑态 span �
   assert.match(driver, /S98③ `` `a` 尾巴 code 精确落 a（≡ 渲染 `` <code>a<\/code>）/);
   assert.match(driver, /S98④ ```a`` 全字面量（无 code span，≡ 渲染）/);
   assert.match(driver, /S98⑤ 回归行 \*\*粗体\*\* bold span 不变/);
+});
+
+test('S99 WYSIWYG 不画 active-line 蓝底 + 光标色恒定（2026-10-25 用户反馈接线）', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
+  const pure = strip(css);
+
+  // ① 用户反馈「编辑表格时上面一行会变成蓝色」：格编辑期 _applyWysiwygActiveHighlight 按设计
+  //    不给上一块挂灰底，addon 的 #e8f2ff 就独占该行、透在已渲染内容下。收口为「WYSIWYG 下
+  //    active-line 底色一律不画」——编辑指示只由 cm-wysiwyg-active-block 系负责（特异性
+  //    (0,5,1) 高于本条 (0,5,0)，灰底/代码盒不受影响）。
+  assert.match(
+    pure,
+    /\.editor-container\.wysiwyg-mode \.CodeMirror \.CodeMirror-linebackground\.CodeMirror-activeline-background \{\s*background: transparent;\s*\}/,
+    'styles.css 缺「WYSIWYG 撤 active-line 底色」规则（表格上一行会变蓝）',
+  );
+  // 反向约束：不再保留「按行判断才撤底」的 :has 变体（两种口径并存会漏掉新增场景）
+  assert.doesNotMatch(
+    pure,
+    /CodeMirror-activeline-background:has\(/,
+    '不应再有 :has() 条件的 active-line 撤底规则（口径已收口为整类撤掉）',
+  );
+
+  // ② 用户反馈「亮色主题下鼠标变白、白底上看不到」：caret-color 默认 auto → currentColor，
+  //    活动行的隐藏标记 span 自身 color: transparent（列表圆点/任务框/引用槽），光标落进去
+  //    就继承到透明。必须在编辑面写死具体色值（var 在此解析成实色后继承）。
+  assert.match(
+    pure,
+    /\.editor-container\.wysiwyg-mode \.CodeMirror \{\s*caret-color: var\(--text-primary\);\s*\}/,
+    'styles.css 缺 WYSIWYG 光标色规则（caret-color 会继承到隐藏标记的 transparent，光标不可见）',
+  );
+  // 反向约束：不允许再出现把光标显式设成透明的 WYSIWYG 规则
+  assert.doesNotMatch(
+    pure,
+    /\.editor-container\.wysiwyg-mode[^{]*\{[^}]*caret-color: transparent/,
+    'WYSIWYG 编辑面不得把 caret-color 设成 transparent',
+  );
 });
