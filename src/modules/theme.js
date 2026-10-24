@@ -68,6 +68,14 @@
         // 主题切换：旧主题的 SVG 缓存失效，清空后让下次 updatePreview / 本函数按新主题重渲染
         this._mermaidCache.clear();
         const gen = ++this._mermaidGeneration;
+
+        // 所见即所得：图表挂在 CM 的块遮罩 widget 里（**不在** #preview），旧实现只重建
+        // #preview 的容器 → WYSIWYG 下切主题图表配色恒定不变（2026-10-24 用户反馈「切换
+        // 暗色、明亮时，图表颜色没有变」）。
+        // 注意两条路径都要跑：#preview 里那份（不可见的）副本同样得换成新主题，否则切回
+        // 阅读模式会直接展示旧配色的 SVG——小文档切模式时 applyViewMode 不会 updatePreview。
+        if (this.viewMode === 'wysiwyg') await this._rerenderWysiwygMermaid(gen);
+
         const containers = this.preview.querySelectorAll('.mermaid-container');
         if (containers.length === 0) return;
   
@@ -138,6 +146,84 @@
         } catch (e) {
           console.error('Mermaid re-render error:', e);
         }
+      },
+      // 所见即所得模式下的图表重渲染（主题切换专用）。
+      // 遮罩内的 .mermaid-container 是 CM line widget 的一部分，不是 #preview 的子节点，
+      // 因此不能走上面「重建 #preview 容器」的路径，只能就地重置后重跑：
+      //   1) 去掉 mermaid 的 data-processed 标记（v11 run() 里 `getAttribute('data-processed')`
+      //      为真就 continue 跳过该节点，不清标记等于什么都不做）；
+      //   2) 清空旧主题 SVG，把源码文本写回容器（run() 以节点 innerHTML 实体解码后作为源码）；
+      //   3) 按新主题 initialize + 分批 run（一次 run 全部是同步 CPU 密集任务，图表多时卡死转圈）；
+      //   4) 渲染成功后回填 mermaidCache，让后续遮罩重建（打字/滚动）直接命中，不重复渲染；
+      //   5) 结束补一次遮罩高度刷新（配色变化不改变尺寸，但主题字体度量可能微变）。
+      // 返回 true = 已处理遮罩内图表；false = 当前没有可重渲染的图表（视口外/未挂遮罩）。
+      // 无论返回值如何，调用方仍需继续处理 #preview 的副本（见 rerenderMermaid 注释）。
+      async _rerenderWysiwygMermaid(gen) {
+        const cm = this.cm;
+        if (!cm || typeof cm.getWrapperElement !== 'function') return false;
+        let containers = [];
+        try {
+          containers = Array.from(cm.getWrapperElement().querySelectorAll('.mermaid-container'));
+        } catch (_) { return false; }
+
+        // 光标所在块是「源码态」（未挂遮罩），其中没有容器；其余块图表都在。
+        // 视口外（虚拟模式）未挂遮罩的块同样查不到容器——缓存已清空，等它们挂载时
+        // 会由 processMermaid 按新主题渲染，无需在此处理。
+        const prepared = [];
+        for (const c of containers) {
+          const code = c.getAttribute('data-code');
+          if (!code) continue;
+          c.removeAttribute('data-processed');
+          c.innerHTML = '';
+          c.textContent = code;
+          prepared.push({ el: c, code });
+        }
+        if (prepared.length === 0) return false;
+
+        const themeKey = this.isDark ? 'dark' : 'light';
+        try {
+          mermaid.initialize({
+            startOnLoad: false,
+            theme: this.isDark ? 'dark' : 'default',
+            // 与首次渲染（PreviewPost.processMermaid）同一安全等级：重渲染不降级
+            securityLevel: 'strict',
+            fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--font-preview').trim() || '-apple-system, sans-serif',
+          });
+        } catch (e) {
+          console.error('Mermaid re-render error:', e);
+          return true;
+        }
+
+        const BATCH = 2;
+        const showLoading = prepared.length > 6;
+        if (showLoading) this._beginPaneLoad();
+        try {
+          for (let i = 0; i < prepared.length; i += BATCH) {
+            if (this._mermaidGeneration !== gen) return true; // 中途又切主题，放弃本次
+            // 每批渲染前让出主线程一帧：run 是同步 CPU 密集，若首批立即执行，
+            // 转圈动画帧会被阻塞（表现为"点完停顿一下才开始转"）
+            await new Promise((r) => requestAnimationFrame(r));
+            const batch = prepared.slice(i, i + BATCH);
+            try {
+              await mermaid.run({ nodes: batch.map((x) => x.el) });
+            } catch (e) {
+              console.error('Mermaid re-render error:', e);
+            }
+            // 回填缓存（仅含 SVG 的成功结果；键格式与 processMermaid 完全一致）
+            if (this._mermaidCache) {
+              for (const { el, code } of batch) {
+                if (el.isConnected && el.querySelector('svg')) {
+                  this._mermaidCache.set(themeKey + '::' + code, el.innerHTML);
+                }
+              }
+            }
+          }
+        } finally {
+          if (showLoading) this._endPaneLoad();
+          // 图表高度可能微变：重测行高并补偿滚动（内部含表格格编辑期间的延后处理）
+          try { if (this._wysiwygRefreshAfterMaskChange) this._wysiwygRefreshAfterMaskChange(); } catch (_) {}
+        }
+        return true;
       },
       async toggleTheme() {
         // 复用启动 loading（logo + 进度条 + 文字）作全局遮罩。平滑策略：

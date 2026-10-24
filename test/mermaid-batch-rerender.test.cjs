@@ -105,3 +105,111 @@ test('toggleTheme 点击即全局 loading：遮罩固定切换前主题色，完
     assert.ok(ed.isDark, '主题应已切换');
   } finally { cleanup(w); }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2026-10-24 用户反馈：WYSIWYG（实时预览）下切换暗色/明亮，图表颜色不变。
+// 根因：rerenderMermaid 只重建 #preview 里的 .mermaid-container，而 WYSIWYG 的图表挂在
+// CM 的块遮罩 widget 内（不在 #preview），从不被重渲染 → 配色恒为首次渲染时的主题。
+// 修复：新增 _rerenderWysiwygMermaid，就地重置遮罩内容器（清 data-processed/回填源码）
+// 后按新主题分批 run，并回填 mermaidCache。
+// ─────────────────────────────────────────────────────────────────────────────
+function fakeMermaidWithSvg() {
+  return {
+    runs: [],
+    lastInit: null,
+    initialize(opts) { this.lastInit = opts; },
+    async run({ nodes }) {
+      this.runs.push(nodes.map((n) => n.textContent));
+      nodes.forEach((n) => {
+        n.innerHTML = '<svg class="fake-theme-svg"></svg>';
+        n.setAttribute('data-processed', 'true');
+      });
+    },
+  };
+}
+
+// 在 CM 容器里造一个「已渲染过旧主题」的遮罩图表容器
+function makeMaskMermaid(w, cm, code) {
+  const c = w.document.createElement('div');
+  c.className = 'mermaid-container';
+  c.setAttribute('data-code', code);
+  c.setAttribute('data-processed', 'true'); // mermaid 的已渲染标记
+  c.innerHTML = '<svg class="old-theme-svg"></svg>';
+  cm.getWrapperElement().appendChild(c);
+  return c;
+}
+
+test('WYSIWYG：切主题重渲染遮罩内图表（清 data-processed、回填源码、按新主题 run）', async () => {
+  const { w } = await buildEnv();
+  const ed = await waitForEditor(w);
+  try {
+    const mermaid = fakeMermaidWithSvg();
+    w.mermaid = mermaid;
+    ed.viewMode = 'wysiwyg';
+    ed.isDark = true;
+    const a = makeMaskMermaid(w, ed.cm, 'graph LR; A-->B');
+    const b = makeMaskMermaid(w, ed.cm, 'graph RL; C-->D');
+
+    await ed.rerenderMermaid();
+
+    // 两个容器都被重跑，且喂回去的是 data-code 里的源码（不是旧 SVG 文本）
+    const fed = mermaid.runs.flat().sort();
+    assert.deepStrictEqual(fed, ['graph LR; A-->B', 'graph RL; C-->D'], '应以 data-code 源码重渲染');
+    assert.ok(!a.innerHTML.includes('old-theme-svg'), '旧主题 SVG 必须被清掉');
+    assert.ok(a.querySelector('svg.fake-theme-svg'), '应换成新主题渲染结果');
+    assert.strictEqual(b.getAttribute('data-code'), 'graph RL; C-->D', 'data-code 不得被破坏');
+    // initialize 必须用深色主题（与首次渲染同一安全等级，重渲染不降级）
+    assert.strictEqual(mermaid.lastInit.theme, 'dark', '深色主题应传 theme:dark');
+    assert.strictEqual(mermaid.lastInit.securityLevel, 'strict', 'securityLevel 不得降级为 loose');
+    // 缓存回填：后续遮罩重建（打字/滚动）直接命中，不重复渲染
+    const cached = ed._mermaidCache.get('dark::graph LR; A-->B');
+    assert.ok(cached && cached.includes('fake-theme-svg'), '应回填 dark::源码 的缓存');
+  } finally { cleanup(w); }
+});
+
+test('WYSIWYG：明亮主题重渲染传 theme:default，缓存键为 light::源码', async () => {
+  const { w } = await buildEnv();
+  const ed = await waitForEditor(w);
+  try {
+    const mermaid = fakeMermaidWithSvg();
+    w.mermaid = mermaid;
+    ed.viewMode = 'wysiwyg';
+    ed.isDark = false;
+    makeMaskMermaid(w, ed.cm, 'pie title 占比');
+
+    await ed.rerenderMermaid();
+
+    assert.strictEqual(mermaid.lastInit.theme, 'default', '明亮主题应传 theme:default');
+    assert.ok(ed._mermaidCache.get('light::pie title 占比'), '缓存键应为 light::源码');
+    assert.strictEqual(ed._mermaidCache.get('dark::pie title 占比'), undefined, '不得写入错误主题的缓存');
+  } finally { cleanup(w); }
+});
+
+test('WYSIWYG：遮罩内无图表时不影响 #preview 路径（两条路径互不干扰）', async () => {
+  const { w } = await buildEnv();
+  const ed = await waitForEditor(w);
+  try {
+    const mermaid = fakeMermaidWithSvg();
+    w.mermaid = mermaid;
+    ed.viewMode = 'wysiwyg'; // 遮罩里没有图表
+    const c = w.document.createElement('div');
+    c.className = 'mermaid-container';
+    c.textContent = 'graph TD; X-->Y';
+    ed.preview.appendChild(c);
+
+    await ed.rerenderMermaid();
+    const fed = mermaid.runs.flat();
+    assert.deepStrictEqual(fed, ['graph TD; X-->Y'], '#preview 的图表仍应被重渲染');
+  } finally { cleanup(w); }
+});
+
+test('接线断言：rerenderMermaid 在 WYSIWYG 下必调 _rerenderWysiwygMermaid（防回归）', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(require('./helpers/app-env.cjs').ROOT, 'src', 'modules', 'theme.js'), 'utf8');
+  assert.ok(/_rerenderWysiwygMermaid\s*\(gen\)/.test(src), 'theme.js 必须有 _rerenderWysiwygMermaid 调用');
+  assert.ok(/if \(this\.viewMode === 'wysiwyg'\) await this\._rerenderWysiwygMermaid\(gen\)/.test(src),
+    'WYSIWYG 分支必须无条件执行（不得 return 跳过 #preview 路径）');
+  assert.ok(/removeAttribute\('data-processed'\)/.test(src),
+    '重渲染前必须清 data-processed，否则 mermaid.run 直接跳过该节点');
+});
