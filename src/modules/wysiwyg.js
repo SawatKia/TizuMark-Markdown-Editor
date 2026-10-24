@@ -110,6 +110,215 @@
            /^\s{2,}\S/.test(nextLine);
   }
 
+  // ================== 列表行「隐藏标记前缀区」与 Backspace/Delete 守卫（2026-10-24） ==================
+  //
+  // 背景（用户截图实测）：WYSIWYG 活动块里列表标记（`- [ ] ` / `- ` / `1. `）是透明/零宽
+  // 装饰（wysiwyg-task-prefix 24px 槽 + wysiwyg-task-box-zero 零宽槽等），光标在正文起点
+  // 按 Backspace 走 CM 原生逐字符删：任务项要 **7 次**才能并到上一行，且中间态逐次裸露
+  // （`- [ ]准备` → ul 回退渲染「• []」、`- [ 准备` 裸 `[ `、`-准备` 裸 `-`）；有序项 4 次
+  // （`2.第二步` 裸序号）、无序项 3 次、空任务项 5~6 次。
+  // 修复 = wrapper capture 阶段拦截（同 _ensureWysiwygTaskBoxClick 模式）：
+  //   Backspace（光标在标记区内或正文起点）→ 一次剥离整个标记（项变普通段落）；**空项**
+  //   （正文为空白）→ 整行并入上一行（一次删到上一行，用户诉求）。
+  //   Delete（行尾 + 下一行是列表项）→ 剥掉下一行标记后并接（否则原生并出 `- 无序甲- 无序乙`）。
+  // 纯函数 listMarkerZoneEnd 供守卫与单测共用（口径与 _wysiwygApplyActiveDecor 的行装饰一致）。
+  //
+  // 返回该行「隐藏标记区」的终点 ch（= 正文起点）；非标记行返回 0。刻意与装饰分支同源
+  // 正则（RE.task/ul/ol + dd 行 `: ` 前缀），保证「看不见的字符」恰好都被区覆盖：
+  //   - dd 行 `: `/`:` 前缀是透明 span（wysiwyg-dd-colon，保留真实宽度），同属隐藏前缀。
+  //   - 标题 `#`（小灰可见）**不在区内**：可见字符逐字符删即所见即所得，无需拦截。
+  //   - 引用 `>` 自 2026-10-31 起也走隐藏槽（wysiwyg-quote-slot）+ 专属守卫，见下。
+  //   - `- - -` 这类**集合线**可能被 ul 正则误吞（首 `- `），显式排除：hr 是可见源码行。
+  function listMarkerZoneEnd(line) {
+    const s = line || '';
+    if (!s || RE.hr.test(s)) return 0;
+    const m = RE.task.exec(s) || RE.ul.exec(s) || RE.ol.exec(s);
+    if (m) return m[0].length;
+    // 定义列表 dd 行（_applyWysiwygActiveDecor isDd 同口径）：`: ` 或孤 `:`
+    const dd = /^(: |:$)/.exec(s);
+    if (dd) return dd[0].length;
+    return 0;
+  }
+
+  // 引用行「> 前缀区」终点（2026-10-31）：活动引用行的 `> ` 由 wysiwyg-quote-slot 槽隐藏
+  // （口径同列表标记区：看得见的正文从槽后开始），光标在区内/正文起点按 Backspace 走 CM
+  // 原生会逐字符删出「>文本」「>」等裸露中间态且退不出引用（QA 实测：先动下方 ---、
+  // 再误删行尾字符）。与 stripQuotePrefix 同口径（\s{0,3} 前导 + (>[ \t]?)+ 逐层）——
+  // 缩进代码行（≥4 空格）不匹配，天然排除；非引用行返回 0。供守卫与单测共用。
+  function quoteMarkerZoneEnd(line) {
+    const m = /^\s{0,3}(?:>[ \t]?)+/.exec(line || '');
+    return m ? m[0].length : 0;
+  }
+
+
+  // ========================== 引用块内多行原子结构识别（2026-10-28） ==========================
+  //
+  // 背景：引用/提示块活动态按光标行把块切成上下两段独立渲染（_wysiwygApplyQuoteSegments）。
+  // 这段切分是「行粒度」的，一旦某**多行结构**的中间某行成为光标行，两段源码各自结构不
+  // 完整，remark 的容错解析会产出与渲染态完全不符的结果 —— 用户看到的就是「样式崩了」：
+  //   - 围栏代码块：上段补出**空代码盒**、下段把后续正文**吞进代码块**（demo.md 截图）
+  //   - 缩进代码块：同围栏
+  //   - 表格：下半丢表头分隔行 → 渲染成带裸 `|` 的普通文本
+  //   - 展示公式 $$…$$：落单的 `$$` 当字面量显示出来
+  //   - HTML 容器（<details> 等）：结构破裂、闭标签裸露
+  //   - 列表（含嵌套）：下段的子项被提升成**顶层新列表**（实测 `<ol start="2">` 顶格，
+  //     嵌套缩进层级整体丢失）
+  //
+  // 对策：不再按光标行单点切分，改「**把包含光标行的整个多行结构整块保持源码**」，其余部分
+  // 照旧按两段渲染 —— 与顶层代码块/表格/列表「光标进块整块显源码」同一口径。
+  //
+  // 本组函数纯行级（入参/出参都是字符串数组与下标），可在 node 下直接单测，不依赖 CM/DOM。
+  //
+  // ⚠️ 宽严取舍：宁可**多留**几行源码（观感只是「这段没渲染」），也不能少留（会产生错误结构）。
+  //    故 `_continuation` 类判定（缩进代码/列表续行）对「疑似」按包含处理。
+
+  // 剥引用前缀（口径同 RE.quote / _wysiwygBlockIsQuote）：嵌套 "> > " 逐层剥到内容，
+  // 内容自身的**相对缩进**必须保留 —— 缩进代码块、嵌套列表、列表续行的判定全靠它。
+  // 无前缀的惰性续行（引用段内不带 > 的连续行）原样返回，内容语义本身不变。
+  function stripQuotePrefix(line) {
+    return (line || '').replace(/^\s{0,3}(?:>[ \t]?)+/, '');
+  }
+
+  // 汇总「已剥前缀的内容行」里全部多行原子结构，返回互不重叠的闭区间数组 [[start, end], …]
+  // （0-based、闭区间）。优先级：围栏 > 缩进代码 > 展示公式 > 表格 > HTML 容器 > 列表 ——
+  // 先认的行段占住 claimed，后序探测器不得跨越：围栏内部的缩进行必须是**代码内容**，不能被
+  // 当成缩进代码块；同理列表里的表格/围栏归各自探测器，列表只吃剩下的连续列表行。
+  function quoteAtomicRanges(stripped) {
+    const arr = stripped || [];
+    const n = arr.length;
+    const out = [];
+    if (n < 1) return out;
+    const claimed = new Array(n).fill(false);
+    const claim = (s, e) => {
+      for (let i = Math.max(0, s); i <= Math.min(n - 1, e); i++) claimed[i] = true;
+    };
+
+    // ① 围栏代码块（口径同 RE.fence：``` / ~~~；闭合须同字符且长度 ≥ 开行、行尾无杂串）
+    {
+      let open = -1, marker = '', len = 0;
+      for (let i = 0; i < n; i++) {
+        const ln = arr[i] || '';
+        const m = /^(`{3,}|~{3,})/.exec(ln);
+        if (m) {
+          if (open < 0) {
+            const rest = ln.slice(m[1].length);
+            // ``` 的信息串不得含反引号（CommonMark）；~~~ 无此限制
+            if (!(m[1][0] === '`' && rest.indexOf('`') >= 0)) { open = i; marker = m[1][0]; len = m[1].length; }
+          } else if (m[1][0] === marker && m[1].length >= len && ln.slice(m[1].length).trim() === '') {
+            out.push([open, i]); claim(open, i); open = -1; marker = ''; len = 0;
+          }
+          continue;
+        }
+        if (open >= 0) continue; // 围栏内部不参与其它判定
+      }
+      if (open >= 0) { out.push([open, n - 1]); claim(open, n - 1); } // 未闭合：吃到块末
+    }
+
+    // ② 缩进代码块（行首 4 空格/制表）：连续未认领的缩进行成段；段中空行仅当后面还能接到
+    //    缩进行才跨过（否则在最后一个代码行收口，避免把块尾空行算进代码块）
+    {
+      const isInd = (i) => /^(?:\t| {4,})\S/.test(arr[i] || '');
+      let i = 0;
+      while (i < n) {
+        if (claimed[i] || !isInd(i)) { i++; continue; }
+        let last = i;
+        for (let k = i + 1; k < n; k++) {
+          if (claimed[k]) break;
+          if (isInd(k)) { last = k; continue; }
+          if (isBlank(arr[k])) {
+            let m = k;
+            while (m + 1 < n && isBlank(arr[m + 1])) m++;
+            if (m + 1 < n && !claimed[m + 1] && isInd(m + 1)) { last = m + 1; k = m + 1; continue; }
+          }
+          break;
+        }
+        out.push([i, last]); claim(i, last);
+        i = last + 1;
+      }
+    }
+
+    // ③ 展示公式 $$ … $$（成对，未闭合吃到块末）
+    {
+      const isDollar = (i) => /^\s{0,3}\$\$\s*$/.test(arr[i] || '');
+      for (let i = 0; i < n; i++) {
+        if (claimed[i] || !isDollar(i)) continue;
+        let close = -1;
+        for (let k = i + 1; k < n; k++) { if (!claimed[k] && isDollar(k)) { close = k; break; } }
+        const e = close < 0 ? n - 1 : close;
+        out.push([i, e]); claim(i, e);
+        if (close >= 0) i = close;
+      }
+    }
+
+    // ④ 表格：连续「≤3 空格 + |」行成段（含表头分隔行）
+    {
+      let s = -1, last = -1;
+      for (let i = 0; i <= n; i++) {
+        const isRow = i < n && !claimed[i] && /^\s{0,3}\|/.test(arr[i] || '');
+        if (isRow) { if (s < 0) s = i; last = i; }
+        else if (s >= 0) { out.push([s, last]); claim(s, last); s = -1; last = -1; }
+      }
+    }
+
+    // ⑤ HTML 容器块（<details>/<div>/<figure>/… 到闭标签；未闭合吃到块末）。
+    //    标签集与 isHtmlBlockContainerLine 共用 HTML_BLOCK_TAGS（CommonMark type 6）；
+    //    自闭合标签（<br/>）无内容，不成块。
+    {
+      for (let i = 0; i < n; i++) {
+        if (claimed[i]) continue;
+        const m = RE.htmlOpenTag.exec(arr[i] || '');
+        if (!m) continue;
+        const tag = m[1].toLowerCase();
+        if (!HTML_BLOCK_TAGS[tag]) continue;
+        if (/\/\s*>\s*$/.test((arr[i] || '').trim())) continue;
+        const closeRe = new RegExp('^\\s{0,3}</' + tag + '\\s*>\\s*$', 'i');
+        let close = -1;
+        for (let k = i + 1; k < n; k++) { if (!claimed[k] && closeRe.test(arr[k] || '')) { close = k; break; } }
+        const e = close < 0 ? n - 1 : close;
+        out.push([i, e]); claim(i, e);
+        if (close >= 0) i = close;
+      }
+    }
+
+    // ⑥ 列表整体（含嵌套子项）：连续未认领的「标记行 / ≥2 空格续行」成段。
+    //    ⚠️ 必须按**整段**而非「单个 item」收貌似更省，但只收 item 治不了撕裂：下段剩下的
+    //    兄弟/子项会被提升成顶层新列表（实测 `<ol start="2">` 顶格），嵌套层级整体丢失。
+    //    整段收录与顶层列表「光标进列表 → 整列表显源码」完全同口径。
+    //    段中空行同理：仅当后面仍接列表行才并入（列表项内空行 + 后续项 = 同一列表）。
+    {
+      const isMarker = (i) => /^\s{0,3}([-*+]|\d{1,9}[.)])(\s|$)/.test(arr[i] || '');
+      const isCont = (i) => /^\s{2,}\S/.test(arr[i] || '');
+      const isListLine = (i) => !claimed[i] && (isMarker(i) || isCont(i));
+      let s = -1, last = -1;
+      for (let i = 0; i <= n; i++) {
+        if (i < n && isListLine(i)) { if (s < 0) s = i; last = i; continue; }
+        if (s < 0) continue;
+        if (i < n && isBlank(arr[i]) && !claimed[i]) {
+          let m = i;
+          while (m + 1 < n && isBlank(arr[m + 1])) m++;
+          if (m + 1 < n && isListLine(m + 1)) { i = m + 1; last = m + 1; continue; }
+        }
+        out.push([s, last]); claim(s, last); s = -1; last = -1;
+      }
+    }
+
+    return out;
+  }
+
+  // 包含 rawLines[cur] 的**最内层**多行原子结构区间（闭区间 [start, end]）；不在任何多行
+  // 结构内返回 null（→ 调用方维持「光标行单点源码」旧口径，行为完全不变）。
+  // 入参是带引用前缀的**原始块行**，cur 是块内相对行号 —— 免调用方自己剥前缀。
+  function quoteAtomicRange(rawLines, cur) {
+    const arr = rawLines || [];
+    if (cur == null || cur < 0 || cur >= arr.length) return null;
+    let best = null;
+    for (const r of quoteAtomicRanges(arr.map(stripQuotePrefix))) {
+      if (cur < r[0] || cur > r[1]) continue;
+      if (!best || (r[1] - r[0]) < (best[1] - best[0])) best = r;
+    }
+    return best;
+  }
+
   // 切分顶层块。返回 [{ start, end, lines }]，start/end 为 0-based 开区间 [start, end)。
   // 规则要点：
   //   - 空行只作分隔，不归属任何块（故块内不含空行）
@@ -1161,6 +1370,21 @@
       try { cur = cm.getCursor('head').line; } catch (_) { this._wysiwygClearQuoteSegments(); return; }
       if (cur < b.start || cur >= b.end) { this._wysiwygClearQuoteSegments(); return; }
       const markerLine = this._wysiwygBlockAlertType(b) ? cm.getLine(b.start) : null;
+      // 2026-10-28 多行原子结构整体保源码（根治引用分段撕裂，详见 quoteAtomicRange 注释）：
+      // 光标落在围栏 / 缩进代码 / 表格 / 展示公式 / HTML 容器 / 列表 内部时，**整个结构**保持
+      // 源码（raw 区扩展到 [rawS, rawE]），不再按光标行从中间劈开 —— 劈开的两段源码各自结构
+      // 不完整，remark 容错解析与渲染态不符（空代码盒 / 正文被吞进代码块 / 裸管道符 / 落单
+      // $$ / 破折叠盒 / 嵌套子项提升成顶层列表）。与顶层同款结构「光标进块整块显源码」同口径。
+      // 光标不在任何多行结构内 → ar 为 null → rawS=rawE=cur，即完全走旧的「光标行单点」口径
+      // （零回归面）。块行快照用 CM 现读：change 钩子到本重算之间可能有未同步的编辑。
+      const rawLines = [];
+      {
+        const total = cm.lineCount();
+        for (let i = b.start; i < b.end && i < total; i++) rawLines.push(cm.getLine(i) || '');
+      }
+      const ar = quoteAtomicRange(rawLines, cur - b.start);
+      const rawS = ar ? b.start + ar[0] : cur;
+      const rawE = ar ? b.start + ar[1] : cur;
       // 2026-10-28 用户①「嵌套换行中间空白」：嵌套开口方向——光标行层级 N 决定段内哪些
       // 嵌套盒朝光标行敞口（层级 2..N 的盒在上段清底、下段清顶，见 styles.css seg-open 规则）。
       // 只清顶层（既有 > blockquote 规则）不够：嵌套盒自身 12px pad + 16px margin 会留在
@@ -1172,19 +1396,24 @@
       // deep 标志 → 内层开口盒（层级 N）补 16px 内距吸收该 margin、闭合盒（N+1）margin 清零
       // （见 styles.css seg-deep 规则）
       const lvlOf = (ln) => (((cm.getLine(ln) || '').match(/^\s*(?:>[ \t]?)+/) || [''])[0].split('>').length - 1);
-      const deepTop = cur > b.start && lvlOf(cur - 1) > curLvl;
-      const deepBot = cur + 1 < b.end && lvlOf(cur + 1) > curLvl;
+      // 接缝两侧改为「源码区两侧」（多行结构整块保源码后接缝不在光标行两侧，而在 raw 区两侧）
+      const deepTop = rawS > b.start && lvlOf(rawS - 1) > curLvl;
+      const deepBot = rawE + 1 < b.end && lvlOf(rawE + 1) > curLvl;
       const openCls = curLvl >= 2
         ? ' wysiwyg-quote-seg-open-' + Math.min(curLvl, 6)
         : '';
-      const topSrc = this._wysiwygSegSource(b.start, cur);
-      const botSrc = this._wysiwygSegSource(cur + 1, b.end, markerLine);
+      // rawS/rawE 进状态键：多行结构的范围随编辑变化（增删表格行、围栏内容、列表项）时，
+      // 仅 cur/curLvl/两段源文未变不足以判定「无需重挂」—— 范围变了必须重挂（否则 raw 区
+      // 边界陈旧 = 新加的行落进分段渲染、或源码区漏/多）。
+      const topSrc = this._wysiwygSegSource(b.start, rawS);
+      const botSrc = this._wysiwygSegSource(rawE + 1, b.end, markerLine);
       // 2026-10-28 S91 用户②：光标行层级变化（空嵌套行回车弹级 > > → >、行首删一层 > 等）
       // 时 cur/段源都不变 → 只按 (idx,cur,src) 早退会留陈旧 seg-open-N/deep 类（实测弹级后
       // seg-top 挂旧 open-2：嵌套盒该闭合处仍敞口、pb/mb/radius 全清、块高缺 28px，输入过程
       // 显示异常）。curLvl 进状态键：层级一变即重建两段、open/deep 类按新层级重挂。
       const st = this._wysiwygSegState;
-      if (st && st.idx === idx && st.cur === cur && st.curLvl === curLvl && st.topSrc === topSrc && st.botSrc === botSrc) return;
+      if (st && st.idx === idx && st.cur === cur && st.curLvl === curLvl && st.rawS === rawS && st.rawE === rawE
+        && st.topSrc === topSrc && st.botSrc === botSrc) return;
       this._wysiwygClearQuoteSegments();
       const self = this;
       const mk = (s, e, cls) => {
@@ -1257,12 +1486,12 @@
         return mark;
       };
       const marks = [];
-      const top = mk(b.start, cur, 'wysiwyg-quote-seg-top');
+      const top = mk(b.start, rawS, 'wysiwyg-quote-seg-top');
       if (top) marks.push(top);
-      const bot = mk(cur + 1, b.end, 'wysiwyg-quote-seg-bottom');
+      const bot = mk(rawE + 1, b.end, 'wysiwyg-quote-seg-bottom');
       if (bot) marks.push(bot);
       this._wysiwygSegMarks = marks;
-      this._wysiwygSegState = { idx, cur, curLvl, topSrc, botSrc };
+      this._wysiwygSegState = { idx, cur, curLvl, rawS, rawE, topSrc, botSrc };
       this._applyWysiwygSelectionMaskClasses();
     },
 
@@ -3169,8 +3398,14 @@
             if (lvl === 2 && olM[3] === '.') {
               add(lineNo, numAt + olM[2].length, numAt + olM[2].length + 1, 'wysiwyg-ol-paren');
             }
+            // 空有序项（正文空白）：零宽槽使行尾 caret 无盒可锚（rect 0×0 → 光标不可见，
+            // 2026-10-31 用户截图）。空项挂例外类 wysiwyg-ol-space-empty（CSS 给 1px），
+            // 输入首个字符后装饰重算 span 重建自动回落零宽（非空项正文紧贴槽右缘的
+            // 像素口径不受影响）。
+            const olItemText = line.slice(numAt + olM[2].length + 1 + olM[4].length);
             add(lineNo, numAt + olM[2].length + 1,
-              numAt + olM[2].length + 1 + olM[4].length, 'wysiwyg-ol-space');
+              numAt + olM[2].length + 1 + olM[4].length,
+              'wysiwyg-ol-space' + (olItemText.trim() === '' ? ' wysiwyg-ol-space-empty' : ''));
             textStart = numAt + olM[2].length + 1 + olM[4].length;
           } else {
             // 续行（缩进延续）：正文段从首个非空白字符起（前导缩进保留）
@@ -3408,6 +3643,13 @@
         if (blk.start > c.from.line || (blk.start === c.from.line && c.from.ch === 0)) {
           blk.start += delta;
           blk.end += delta;
+          // 整块被删（文档缩小）时 start 可能移成负数 / end 越过新行数：
+          // getLine(-n) 返回 undefined → _wysiwygApplyActiveDecor 的 first.trim() 崩溃
+          // （2026-10-24 真机取证：活动块 [0,1) 时从块首行行首整体删除 → 块表 [[-2,1]]，
+          // 既有 b.start >= lineCount 守卫拦不住负数）。钳回合法区间；陈旧块由 250ms
+          // 防抖重解析收敛（幂等）。
+          blk.start = Math.max(0, Math.min(blk.start, cm.lineCount()));
+          blk.end = Math.max(blk.start, Math.min(blk.end, cm.lineCount()));
           changed = true;
         } else if (c.from.line >= blk.start && c.from.line < blk.end) {
           const first = cm.getLine(blk.start) || '';
@@ -3655,6 +3897,16 @@
       //（幂等值差：值未变即 no-op，不触发行重渲染）
       if (nextQuote != null && nextQuote === prevQuote) this._setWysiwygQuoteCurPad(nextQuote, true, ab);
       this._wysiwygQuoteCurLine = nextQuote;
+      // —— 引用光标行「空内容」类（2026-10-31 用户截图：空引用行裸露 `> `，像破了一样）：
+      //    光标行剥掉 `> ` 前缀后内容为空白时给 pre 挂 wysiwyg-quote-blank-cur，CSS 保持
+      //    > 字符透明 → 空引用行 = 空段落 + 左竖条（与渲染态空 blockquote 一致）。输入
+      //    首字符后 cursorActivity 重判即撤（差分挂/撤，同上方 quote-cursor-line 机制）。
+      const prevQBlank = this._wysiwygQuoteBlankCurLine;
+      let nextQBlank = null;
+      if (nextQuote != null && isBlank(stripQuotePrefix((this.cm.getLine(nextQuote) || '')))) nextQBlank = nextQuote;
+      if (prevQBlank != null && prevQBlank !== nextQBlank) this._setWysiwygCurLineClass(prevQBlank, 'wysiwyg-quote-blank-cur', false);
+      if (nextQBlank != null && nextQBlank !== prevQBlank) this._setWysiwygCurLineClass(nextQBlank, 'wysiwyg-quote-blank-cur', true);
+      this._wysiwygQuoteBlankCurLine = nextQBlank;
       // —— callout 光标行类（2026-10-25 分段口径）：活动块是 callout（首行 [!TYPE]）时，
       //    光标行的 > 槽竖条/底色按 callout 类型配色（与上下分段遮罩 .alert 盒同一色板）。
       //    与 _wysiwygQuoteCurLine 同机制：每 tick 现算 prev/next 差分挂/撤——不能用
@@ -4003,6 +4255,8 @@
         this._ensureWysiwygScrollHook();
         this._ensureWysiwygTableClickGuard();
         this._ensureWysiwygTaskBoxClick();
+        this._ensureWysiwygListKeyGuard();
+        this._ensureWysiwygBlankClickGuard();
         this._ensureWysiwygTableTypeGuard();
         this._ensureWysiwygActiveDecorHook();
         this._ensureWysiwygSelectionHook();
@@ -4532,6 +4786,169 @@
           cm.setSelection({ line: pos.line, ch }, { line: pos.line, ch }, { scroll: false, origin: '*mouse' });
           cm.focus();
         } catch (_) { /* 落光标失败不影响勾选 */ }
+      }, true);
+    },
+
+    // 列表/定义列表/引用行 Backspace·Delete 守卫（2026-10-24 用户截图反馈：任务项删到勾选框
+    // 「还要按好多次删除才能删到上一行」，且中间态裸露「• []」；2026-10-31 扩引用行：
+    // QA 实测引用行首 Backspace 不剥 `>` 反而误动下方内容，且用户截图空引用行裸露 `> `）。
+    // 机制与口径见顶部 listMarkerZoneEnd / quoteMarkerZoneEnd 注释。wrapper capture 阶段
+    // keydown（同 _ensureWysiwygTaskBoxClick 模式）：capture 在 CM 自身 keydown 监听
+    // （后代元素/冒泡）之前运行，preventDefault + stopPropagation 后 CM 完全跳过原生逐字符
+    // 删。IME 组合期与修饰键（词删除等）放行。
+    _ensureWysiwygListKeyGuard() {
+      if (this._wysiwygListKeyHooked || !this.cm) return;
+      this._wysiwygListKeyHooked = true;
+      const self = this;
+      const wrapper = this.cm.getWrapperElement ? this.cm.getWrapperElement() : null;
+      if (!wrapper) return;
+      wrapper.addEventListener('keydown', (ev) => {
+        if (self.viewMode !== 'wysiwyg' || !ev) return;
+        if (ev.key !== 'Backspace' && ev.key !== 'Delete') return;
+        if (ev.ctrlKey || ev.altKey || ev.metaKey) return;   // 修饰键组合（删词等）走原生
+        if (ev.isComposing || self._wysiwygComposing) return; // IME 组合期不打断（同装饰钩子口径）
+        const cm = self.cm;
+        if (!cm || !cm.replaceRange) return;
+        const cur = cm.getCursor('head');
+        if (!isFinite(cur.line) || cm.somethingSelected()) return; // 有选区：原生删选区
+        const L = cur.line;
+        // 字面块（围栏/缩进代码/HTML 容器/frontmatter）行文里的 `- `/`> ` 是**内容**
+        // 不是标记 → 全部放行原生（否则 Backspace 会剥改代码内容，2026-10-31 堵漏）
+        if (self._wysiwygLineInLiteralBlock(L)) return;
+        const line = cm.getLine(L) || '';
+        const zoneEnd = listMarkerZoneEnd(line);
+        const qZoneEnd = quoteMarkerZoneEnd(line);
+        if (ev.key === 'Backspace') {
+          if (zoneEnd > 0 && cur.ch <= zoneEnd) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const content = line.slice(zoneEnd);
+            if (L > 0 && isBlank(content)) {
+              // 空项（正文空白，含光标停在标记区内任意处）：整行并入上一行，一次删到上一行
+              const prevLen = (cm.getLine(L - 1) || '').length;
+              cm.replaceRange('', { line: L - 1, ch: prevLen }, { line: L, ch: line.length }, '+wysiwygListKeyGuard');
+            } else {
+              // 有正文：一次剥离整个隐藏标记（项变普通段落），光标落新正文起点
+              cm.replaceRange('', { line: L, ch: 0 }, { line: L, ch: zoneEnd }, '+wysiwygListKeyGuard');
+              try {
+                cm.setSelection({ line: L, ch: 0 }, { line: L, ch: 0 }, { scroll: false, origin: '*wysiwygListKeyGuard' });
+              } catch (_) { /* replaceRange 后 CM 通常已把光标放在删除起点 */ }
+            }
+            return;
+          }
+          // 引用行（含嵌套）：区内/正文起点一次剥离整个 `> ` 前缀（退出引用，Typora 同口径；
+          // 原生会逐字符删出「>文本」「>」裸露中间态且 QA 实测还误动下方内容）
+          if (qZoneEnd > 0 && cur.ch <= qZoneEnd) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            cm.replaceRange('', { line: L, ch: 0 }, { line: L, ch: qZoneEnd }, '+wysiwygQuoteKeyGuard');
+            try {
+              cm.setSelection({ line: L, ch: 0 }, { line: L, ch: 0 }, { scroll: false, origin: '*wysiwygQuoteKeyGuard' });
+            } catch (_) { /* 同上 */ }
+          }
+          return;
+        }
+        // —— Delete：行尾把下一行并上来。下一行是列表/dd 标记行 → 剥标记后并接，
+        //    避免原生并出「- 无序甲- 无序乙」这类标记残骸；空标记行（如「- 」）整行删掉。
+        if (cur.ch !== line.length || L + 1 >= cm.lineCount()) return;
+        const nextLine = cm.getLine(L + 1) || '';
+        const nzEnd = self._wysiwygLineInLiteralBlock(L + 1) ? 0 : listMarkerZoneEnd(nextLine);
+        if (nzEnd > 0) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (isBlank(nextLine.slice(nzEnd))) {
+            cm.replaceRange('', { line: L, ch: line.length }, { line: L + 1, ch: nextLine.length }, '+wysiwygListKeyGuard');
+          } else {
+            cm.replaceRange('', { line: L, ch: line.length }, { line: L + 1, ch: nzEnd }, '+wysiwygListKeyGuard');
+          }
+          return;
+        }
+        // 下一行是引用行 → 剥其整个 `> ` 前缀后并接（原生并出「> 甲> 乙」标记残骸；
+        // 空引用行整行删掉）
+        const nqEnd = quoteMarkerZoneEnd(nextLine);
+        if (nqEnd > 0) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (isBlank(nextLine.slice(nqEnd))) {
+            cm.replaceRange('', { line: L, ch: line.length }, { line: L + 1, ch: nextLine.length }, '+wysiwygQuoteKeyGuard');
+          } else {
+            cm.replaceRange('', { line: L, ch: line.length }, { line: L + 1, ch: nqEnd }, '+wysiwygQuoteKeyGuard');
+          }
+        }
+      }, true);
+    },
+
+    // 光标行是否处于「源码即字面内容」的块（围栏代码 / 缩进代码 / HTML 容器 / frontmatter）：
+    // 这些块的行文里 `- ` / `> ` 是内容不是标记，键守卫必须放行（2026-10-31 引用守卫引入时
+    // 同步堵住列表守卫的同类隐患）。行不在块表内（空行分隔/块表滞后）→ 按文面放行守卫。
+    _wysiwygLineInLiteralBlock(L) {
+      const cm = this.cm;
+      const blocks = this._wysiwygBlocks;
+      if (!cm || !blocks || !blocks.length || !isFinite(L)) return false;
+      let blk = null;
+      for (let i = 0; i < blocks.length; i++) {
+        const b = blocks[i];
+        if (L >= b.start && L < b.end) { blk = b; break; }
+        if (b.start > L) break;
+      }
+      if (!blk) return false;
+      const firstRaw = (cm.getLine(blk.start) || '');
+      const first = firstRaw.trim();
+      if (blk.start === 0 && first === '---') return true; // frontmatter（YAML 行文是字面内容）
+      if (RE.fence.test(first) || RE.indentedCode.test(firstRaw)) return true;
+      return isHtmlBlockContainerLine(first);
+    },
+
+    // 块间空行点击守卫（2026-10-31 用户反馈：点标题/块之间的空白会落进空行——光标
+    // 「悬在虚空」、无任何可见内容可编辑，与 Typora 直觉不符）。wrapper capture mousedown
+    // （同键守卫模式）：点击命中的是**空行**时，按点击点与该行垂直中线的关系归位——
+    // 上半 → 上一非空行**行尾**（解罩后落点），下半 → 下一非空行**行首**；连续空行跳到
+    // 最近非空行。遮罩/按钮/修饰键/拖选放行。
+    _ensureWysiwygBlankClickGuard() {
+      if (this._wysiwygBlankClickHooked || !this.cm) return;
+      this._wysiwygBlankClickHooked = true;
+      const self = this;
+      const wrapper = this.cm.getWrapperElement ? this.cm.getWrapperElement() : null;
+      if (!wrapper) return;
+      wrapper.addEventListener('mousedown', (ev) => {
+        if (self.viewMode !== 'wysiwyg' || !ev) return;
+        if (ev.button !== 0 || ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) return;
+        let el = ev.target;
+        while (el && el.nodeType !== 1) el = el.parentNode;
+        if (!el || !el.closest) return;
+        if (el.closest('.' + MASK_CLASS)) return;             // 遮罩自有「纵比映射源码行」
+        if (el.closest('button') || el.closest('.CodeMirror-gutters')) return;
+        const cm = self.cm;
+        if (!cm || !cm.coordsChar) return;
+        let pos = null;
+        try { pos = cm.coordsChar({ left: ev.clientX, top: ev.clientY }); } catch (_) { return; }
+        if (!pos || !isFinite(pos.line)) return;
+        if ((cm.getLine(pos.line) || '').trim() !== '') return; // 非空行：原生
+        let boxTop = 0, boxBottom = 0;
+        try {
+          const box = cm.charCoords({ line: pos.line, ch: 0 });
+          boxTop = box.top; boxBottom = box.bottom;
+        } catch (_) { return; }
+        const n = cm.lineCount();
+        let t = pos.line;
+        let target = null;
+        if (ev.clientY < (boxTop + boxBottom) / 2) {
+          while (t > 0 && (cm.getLine(t - 1) || '').trim() === '') t--;
+          if (t > 0) target = { line: t - 1, ch: (cm.getLine(t - 1) || '').length };
+        } else {
+          while (t < n - 1 && (cm.getLine(t + 1) || '').trim() === '') t++;
+          if (t < n - 1) target = { line: t + 1, ch: 0 };
+        }
+        if (!target) return;                                    // 全文档皆空等极端态 → 放行
+        ev.preventDefault();
+        ev.stopPropagation();
+        try {
+          // 目标行可能在遮罩块内：先按 Fresh 索引解罩（与块编辑按钮同一「先解罩后落光标」
+          // 口径，否则 replacedWith 把落点钳到块缘）
+          self.setWysiwygActiveBlock(self._wysiwygBlockIndexAtFresh(target.line));
+          cm.setSelection(target, target, { scroll: false, origin: '*mouse' });
+          cm.focus();
+        } catch (_) { /* 落点失败不影响 */ }
       }, true);
     },
 
@@ -5112,6 +5529,12 @@
   const api = {
     mixin, MASK_CLASS, splitBlocks, splitTableRow, editTableRowCell,
     parseTableStructure, buildTableLine, addTableRow, addTableColumn, moveTableRow, moveTableColumn,
+    // 引用块内多行原子结构识别（2026-10-28 分段撕裂修复）：纯行级函数，直接 require 单测
+    stripQuotePrefix, quoteAtomicRanges, quoteAtomicRange,
+    // 列表/dd 行隐藏标记前缀区终点（2026-10-24 Backspace·Delete 守卫口径）：纯函数，直接 require 单测
+    listMarkerZoneEnd,
+    // 引用行 `> ` 前缀区终点（2026-10-31 引用守卫口径）：纯函数，直接 require 单测
+    quoteMarkerZoneEnd,
   };
   // 互斥式导出：浏览器 <script> 挂 window，node require 走 module.exports。
   // splitBlocks / splitTableRow / editTableRowCell 是纯函数，测试直接 require 本文件

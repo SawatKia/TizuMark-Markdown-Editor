@@ -3306,6 +3306,14 @@ body.is-resizing .side-btn {
   width: 0;
   white-space: nowrap;
 }
+/* 空有序项例外（2026-10-31 用户截图：`1. ` 正文空白时行尾 caret 无盒可锚，rect 0×0
+   → 光标不可见）：空项无正文可对齐，槽给 1px 恢复 caret 盒。仅空项挂 wysiwyg-ol-space-empty
+   （wysiwyg.js 装饰处判定），输入首字符后装饰重算 span 重建自动回落零宽。
+   ⚠️ 不能全局加宽：2026-10-17 曾全局 1px（IME 竖排排查，根治在 marker nowrap），
+   会把非空项正文推右 1px、破坏「正文紧贴 24px 槽右缘」的 S51 像素口径。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-ol-space-empty {
+  width: 1px;
+}
 /* WYSIWYG 列表活动行的块级排版（2026-10-15 用户反馈：编辑态比渲染态「变小、变密、
    缩进不同」）。行类 wysiwyg-plain-text 已给同字号（16px）/行高（1.7），实测差异只剩
    渲染态 ol/ul 的两个块级参数：
@@ -3398,6 +3406,10 @@ body.is-resizing .side-btn {
   position: absolute;
   left: -9.228px;
   top: 0;
+  /* ::after 继承 span 本身的 color:transparent →「)」不可见（2026-10-31 用户截图：
+     二级有序项只显示数字不显示括号）。渲染态 paren-decimal marker 色 = li 文字色，
+     显式给主色同相。 */
+  color: var(--text-primary);
 }
 /* ul 嵌套 marker：渲染 list-style-type 虽按层变（L1 disc / L2 circle / L3 square /
    L4+ disc），但本机 Edge 154（=app WebView2 同引擎）@16px 下三者墨迹均为
@@ -4469,6 +4481,13 @@ body.is-resizing .side-btn {
    slot-inner，行为不变。特异性与上方透明规则同级、顺序在后 → 稳赢。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text.wysiwyg-quote-cursor-line span[class*="wysiwyg-quote-slot-inner"] {
   color: var(--text-secondary);
+}
+/* 空引用行（2026-10-31 用户截图：光标行内容剥掉 `> ` 后为空白——如引用末尾回车出的
+   空引用行——裸露 `> ` 像破了一样）：> 字符保持透明，空引用行 = 空段落 + 左竖条，
+   与渲染态空 blockquote 一致。类由 syncWysiwygActiveBlock 差分挂/撤（输入首字符即撤）。
+   特异性 (0,7,1) 压过上方光标行显色规则 (0,6,1)。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text.wysiwyg-quote-cursor-line.wysiwyg-quote-blank-cur span[class*="wysiwyg-quote-slot-inner"] {
+  color: transparent;
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-heading-hash"] {
   color: var(--text-secondary);

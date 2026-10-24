@@ -500,6 +500,58 @@ test('复选框编辑态可勾选：前缀槽 mousedown 回写源码（回写口
     '编辑态点击未识别任务行 24px 前缀槽（::before 框无 DOM，命中目标是槽 span）');
   assert.ok(wsrc.indexOf("el.closest('.wysiwyg-task-box-zero')") >= 0,
     '零宽槽上的点击未放行（= 点正文，不得当勾选）');
+  // 列表/dd 行 Backspace·Delete 守卫（2026-10-24：隐藏标记前缀逐字符删 → 多次按键 +
+  // 中间态裸露「• []」）。wrapper capture keydown、IME/修饰键放行、空项整行并入上一行、
+  // Delete 行尾剥下一行标记后并接。
+  assert.match(wsrc, /_ensureWysiwygListKeyGuard\(\) \{/, '缺少 _ensureWysiwygListKeyGuard');
+  assert.match(wsrc, /this\._ensureWysiwygTaskBoxClick\(\);\n        this\._ensureWysiwygListKeyGuard\(\);/,
+    '_ensureWysiwygListKeyGuard 未随模式进入接线');
+  assert.ok(wsrc.indexOf('listMarkerZoneEnd(line)') >= 0 && wsrc.indexOf('function listMarkerZoneEnd(') >= 0,
+    '守卫未走共用纯函数 listMarkerZoneEnd（口径须与行装饰同源，禁止散写同义正则）');
+  assert.ok(wsrc.indexOf("ev.key !== 'Backspace' && ev.key !== 'Delete'") >= 0,
+    '守卫未限定 Backspace/Delete 按键');
+  assert.ok(wsrc.indexOf('if (ev.ctrlKey || ev.altKey || ev.metaKey) return;') >= 0,
+    '守卫未放行修饰键组合（删词等原生行为）');
+  assert.ok(wsrc.indexOf('if (ev.isComposing || self._wysiwygComposing) return;') >= 0,
+    '守卫未放行 IME 组合期（同装饰钩子口径）');
+  assert.ok(wsrc.indexOf("cm.somethingSelected()") >= 0,
+    '守卫未放行有选区的删除（原生删选区）');
+  assert.match(wsrc, /if \(L > 0 && isBlank\(content\)\) \{[^]*?cm\.replaceRange\('', \{ line: L - 1, ch: prevLen \}, \{ line: L, ch: line\.length \}, '\+wysiwygListKeyGuard'\)/,
+    '空项 Backspace 未整行并入上一行（一次删到上一行）');
+  assert.match(wsrc, /cm\.replaceRange\('', \{ line: L, ch: 0 \}, \{ line: L, ch: zoneEnd \}, '\+wysiwygListKeyGuard'\)/,
+    '有正文项 Backspace 未一次剥离整个隐藏标记');
+  assert.match(wsrc, /cm\.replaceRange\('', \{ line: L, ch: line\.length \}, \{ line: L \+ 1, ch: nzEnd \}, '\+wysiwygListKeyGuard'\)/,
+    'Delete 行尾未剥下一行标记后并接（原生会并出「- 甲- 乙」残骸）');
+});
+
+// 引用行守卫 + 空白点击守卫 + 空引用行/空有序项光标修复（2026-10-31）
+test('引用行 Backspace·Delete 守卫接线 + 字面块放行 + 空白点击守卫（2026-10-31）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  // QA 实测引用行首 Backspace 不剥 `>` 反误动下方内容；用户截图空引用行裸露 `> `
+  assert.ok(wsrc.indexOf('function quoteMarkerZoneEnd(') >= 0
+    && wsrc.indexOf('quoteMarkerZoneEnd(line)') >= 0 && wsrc.indexOf('quoteMarkerZoneEnd(nextLine)') >= 0,
+    '引用守卫未走共用纯函数 quoteMarkerZoneEnd（口径须与 stripQuotePrefix 同源，禁止散写同义正则）');
+  assert.match(wsrc, /cm\.replaceRange\('', \{ line: L, ch: 0 \}, \{ line: L, ch: qZoneEnd \}, '\+wysiwygQuoteKeyGuard'\)/,
+    '引用行 Backspace 未一次剥离整个 `> ` 前缀（退出引用）');
+  assert.match(wsrc, /cm\.replaceRange\('', \{ line: L, ch: line\.length \}, \{ line: L \+ 1, ch: nqEnd \}, '\+wysiwygQuoteKeyGuard'\)/,
+    'Delete 行尾遇引用行未剥前缀并接（原生会并出「> 甲> 乙」残骸）');
+  assert.match(wsrc, /_wysiwygLineInLiteralBlock\(L\)/,
+    '键守卫未放行字面块（围栏/缩进代码/HTML/frontmatter 行文里的 `- `/`> ` 是内容不是标记）');
+  assert.match(wsrc, /_ensureWysiwygBlankClickGuard\(\) \{/, '缺少 _ensureWysiwygBlankClickGuard');
+  assert.match(wsrc, /this\._ensureWysiwygListKeyGuard\(\);\n        this\._ensureWysiwygBlankClickGuard\(\);/,
+    '_ensureWysiwygBlankClickGuard 未随模式进入接线');
+  // 空引用行 `>` 保持透明（CSS）：blank-cur 类由 syncWysiwygActiveBlock 差分挂/撤
+  assert.ok(wsrc.indexOf('wysiwyg-quote-blank-cur') >= 0, '缺空引用行 blank-cur 类挂/撤逻辑');
+  assert.match(css, /wysiwyg-quote-cursor-line\.wysiwyg-quote-blank-cur span\[class\*="wysiwyg-quote-slot-inner"\] \{[^}]*color: transparent;/,
+    'CSS 缺空引用行 > 透明规则（wysiwyg-quote-blank-cur）');
+  // 空有序项 caret 例外（2026-10-31 用户截图：`1. ` 正文空白时行尾光标不可见）
+  assert.ok(wsrc.indexOf("' wysiwyg-ol-space-empty'") >= 0, '空有序项未挂 ol-space-empty 例外类');
+  assert.match(css, /wysiwyg-ol-space-empty \{[^}]*width: 1px;/,
+    'CSS 缺空有序项槽 1px 例外（零宽槽行尾 caret 无盒可锚）');
+  // 有序二级括号显色（2026-10-31 用户截图：::after 继承 color:transparent →「)」不可见）
+  assert.match(css, /wysiwyg-ol-paren::after \{[^}]*color: var\(--text-primary\);/,
+    'ol 二级括号 ::after 未显式设色（继承透明 →「)」不渲染）');
 });
 
 test('复选框编辑态样式 ≡ 渲染态：小手光标/hover 变色/未勾选 70% 透明度/对勾 5×9 2px（2026-10-15 用户要求）', () => {
@@ -3060,7 +3112,9 @@ test('S82 代码块内输入时闭围栏不闪出灰盒：行号增减即时修�
   // ① 行号增减即时修补：change 钩子算 delta 并调修补（250ms 防抖窗口内灰盒不得按陈旧范围走）
   assert.match(wys, /const delta = c\.text\.length - 1 - \(c\.to\.line - c\.from\.line\);[\s\S]{0,200}?_wysiwygPatchBlockTableForChange\(c, delta\)/,
     'change 钩子缺行号 delta 计算与块表修补（防抖窗口内灰盒按陈旧范围走 → 闭围栏闪出盒）');
-  assert.match(wys, /_wysiwygPatchBlockTableForChange\(c, delta\) \{[\s\S]{0,300}?blk\.start \+= delta;[\s\S]{0,300}?extendEnd/,
+  // 2026-10-24 钳位修复在 start/end 位移后追加了越界钳回与说明注释（~500 字符），
+  // start→extendEnd 的窗口从 300 放宽到 900
+  assert.match(wys, /_wysiwygPatchBlockTableForChange\(c, delta\) \{[\s\S]{0,900}?blk\.start \+= delta;[\s\S]{0,900}?extendEnd/,
     '缺 _wysiwygPatchBlockTableForChange（块表行号修补：后续块位移 + 围栏块 end 扩展）');
   // ② 围栏块 end 扩展边界：变更点在闭围栏行之前、或恰在闭围栏行行首（行首回车的新行属
   // 围栏内容）才扩 end；闭围栏行行尾/行内的新行属块外（含尾部 ``` 下方回车的新行）不扩
@@ -3120,15 +3174,20 @@ test('S83 引用/提示块活动态「渲染分段 + 光标行源码」：非光
   const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
   const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
-  // ① 核心挂载：分段遮罩（上段 [start, cursor) / 下段 (cursor, end]）、清退、幂等判定
+  // ① 核心挂载：分段遮罩（上段 [start, rawS) / 下段 (rawE, end]）、清退、幂等判定
   assert.match(wys, /_wysiwygApplyQuoteSegments\(\) \{/, '缺 _wysiwygApplyQuoteSegments（引用活动态分段遮罩挂载）');
   assert.match(wys, /_wysiwygClearQuoteSegments\(\) \{/, '缺 _wysiwygClearQuoteSegments（分段遮罩清退）');
   // 键含 curLvl（S91 演进：光标行层级变化——弹级/删 >——时 cur/段源未变但 open/deep 类须重挂）
-  assert.match(wys, /_wysiwygSegState\s*=\s*\{ idx, cur, curLvl, topSrc, botSrc \}/, '缺分段幂等状态（idx+cursor+层级+两段源文）');
-  assert.match(wys, /if \(st && st\.idx === idx && st\.cur === cur && st\.curLvl === curLvl && st\.topSrc === topSrc && st\.botSrc === botSrc\) return;/, '缺分段幂等 no-op 判定（范围/层级/源文未变不重挂）');
-  // ② 分段组成与渲染：上段 [b.start, cur)、下段 (cur+1, b.end]；下段合成块首标记行
-  assert.match(wys, /mk\(b\.start, cur, 'wysiwyg-quote-seg-top'\)/, '缺上段挂载（[start, cursor)）');
-  assert.match(wys, /mk\(cur \+ 1, b\.end, 'wysiwyg-quote-seg-bottom'\)/, '缺下段挂载（(cursor, end]）');
+  // 键含 rawS/rawE（S105 演进：多行结构整体保源码 —— 形变,m范围随编辑变化须重挂）
+  assert.match(wys, /_wysiwygSegState\s*=\s*\{ idx, cur, curLvl, rawS, rawE, topSrc, botSrc \}/, '缺分段幂等状态（idx+cursor+层级+源码区+两段源文）');
+  assert.match(wys, /st\.rawS === rawS && st\.rawE === rawE/, '缺分段幂等 no-op 的源码区判定（多行结构范围变化须重挂）');
+  assert.match(wys, /st\.idx === idx && st\.cur === cur && st\.curLvl === curLvl/, '缺分段幂等 no-op 判定（范围/层级/源文未变不重挂）');
+  // ② 分段组成与渲染：上段 [b.start, rawS)、下段 (rawE+1, b.end]；下段合成块首标记行
+  //    ⚠️ 不再写死 rawS=cur —— 光标落在多行原子结构（围栏/缩进代码/表格/公式/HTML/列表）
+  //    内时 raw 区扩到整个结构，否则分段从结构中间劈开 → 渲染破裂（2026-10-28）
+  assert.match(wys, /mk\(b\.start, rawS, 'wysiwyg-quote-seg-top'\)/, '缺上段挂载（[start, rawS)）');
+  assert.match(wys, /mk\(rawE \+ 1, b\.end, 'wysiwyg-quote-seg-bottom'\)/, '缺下段挂载（(rawE, end]）');
+  assert.match(wys, /const ar = quoteAtomicRange\(rawLines, cur - b\.start\);/, '缺多行原子结构区间求解（光标行单点切分会撕裂结构）');
   assert.match(wys, /wysiwyg-quote-seg-bottom' \? markerLine : null/, '缺下段合成标记行（callout 下段渲染成完整 alert）');
   // ②b 分段点击纵比：span+1 半区归一（原 ratio*span 末行只在节点底缘可达，短段下半区
   //     点击全落倒数第二行）
@@ -3445,10 +3504,11 @@ test('S91 引用长行换行留距 + 嵌套弹级渲染修复（2026-10-28 用�
   assert.ok(baseTxt && !/inline-block/.test(baseTxt[0]), 'styles.css 非光标行 .wysiwyg-quote-text 不得 inline-block（会改渲染段几何）');
   // ② 弹级（S87）后 seg 缓存键含光标行层级：层级变化（> > → >）时不再早退留陈旧
   //    seg-open-N/deep 类（实测残留 open-2 → 嵌套盒该闭合处仍敞口、pb/mb/圆角全清、块高 −28px）
-  assert.match(wys, /if \(st && st\.idx === idx && st\.cur === cur && st\.curLvl === curLvl && st\.topSrc === topSrc && st\.botSrc === botSrc\) return;/,
-    'wysiwyg.js 分段幂等键未含 curLvl（弹级/层级变化早退留陈旧 open/deep 类）');
-  assert.match(wys, /this\._wysiwygSegState = \{ idx, cur, curLvl, topSrc, botSrc \};/,
-    'wysiwyg.js _wysiwygSegState 未记录 curLvl');
+  //    （2026-10-28 起幂等键另含 rawS/rawE：多行结构整体保源码后，范围随编辑变化也须重建）
+  assert.match(wys, /if \(st && st\.idx === idx && st\.cur === cur && st\.curLvl === curLvl && st\.rawS === rawS && st\.rawE === rawE/,
+    'wysiwyg.js 分段幂等键未含 curLvl/rawS/rawE（弹级/层级变化早退留陈旧 open/deep 类）');
+  assert.match(wys, /this\._wysiwygSegState = \{ idx, cur, curLvl, rawS, rawE, topSrc, botSrc \};/,
+    'wysiwyg.js _wysiwygSegState 未记录 curLvl/rawS/rawE');
   // ③ 渲染器层级回退（> > c 后 > d）：CommonMark 惰性延续把回退行并进嵌套盒最内层 P
   //    （用户外层输入在渲染态「消失」进嵌套盒 = 反馈②「渲染态展示不出来」）。
   //    修法在 normalizeListIndentation（lineMap 基建所在）：回退行前插目标层级空引用行
