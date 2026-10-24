@@ -782,13 +782,25 @@ body {
   color: var(--accent-text) !important;
 }
 
+/* 分段控件（浅色指示器方案 A）：轨道用 --bg-primary 做「白色胶囊」，
+   轮廓由它与 --bg-toolbar 的明度差界定，不再描边。9 套主题实测 --bg-primary
+   恒比 --bg-toolbar 亮一档（浅色）/ 暗一档（深色），去边框不会丢轮廓。
+   与工具栏上下横线留空隙：轨道总高 22px，工具栏内容区 29px（height 30 - 1px
+   分隔线），flex 居中后上下各余 3.5px。改 padding / 行高会连带改变间隙。 */
 .view-mode-tabs {
   display: flex;
   background-color: var(--bg-primary);
-  border: 1px solid var(--border-color);
+  border: none;
   border-radius: 20px;
-  padding: 3px;
-  gap: 0;
+  padding: 2px;
+  /* 项间距交给 flex gap（原为容器 gap:0 + 相邻项 margin-left:2px 的等价写法，
+     两处维护同一个数值没必要） */
+  gap: 2px;
+  /* 发丝内环用 inset box-shadow 而不是 border：box-shadow 不参与布局，
+     所以在补上「机加工边」的同时不会吃掉上面算好的 3.5px 空隙。
+     颜色取 --text-primary 低透明度 —— 浅色主题是暗边、深色主题是亮边，
+     一套写法在两种主题下都成立（不用为深色再开一条规则）。 */
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 8%, transparent);
 }
 
 .view-mode-tab {
@@ -796,12 +808,19 @@ body {
   align-items: center;
   gap: 4px;
   padding: 2px 14px;
+  /* 行高锁 1：不锁的话文字行盒随 --ui-font-size 膨胀（界面字号 15px 时行盒 19px、
+     18px 时 26px），胶囊会重新顶满 30px 工具栏甚至被 .toolbar-center 的 overflow
+     裁掉。锁 1 后内容高恒为 max(图标 14, 字号)，胶囊总高 22~25px，各字号下都留有空隙。 */
+  line-height: 1;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   font-size: calc(var(--ui-font-size) * 0.9231);
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.2s ease;
+  /* 每个属性都要写自己的时长：写成 `transition: background-color, color, ... 0.2s`
+     时只有最后一项拿到 0.2s，其余按规范是 0s —— 实测 background-color/color 均为 0s，
+     切模式是瞬变、没有过渡。 */
+  transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
   border-radius: 16px;
   -webkit-app-region: no-drag;
 }
@@ -813,16 +832,30 @@ body {
 
 .view-mode-tab:hover {
   color: var(--text-primary);
+  background-color: var(--bg-hover);
 }
 
+/* 选中项用「主题色淡底 + 主题色文字」而不是实心填充：模式切换不是主操作，
+   实心色块在深色主题下会成为全窗口最亮的一块，抢正文的视觉重心。 */
 .view-mode-tab.active {
-  background-color: var(--accent-color);
-  color: var(--accent-text);
-  box-shadow: 0 1px 4px var(--accent-muted);
+  background-color: var(--accent-muted);
+  color: var(--accent-color);
+  /* 主题色发丝内环 + 主题自带的一档微投影：选中格看起来像嵌进轨道里的一小片玻璃。
+     环用 inset box-shadow —— 不参与布局，不会撑动胶囊尺寸；--shadow-sm 浅色是
+     rgba(0,0,0,.04)、深色是 .18，同一个写法两套主题都成立。
+     与 :focus-visible（2px outline + 2px offset，画在外面）形态不同，不会被误读成焦点环。 */
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent-color) 28%, transparent),
+    var(--shadow-sm);
+  /* 不用 font-weight: 500 加粗选中项 —— 字重变化会改字宽，切换时整个胶囊会跟着跳动。
+     text-shadow 只让笔画外扩 0.3px，观感更实、度量不变（零位移）。 */
+  text-shadow: 0 0 0.3px currentColor;
 }
 
-.view-mode-tab + .view-mode-tab {
-  margin-left: 2px;
+/* 选中项 hover 维持淡底，避免落到上面那条 --bg-hover 灰底上（语义变成「未选中」） */
+.view-mode-tab.active:hover {
+  background-color: var(--accent-muted);
+  color: var(--accent-color);
 }
 
 /* 所见即所得全量预渲染中：图标换成 spinner，文案换「渲染中」（JS 切换类 + 文本） */
@@ -7505,8 +7538,10 @@ select option {
   .view-mode-tab span {
     display: none;
   }
+  /* 只显示图标时内容高 14px：垂直内边距保持与正文态一致的「胶囊不贴横线」口径
+     （4px 会让胶囊重新顶满工具栏，见 .view-mode-tabs 注释） */
   .view-mode-tab {
-    padding: 4px 10px;
+    padding: 2px 10px;
   }
 }
 
@@ -7521,7 +7556,7 @@ select option {
     display: none;
   }
   .view-mode-tab {
-    padding: 4px 8px;
+    padding: 2px 8px;
   }
   .dropdown-arrow {
     display: none;
