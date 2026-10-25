@@ -559,10 +559,18 @@ test('复选框编辑态样式 ≡ 渲染态：小手光标/hover 变色/未勾�
   // 小手光标（渲染态 input 为 pointer；整 24px 槽即可点区，对整槽生效）
   assert.match(css, /wysiwyg-task-prefix \{[\s\S]*?cursor: pointer;/,
     '编辑态前缀槽缺 cursor:pointer（与渲染态 input 不一致）');
-  // 未勾选态 opacity 0.7 + 与渲染态同列表同时长的 transition
+  // 未勾选态 opacity 0.7 + 与渲染态**同参**的 transition
+  // （2026-10-25：transition 改成逐属性书写 —— 旧写法 `a, color, ..., box-shadow 0.15s ease`
+  //  只有末项拿到时长，其余按规范是 0s 瞬变，勾选翻转变色其实没有过渡）
   assert.match(css,
-    /wysiwyg-task-prefix::before \{[\s\S]*?opacity: 0\.7;[\s\S]*?transition: background-color, color, border-color, opacity, transform, box-shadow 0\.15s ease;/,
+    /wysiwyg-task-prefix::before \{[\s\S]*?opacity: 0\.7;[\s\S]*?transition: background-color 0\.15s ease, color 0\.15s ease, border-color 0\.15s ease, opacity 0\.15s ease, transform 0\.15s ease, box-shadow 0\.15s ease;/,
     '编辑态 ::before 缺未勾选 0.7 透明度 / 与渲染态同参 transition');
+  // 「同参」用相等断言锁住，而不是两边各写一份字符串常量比对
+  const editorTr = /wysiwyg-task-prefix::before \{[\s\S]*?(transition: [^;]+;)/.exec(css);
+  const previewTr = /\.preview-content li input\[type="checkbox"\] \{[\s\S]*?(transition: [^;]+;)/.exec(css);
+  assert.ok(editorTr && previewTr, '未能提取编辑态 / 渲染态 checkbox 的 transition');
+  assert.strictEqual(editorTr[1], previewTr[1],
+    '编辑态与渲染态 checkbox 的 transition 必须完全同参（列表、时长、缓动都要一致）');
   // hover 边框变成功色（渲染态 input:hover 同口径）
   assert.match(css, /wysiwyg-task-prefix:hover::before \{[^}]*border-color: var\(--color-success\);/,
     '缺编辑态 hover 边框变色（渲染态 input:hover 有）');

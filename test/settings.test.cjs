@@ -485,6 +485,22 @@ test('settings: 删除正在使用的自定义字体时，codeFont 与 editor/pr
   } finally { cleanup(w); }
 });
 
+test('settings: 滑块圆点有 hover 放大 + 按下回缩的触感反馈', async () => {
+  // 2026-10-25 审查：滑块可点的只有那个 14px 圆点，原先只有 :hover 放大到 1.2、
+  // 没有 :active —— 拖动全程停在 1.2，用户分不清「已按住」和「只是悬停」。
+  const fs = require('fs');
+  const p = require('path');
+  const css = fs.readFileSync(p.join(__dirname, '..', 'src', 'styles.css'), 'utf8');
+  const hover = /input\[type="range"\]::-webkit-slider-thumb:hover\s*\{[^}]*transform:\s*scale\(([\d.]+)\)/;
+  const active = /input\[type="range"\]::-webkit-slider-thumb:active\s*\{[^}]*transform:\s*scale\(([\d.]+)\)/;
+  const hv = hover.exec(css);
+  const ac = active.exec(css);
+  assert.ok(hv, '缺 hover 放大反馈（::-webkit-slider-thumb:hover 无 transform: scale）');
+  assert.ok(ac, '缺按下反馈（::-webkit-slider-thumb:active 无 transform: scale）');
+  assert.ok(Number(ac[1]) < Number(hv[1]),
+    `按下应比 hover 小一档（形成回缩），实得 active=${ac[1]} / hover=${hv[1]}`);
+});
+
 test('settings: 预览代码块 CSS 引用 --font-code-preview 且 :root 已定义', async () => {
   const fs = require('fs');
   const p = require('path');

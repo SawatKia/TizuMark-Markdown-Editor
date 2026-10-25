@@ -758,7 +758,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
   flex-shrink: 0;
 }
 
@@ -957,7 +957,7 @@ body {
   font-size: calc(var(--ui-font-size) * 0.9231);
   color: var(--text-primary);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .dropdown-item .icon {
@@ -974,7 +974,7 @@ body {
   font-size: calc(var(--ui-font-size) * 0.9231);
   color: var(--text-primary);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.12s ease;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
   white-space: nowrap;
 }
 
@@ -1472,7 +1472,7 @@ body {
   max-width: 180px;
   flex-shrink: 0;
   overflow: hidden;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.2s ease;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
   -webkit-app-region: no-drag;
   position: relative;
   border-bottom: 2px solid transparent;
@@ -1703,7 +1703,7 @@ body {
   font-size: calc(var(--ui-font-size) * 0.8462);
   cursor: pointer;
   white-space: nowrap;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .find-btn:hover { background: var(--border-color); }
@@ -2012,7 +2012,7 @@ body.is-resizing .side-btn {
   justify-content: center;
   gap: 5px;
   box-shadow: var(--shadow-sm);
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 100;
 }
 
@@ -2297,7 +2297,7 @@ body.is-resizing .side-btn {
   position: relative;
   top: -1px;
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 .preview-content li input[type="checkbox"]:hover {
   border-color: var(--color-success);
@@ -3647,7 +3647,7 @@ body.is-resizing .side-btn {
      同列表同时长——hover/勾选翻转变色同样 0.15s 过渡（2026-10-15 用户要求：勾选框勾选
      前后样式与渲染态完全一致）。 */
   opacity: 0.7;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 /* hover：与渲染态 input:hover 同口径——边框变成功色（整 24px 槽即可点击区，故整槽 hover） */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-prefix:hover::before {
@@ -5784,7 +5784,7 @@ body.tree-dragging {
   font-size: calc(var(--ui-font-size) * 0.9231);
   color: var(--text-primary);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.12s ease;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
   white-space: nowrap;
 }
 
@@ -6026,7 +6026,7 @@ body.tree-dragging {
   color: var(--text-primary);
   font-size: calc(var(--ui-font-size) * 0.9231);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .dialog-btn:hover {
@@ -7299,7 +7299,7 @@ select option {
   align-items: center;
   justify-content: space-between;
   padding: 6px 14px;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .shortcut-row:hover {
@@ -7346,7 +7346,7 @@ select option {
   background: var(--bg-primary);
   color: var(--text-primary);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 
 .shortcut-record-btn:hover {
@@ -7374,7 +7374,7 @@ select option {
   background: var(--bg-primary);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 
 .shortcut-clear-btn:hover {
@@ -8104,6 +8104,12 @@ select option {
 }
 .settings-row input[type="range"]::-webkit-slider-thumb:hover {
   transform: scale(1.2);
+}
+/* 按压反馈：hover 时圆点放大到 1.2，按下后要「收一点」才有触感 —— 滑块可点的只有这个
+   14px 圆点，拖动全程若一直停在 1.2，用户分不清「已按住」和「只是悬停」。
+   1.1 落在默认 1 与 hover 1.2 之间，按下是可感知的回缩，松手回 1.2 再回 1。 */
+.settings-row input[type="range"]::-webkit-slider-thumb:active {
+  transform: scale(1.1);
 }
 .settings-row .range-label {
   min-width: 32px;
