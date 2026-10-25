@@ -500,6 +500,58 @@ test('复选框编辑态可勾选：前缀槽 mousedown 回写源码（回写口
     '编辑态点击未识别任务行 24px 前缀槽（::before 框无 DOM，命中目标是槽 span）');
   assert.ok(wsrc.indexOf("el.closest('.wysiwyg-task-box-zero')") >= 0,
     '零宽槽上的点击未放行（= 点正文，不得当勾选）');
+  // 列表/dd 行 Backspace·Delete 守卫（2026-10-24：隐藏标记前缀逐字符删 → 多次按键 +
+  // 中间态裸露「• []」）。wrapper capture keydown、IME/修饰键放行、空项整行并入上一行、
+  // Delete 行尾剥下一行标记后并接。
+  assert.match(wsrc, /_ensureWysiwygListKeyGuard\(\) \{/, '缺少 _ensureWysiwygListKeyGuard');
+  assert.match(wsrc, /this\._ensureWysiwygTaskBoxClick\(\);\n        this\._ensureWysiwygListKeyGuard\(\);/,
+    '_ensureWysiwygListKeyGuard 未随模式进入接线');
+  assert.ok(wsrc.indexOf('listMarkerZoneEnd(line)') >= 0 && wsrc.indexOf('function listMarkerZoneEnd(') >= 0,
+    '守卫未走共用纯函数 listMarkerZoneEnd（口径须与行装饰同源，禁止散写同义正则）');
+  assert.ok(wsrc.indexOf("ev.key !== 'Backspace' && ev.key !== 'Delete'") >= 0,
+    '守卫未限定 Backspace/Delete 按键');
+  assert.ok(wsrc.indexOf('if (ev.ctrlKey || ev.altKey || ev.metaKey) return;') >= 0,
+    '守卫未放行修饰键组合（删词等原生行为）');
+  assert.ok(wsrc.indexOf('if (ev.isComposing || self._wysiwygComposing) return;') >= 0,
+    '守卫未放行 IME 组合期（同装饰钩子口径）');
+  assert.ok(wsrc.indexOf("cm.somethingSelected()") >= 0,
+    '守卫未放行有选区的删除（原生删选区）');
+  assert.match(wsrc, /if \(L > 0 && isBlank\(content\)\) \{[^]*?cm\.replaceRange\('', \{ line: L - 1, ch: prevLen \}, \{ line: L, ch: line\.length \}, '\+wysiwygListKeyGuard'\)/,
+    '空项 Backspace 未整行并入上一行（一次删到上一行）');
+  assert.match(wsrc, /cm\.replaceRange\('', \{ line: L, ch: 0 \}, \{ line: L, ch: zoneEnd \}, '\+wysiwygListKeyGuard'\)/,
+    '有正文项 Backspace 未一次剥离整个隐藏标记');
+  assert.match(wsrc, /cm\.replaceRange\('', \{ line: L, ch: line\.length \}, \{ line: L \+ 1, ch: nzEnd \}, '\+wysiwygListKeyGuard'\)/,
+    'Delete 行尾未剥下一行标记后并接（原生会并出「- 甲- 乙」残骸）');
+});
+
+// 引用行守卫 + 空白点击守卫 + 空引用行/空有序项光标修复（2026-10-31）
+test('引用行 Backspace·Delete 守卫接线 + 字面块放行 + 空白点击守卫（2026-10-31）', () => {
+  const wsrc = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  // QA 实测引用行首 Backspace 不剥 `>` 反误动下方内容；用户截图空引用行裸露 `> `
+  assert.ok(wsrc.indexOf('function quoteMarkerZoneEnd(') >= 0
+    && wsrc.indexOf('quoteMarkerZoneEnd(line)') >= 0 && wsrc.indexOf('quoteMarkerZoneEnd(nextLine)') >= 0,
+    '引用守卫未走共用纯函数 quoteMarkerZoneEnd（口径须与 stripQuotePrefix 同源，禁止散写同义正则）');
+  assert.match(wsrc, /cm\.replaceRange\('', \{ line: L, ch: 0 \}, \{ line: L, ch: qZoneEnd \}, '\+wysiwygQuoteKeyGuard'\)/,
+    '引用行 Backspace 未一次剥离整个 `> ` 前缀（退出引用）');
+  assert.match(wsrc, /cm\.replaceRange\('', \{ line: L, ch: line\.length \}, \{ line: L \+ 1, ch: nqEnd \}, '\+wysiwygQuoteKeyGuard'\)/,
+    'Delete 行尾遇引用行未剥前缀并接（原生会并出「> 甲> 乙」残骸）');
+  assert.match(wsrc, /_wysiwygLineInLiteralBlock\(L\)/,
+    '键守卫未放行字面块（围栏/缩进代码/HTML/frontmatter 行文里的 `- `/`> ` 是内容不是标记）');
+  assert.match(wsrc, /_ensureWysiwygBlankClickGuard\(\) \{/, '缺少 _ensureWysiwygBlankClickGuard');
+  assert.match(wsrc, /this\._ensureWysiwygListKeyGuard\(\);\n        this\._ensureWysiwygBlankClickGuard\(\);/,
+    '_ensureWysiwygBlankClickGuard 未随模式进入接线');
+  // 空引用行 `>` 保持透明（CSS）：blank-cur 类由 syncWysiwygActiveBlock 差分挂/撤
+  assert.ok(wsrc.indexOf('wysiwyg-quote-blank-cur') >= 0, '缺空引用行 blank-cur 类挂/撤逻辑');
+  assert.match(css, /wysiwyg-quote-cursor-line\.wysiwyg-quote-blank-cur span\[class\*="wysiwyg-quote-slot-inner"\] \{[^}]*color: transparent;/,
+    'CSS 缺空引用行 > 透明规则（wysiwyg-quote-blank-cur）');
+  // 空有序项 caret 例外（2026-10-31 用户截图：`1. ` 正文空白时行尾光标不可见）
+  assert.ok(wsrc.indexOf("' wysiwyg-ol-space-empty'") >= 0, '空有序项未挂 ol-space-empty 例外类');
+  assert.match(css, /wysiwyg-ol-space-empty \{[^}]*width: 1px;/,
+    'CSS 缺空有序项槽 1px 例外（零宽槽行尾 caret 无盒可锚）');
+  // 有序二级括号显色（2026-10-31 用户截图：::after 继承 color:transparent →「)」不可见）
+  assert.match(css, /wysiwyg-ol-paren::after \{[^}]*color: var\(--text-primary\);/,
+    'ol 二级括号 ::after 未显式设色（继承透明 →「)」不渲染）');
 });
 
 test('复选框编辑态样式 ≡ 渲染态：小手光标/hover 变色/未勾选 70% 透明度/对勾 5×9 2px（2026-10-15 用户要求）', () => {
@@ -507,10 +559,18 @@ test('复选框编辑态样式 ≡ 渲染态：小手光标/hover 变色/未勾�
   // 小手光标（渲染态 input 为 pointer；整 24px 槽即可点区，对整槽生效）
   assert.match(css, /wysiwyg-task-prefix \{[\s\S]*?cursor: pointer;/,
     '编辑态前缀槽缺 cursor:pointer（与渲染态 input 不一致）');
-  // 未勾选态 opacity 0.7 + 与渲染态同列表同时长的 transition
+  // 未勾选态 opacity 0.7 + 与渲染态**同参**的 transition
+  // （2026-10-25：transition 改成逐属性书写 —— 旧写法 `a, color, ..., box-shadow 0.15s ease`
+  //  只有末项拿到时长，其余按规范是 0s 瞬变，勾选翻转变色其实没有过渡）
   assert.match(css,
-    /wysiwyg-task-prefix::before \{[\s\S]*?opacity: 0\.7;[\s\S]*?transition: background-color, color, border-color, opacity, transform, box-shadow 0\.15s ease;/,
+    /wysiwyg-task-prefix::before \{[\s\S]*?opacity: 0\.7;[\s\S]*?transition: background-color 0\.15s ease, color 0\.15s ease, border-color 0\.15s ease, opacity 0\.15s ease, transform 0\.15s ease, box-shadow 0\.15s ease;/,
     '编辑态 ::before 缺未勾选 0.7 透明度 / 与渲染态同参 transition');
+  // 「同参」用相等断言锁住，而不是两边各写一份字符串常量比对
+  const editorTr = /wysiwyg-task-prefix::before \{[\s\S]*?(transition: [^;]+;)/.exec(css);
+  const previewTr = /\.preview-content li input\[type="checkbox"\] \{[\s\S]*?(transition: [^;]+;)/.exec(css);
+  assert.ok(editorTr && previewTr, '未能提取编辑态 / 渲染态 checkbox 的 transition');
+  assert.strictEqual(editorTr[1], previewTr[1],
+    '编辑态与渲染态 checkbox 的 transition 必须完全同参（列表、时长、缓动都要一致）');
   // hover 边框变成功色（渲染态 input:hover 同口径）
   assert.match(css, /wysiwyg-task-prefix:hover::before \{[^}]*border-color: var\(--color-success\);/,
     '缺编辑态 hover 边框变色（渲染态 input:hover 有）');
@@ -3060,7 +3120,9 @@ test('S82 代码块内输入时闭围栏不闪出灰盒：行号增减即时修�
   // ① 行号增减即时修补：change 钩子算 delta 并调修补（250ms 防抖窗口内灰盒不得按陈旧范围走）
   assert.match(wys, /const delta = c\.text\.length - 1 - \(c\.to\.line - c\.from\.line\);[\s\S]{0,200}?_wysiwygPatchBlockTableForChange\(c, delta\)/,
     'change 钩子缺行号 delta 计算与块表修补（防抖窗口内灰盒按陈旧范围走 → 闭围栏闪出盒）');
-  assert.match(wys, /_wysiwygPatchBlockTableForChange\(c, delta\) \{[\s\S]{0,300}?blk\.start \+= delta;[\s\S]{0,300}?extendEnd/,
+  // 2026-10-24 钳位修复在 start/end 位移后追加了越界钳回与说明注释（~500 字符），
+  // start→extendEnd 的窗口从 300 放宽到 900
+  assert.match(wys, /_wysiwygPatchBlockTableForChange\(c, delta\) \{[\s\S]{0,900}?blk\.start \+= delta;[\s\S]{0,900}?extendEnd/,
     '缺 _wysiwygPatchBlockTableForChange（块表行号修补：后续块位移 + 围栏块 end 扩展）');
   // ② 围栏块 end 扩展边界：变更点在闭围栏行之前、或恰在闭围栏行行首（行首回车的新行属
   // 围栏内容）才扩 end；闭围栏行行尾/行内的新行属块外（含尾部 ``` 下方回车的新行）不扩
@@ -3120,15 +3182,20 @@ test('S83 引用/提示块活动态「渲染分段 + 光标行源码」：非光
   const wys = fs.readFileSync(path.join(ROOT, 'src', 'modules', 'wysiwyg.js'), 'utf8');
   const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
   const driver = fs.readFileSync(path.join(ROOT, 'scripts', 'wysiwyg-browser-check.mjs'), 'utf8');
-  // ① 核心挂载：分段遮罩（上段 [start, cursor) / 下段 (cursor, end]）、清退、幂等判定
+  // ① 核心挂载：分段遮罩（上段 [start, rawS) / 下段 (rawE, end]）、清退、幂等判定
   assert.match(wys, /_wysiwygApplyQuoteSegments\(\) \{/, '缺 _wysiwygApplyQuoteSegments（引用活动态分段遮罩挂载）');
   assert.match(wys, /_wysiwygClearQuoteSegments\(\) \{/, '缺 _wysiwygClearQuoteSegments（分段遮罩清退）');
   // 键含 curLvl（S91 演进：光标行层级变化——弹级/删 >——时 cur/段源未变但 open/deep 类须重挂）
-  assert.match(wys, /_wysiwygSegState\s*=\s*\{ idx, cur, curLvl, topSrc, botSrc \}/, '缺分段幂等状态（idx+cursor+层级+两段源文）');
-  assert.match(wys, /if \(st && st\.idx === idx && st\.cur === cur && st\.curLvl === curLvl && st\.topSrc === topSrc && st\.botSrc === botSrc\) return;/, '缺分段幂等 no-op 判定（范围/层级/源文未变不重挂）');
-  // ② 分段组成与渲染：上段 [b.start, cur)、下段 (cur+1, b.end]；下段合成块首标记行
-  assert.match(wys, /mk\(b\.start, cur, 'wysiwyg-quote-seg-top'\)/, '缺上段挂载（[start, cursor)）');
-  assert.match(wys, /mk\(cur \+ 1, b\.end, 'wysiwyg-quote-seg-bottom'\)/, '缺下段挂载（(cursor, end]）');
+  // 键含 rawS/rawE（S105 演进：多行结构整体保源码 —— 形变,m范围随编辑变化须重挂）
+  assert.match(wys, /_wysiwygSegState\s*=\s*\{ idx, cur, curLvl, rawS, rawE, topSrc, botSrc \}/, '缺分段幂等状态（idx+cursor+层级+源码区+两段源文）');
+  assert.match(wys, /st\.rawS === rawS && st\.rawE === rawE/, '缺分段幂等 no-op 的源码区判定（多行结构范围变化须重挂）');
+  assert.match(wys, /st\.idx === idx && st\.cur === cur && st\.curLvl === curLvl/, '缺分段幂等 no-op 判定（范围/层级/源文未变不重挂）');
+  // ② 分段组成与渲染：上段 [b.start, rawS)、下段 (rawE+1, b.end]；下段合成块首标记行
+  //    ⚠️ 不再写死 rawS=cur —— 光标落在多行原子结构（围栏/缩进代码/表格/公式/HTML/列表）
+  //    内时 raw 区扩到整个结构，否则分段从结构中间劈开 → 渲染破裂（2026-10-28）
+  assert.match(wys, /mk\(b\.start, rawS, 'wysiwyg-quote-seg-top'\)/, '缺上段挂载（[start, rawS)）');
+  assert.match(wys, /mk\(rawE \+ 1, b\.end, 'wysiwyg-quote-seg-bottom'\)/, '缺下段挂载（(rawE, end]）');
+  assert.match(wys, /const ar = quoteAtomicRange\(rawLines, cur - b\.start\);/, '缺多行原子结构区间求解（光标行单点切分会撕裂结构）');
   assert.match(wys, /wysiwyg-quote-seg-bottom' \? markerLine : null/, '缺下段合成标记行（callout 下段渲染成完整 alert）');
   // ②b 分段点击纵比：span+1 半区归一（原 ratio*span 末行只在节点底缘可达，短段下半区
   //     点击全落倒数第二行）
@@ -3186,8 +3253,9 @@ test('S83 引用/提示块活动态「渲染分段 + 光标行源码」：非光
   assert.match(css, /pre\.wysiwyg-quote-line:has\(span\.CodeMirror-widget \.wysiwyg-block-mask\) \{[^}]*background: none;[^}]*padding-top: 0;[^}]*padding-bottom: 0;/, '缺分段载体行零样式规则（段盒背后双背景/边缘内距推盒）');
   assert.match(css, /pre\.wysiwyg-quote-line:has\(span\.CodeMirror-widget \.wysiwyg-block-mask\)::before \{[^}]*display: none;/, '缺分段载体行竖条撤除（与段盒 border-left 重叠）');
   // ⑦e3 引用/提示块光标行撤 CM active-line 底色（codemirror.css #e8f2ff 垫底 → 光标行
-  //     比段盒/渲染盒深一截；app 保留 styleActiveLine，只能按行精确撤）
-  assert.match(css, /\.CodeMirror-linebackground\.CodeMirror-activeline-background:has\(~ pre\.wysiwyg-quote-line\) \{[^}]*background: transparent;/, '缺引用光标行 active-line 底色透明规则（#e8f2ff 垫底色差）');
+  //     比段盒/渲染盒深一截）。2026-10-25 收口为「WYSIWYG 下 active-line 底色一律不画」，
+  //     引用光标行由这条通用规则覆盖（不再有单独的 :has(~ pre.wysiwyg-quote-line) 变体）
+  assert.match(css, /\.editor-container\.wysiwyg-mode \.CodeMirror \.CodeMirror-linebackground\.CodeMirror-activeline-background \{[^}]*background: transparent;/, '缺 WYSIWYG active-line 底色透明规则（#e8f2ff 垫底：引用行色差 / 表格上一行变蓝）');
   // ⑦f 引用/提示块不挂「编辑」按钮（no-btn-qc 补回渲染 blockquote/.alert 16px 底距）
   assert.match(wys, /else if \(this\._wysiwygBlockIsQuote\(b\)\) node\.classList\.add\('wysiwyg-mask-no-btn-qc'\);/, '引用/提示块遮罩未挂 no-btn-qc（编辑按钮未去掉）');
   assert.match(css, /wysiwyg-mask-no-btn-qc > \*:last-child \{ margin-bottom: 16px; \}/, '缺 no-btn-qc 16px 底距补回');
@@ -3445,10 +3513,11 @@ test('S91 引用长行换行留距 + 嵌套弹级渲染修复（2026-10-28 用�
   assert.ok(baseTxt && !/inline-block/.test(baseTxt[0]), 'styles.css 非光标行 .wysiwyg-quote-text 不得 inline-block（会改渲染段几何）');
   // ② 弹级（S87）后 seg 缓存键含光标行层级：层级变化（> > → >）时不再早退留陈旧
   //    seg-open-N/deep 类（实测残留 open-2 → 嵌套盒该闭合处仍敞口、pb/mb/圆角全清、块高 −28px）
-  assert.match(wys, /if \(st && st\.idx === idx && st\.cur === cur && st\.curLvl === curLvl && st\.topSrc === topSrc && st\.botSrc === botSrc\) return;/,
-    'wysiwyg.js 分段幂等键未含 curLvl（弹级/层级变化早退留陈旧 open/deep 类）');
-  assert.match(wys, /this\._wysiwygSegState = \{ idx, cur, curLvl, topSrc, botSrc \};/,
-    'wysiwyg.js _wysiwygSegState 未记录 curLvl');
+  //    （2026-10-28 起幂等键另含 rawS/rawE：多行结构整体保源码后，范围随编辑变化也须重建）
+  assert.match(wys, /if \(st && st\.idx === idx && st\.cur === cur && st\.curLvl === curLvl && st\.rawS === rawS && st\.rawE === rawE/,
+    'wysiwyg.js 分段幂等键未含 curLvl/rawS/rawE（弹级/层级变化早退留陈旧 open/deep 类）');
+  assert.match(wys, /this\._wysiwygSegState = \{ idx, cur, curLvl, rawS, rawE, topSrc, botSrc \};/,
+    'wysiwyg.js _wysiwygSegState 未记录 curLvl/rawS/rawE');
   // ③ 渲染器层级回退（> > c 后 > d）：CommonMark 惰性延续把回退行并进嵌套盒最内层 P
   //    （用户外层输入在渲染态「消失」进嵌套盒 = 反馈②「渲染态展示不出来」）。
   //    修法在 normalizeListIndentation（lineMap 基建所在）：回退行前插目标层级空引用行
@@ -3567,4 +3636,41 @@ test('S98 行内语法 span 边界对齐：驱动回归接线（编辑态 span �
   assert.match(driver, /S98③ `` `a` 尾巴 code 精确落 a（≡ 渲染 `` <code>a<\/code>）/);
   assert.match(driver, /S98④ ```a`` 全字面量（无 code span，≡ 渲染）/);
   assert.match(driver, /S98⑤ 回归行 \*\*粗体\*\* bold span 不变/);
+});
+
+test('S99 WYSIWYG 不画 active-line 蓝底 + 光标色恒定（2026-10-25 用户反馈接线）', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'styles.css'), 'utf8');
+  const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
+  const pure = strip(css);
+
+  // ① 用户反馈「编辑表格时上面一行会变成蓝色」：格编辑期 _applyWysiwygActiveHighlight 按设计
+  //    不给上一块挂灰底，addon 的 #e8f2ff 就独占该行、透在已渲染内容下。收口为「WYSIWYG 下
+  //    active-line 底色一律不画」——编辑指示只由 cm-wysiwyg-active-block 系负责（特异性
+  //    (0,5,1) 高于本条 (0,5,0)，灰底/代码盒不受影响）。
+  assert.match(
+    pure,
+    /\.editor-container\.wysiwyg-mode \.CodeMirror \.CodeMirror-linebackground\.CodeMirror-activeline-background \{\s*background: transparent;\s*\}/,
+    'styles.css 缺「WYSIWYG 撤 active-line 底色」规则（表格上一行会变蓝）',
+  );
+  // 反向约束：不再保留「按行判断才撤底」的 :has 变体（两种口径并存会漏掉新增场景）
+  assert.doesNotMatch(
+    pure,
+    /CodeMirror-activeline-background:has\(/,
+    '不应再有 :has() 条件的 active-line 撤底规则（口径已收口为整类撤掉）',
+  );
+
+  // ② 用户反馈「亮色主题下鼠标变白、白底上看不到」：caret-color 默认 auto → currentColor，
+  //    活动行的隐藏标记 span 自身 color: transparent（列表圆点/任务框/引用槽），光标落进去
+  //    就继承到透明。必须在编辑面写死具体色值（var 在此解析成实色后继承）。
+  assert.match(
+    pure,
+    /\.editor-container\.wysiwyg-mode \.CodeMirror \{\s*caret-color: var\(--text-primary\);\s*\}/,
+    'styles.css 缺 WYSIWYG 光标色规则（caret-color 会继承到隐藏标记的 transparent，光标不可见）',
+  );
+  // 反向约束：不允许再出现把光标显式设成透明的 WYSIWYG 规则
+  assert.doesNotMatch(
+    pure,
+    /\.editor-container\.wysiwyg-mode[^{]*\{[^}]*caret-color: transparent/,
+    'WYSIWYG 编辑面不得把 caret-color 设成 transparent',
+  );
 });

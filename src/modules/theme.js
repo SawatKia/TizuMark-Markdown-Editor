@@ -51,23 +51,53 @@
         } else {
           this.isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
         }
-        document.documentElement.setAttribute('data-theme', this.isDark ? 'dark' : 'light');
+        this._applyThemeToDom();
+        await this.rerenderMermaid();
+      },
+      // 把当前 isDark 落到 DOM / 编辑器 —— 主题生效的**唯一出口**。
+      // 存在的理由：applyThemeMode（按设置算 isDark）与 toggleTheme（翻转 isDark）此前各抄
+      // 一份同样的六步（data-theme / data-color-scheme / 原生 color-scheme / CM 主题 /
+      // 主题图标 / 代码高亮 CSS），2026-10-25 加 color-scheme 时就出现过「只改一处会不一致」
+      // 的风险（点在按钮上切主题与按设置应用走的是两条路径）。收成一处后新增属性只改这里。
+      _applyThemeToDom() {
+        const dark = this.isDark;
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
         document.documentElement.setAttribute('data-color-scheme', this.settings.colorScheme || 'default');
-        this.cm.setOption('theme', this.isDark ? 'material-darker' : 'default');
+        this._syncNativeColorScheme();
+        this.cm.setOption('theme', dark ? 'material-darker' : 'default');
         this.updateThemeIcon();
         const highlightTheme = document.getElementById('highlight-theme');
         if (highlightTheme) {
-          highlightTheme.href = this.isDark
+          highlightTheme.href = dark
             ? 'lib/highlight.js/github-dark.min.css'
             : 'lib/highlight.js/github.min.css';
         }
-        await this.rerenderMermaid();
+      },
+      // 浏览器原生 UI 的用色系（滚动条 / 原生表单控件 / 文本 I 型指针）跟随**应用**主题。
+      // index.html 的 <meta name="color-scheme" content="light dark"> 只是声明「两套都支持」，
+      // 实际用哪套由 UA 按系统的 prefers-color-scheme 决定 —— 应用选亮色、系统却是暗色时，
+      // 原生插入符/指针会按暗色渲染成浅色，在白色正文上几乎看不见（2026-10-25 用户反馈
+      // 「亮色主题、实时预览模式下鼠标显示成白色，白底上看不到」）。显式写 color-scheme
+      // 后 UA 一律按应用当前明暗选原生配色，不再与 OS 主题打架；反方向（暗色应用 + 亮色
+      // 系统）同理，原生元素也不会再是亮色。
+      _syncNativeColorScheme() {
+        try {
+          document.documentElement.style.colorScheme = this.isDark ? 'dark' : 'light';
+        } catch (_) { /* 老内核不支持则保持 meta 默认行为 */ }
       },
       async rerenderMermaid() {
         if (typeof mermaid === 'undefined') return;
         // 主题切换：旧主题的 SVG 缓存失效，清空后让下次 updatePreview / 本函数按新主题重渲染
         this._mermaidCache.clear();
         const gen = ++this._mermaidGeneration;
+
+        // 所见即所得：图表挂在 CM 的块遮罩 widget 里（**不在** #preview），旧实现只重建
+        // #preview 的容器 → WYSIWYG 下切主题图表配色恒定不变（2026-10-24 用户反馈「切换
+        // 暗色、明亮时，图表颜色没有变」）。
+        // 注意两条路径都要跑：#preview 里那份（不可见的）副本同样得换成新主题，否则切回
+        // 阅读模式会直接展示旧配色的 SVG——小文档切模式时 applyViewMode 不会 updatePreview。
+        if (this.viewMode === 'wysiwyg') await this._rerenderWysiwygMermaid(gen);
+
         const containers = this.preview.querySelectorAll('.mermaid-container');
         if (containers.length === 0) return;
   
@@ -108,7 +138,11 @@
           mermaid.initialize({
             startOnLoad: false,
             theme: this.isDark ? 'dark' : 'default',
-            securityLevel: 'loose',
+            // 与首次渲染（preview-post.js）和 WYSIWYG 重渲染（_rerenderWysiwygMermaid）统一用
+            // 'strict'：原先这里单独写成 'loose'，等于「切一次主题就换一套渲染规则」——
+            // 含 HTML 标签的图在切主题后外观会变（宽松模式才解析标签）。导出路径（export.js）
+            // 保持 'loose' 是另一回事：导出要的是完整保真，不参与预览一致性。
+            securityLevel: 'strict',
             fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--font-preview').trim() || '-apple-system, sans-serif',
           });
           // 主题切换重渲染全部图表。一次性 mermaid.run(全部节点) 是同步 CPU 密集任务
@@ -139,6 +173,84 @@
           console.error('Mermaid re-render error:', e);
         }
       },
+      // 所见即所得模式下的图表重渲染（主题切换专用）。
+      // 遮罩内的 .mermaid-container 是 CM line widget 的一部分，不是 #preview 的子节点，
+      // 因此不能走上面「重建 #preview 容器」的路径，只能就地重置后重跑：
+      //   1) 去掉 mermaid 的 data-processed 标记（v11 run() 里 `getAttribute('data-processed')`
+      //      为真就 continue 跳过该节点，不清标记等于什么都不做）；
+      //   2) 清空旧主题 SVG，把源码文本写回容器（run() 以节点 innerHTML 实体解码后作为源码）；
+      //   3) 按新主题 initialize + 分批 run（一次 run 全部是同步 CPU 密集任务，图表多时卡死转圈）；
+      //   4) 渲染成功后回填 mermaidCache，让后续遮罩重建（打字/滚动）直接命中，不重复渲染；
+      //   5) 结束补一次遮罩高度刷新（配色变化不改变尺寸，但主题字体度量可能微变）。
+      // 返回 true = 已处理遮罩内图表；false = 当前没有可重渲染的图表（视口外/未挂遮罩）。
+      // 无论返回值如何，调用方仍需继续处理 #preview 的副本（见 rerenderMermaid 注释）。
+      async _rerenderWysiwygMermaid(gen) {
+        const cm = this.cm;
+        if (!cm || typeof cm.getWrapperElement !== 'function') return false;
+        let containers = [];
+        try {
+          containers = Array.from(cm.getWrapperElement().querySelectorAll('.mermaid-container'));
+        } catch (_) { return false; }
+
+        // 光标所在块是「源码态」（未挂遮罩），其中没有容器；其余块图表都在。
+        // 视口外（虚拟模式）未挂遮罩的块同样查不到容器——缓存已清空，等它们挂载时
+        // 会由 processMermaid 按新主题渲染，无需在此处理。
+        const prepared = [];
+        for (const c of containers) {
+          const code = c.getAttribute('data-code');
+          if (!code) continue;
+          c.removeAttribute('data-processed');
+          c.innerHTML = '';
+          c.textContent = code;
+          prepared.push({ el: c, code });
+        }
+        if (prepared.length === 0) return false;
+
+        const themeKey = this.isDark ? 'dark' : 'light';
+        try {
+          mermaid.initialize({
+            startOnLoad: false,
+            theme: this.isDark ? 'dark' : 'default',
+            // 与首次渲染（PreviewPost.processMermaid）同一安全等级：重渲染不降级
+            securityLevel: 'strict',
+            fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--font-preview').trim() || '-apple-system, sans-serif',
+          });
+        } catch (e) {
+          console.error('Mermaid re-render error:', e);
+          return true;
+        }
+
+        const BATCH = 2;
+        const showLoading = prepared.length > 6;
+        if (showLoading) this._beginPaneLoad();
+        try {
+          for (let i = 0; i < prepared.length; i += BATCH) {
+            if (this._mermaidGeneration !== gen) return true; // 中途又切主题，放弃本次
+            // 每批渲染前让出主线程一帧：run 是同步 CPU 密集，若首批立即执行，
+            // 转圈动画帧会被阻塞（表现为"点完停顿一下才开始转"）
+            await new Promise((r) => requestAnimationFrame(r));
+            const batch = prepared.slice(i, i + BATCH);
+            try {
+              await mermaid.run({ nodes: batch.map((x) => x.el) });
+            } catch (e) {
+              console.error('Mermaid re-render error:', e);
+            }
+            // 回填缓存（仅含 SVG 的成功结果；键格式与 processMermaid 完全一致）
+            if (this._mermaidCache) {
+              for (const { el, code } of batch) {
+                if (el.isConnected && el.querySelector('svg')) {
+                  this._mermaidCache.set(themeKey + '::' + code, el.innerHTML);
+                }
+              }
+            }
+          }
+        } finally {
+          if (showLoading) this._endPaneLoad();
+          // 图表高度可能微变：重测行高并补偿滚动（内部含表格格编辑期间的延后处理）
+          try { if (this._wysiwygRefreshAfterMaskChange) this._wysiwygRefreshAfterMaskChange(); } catch (_) {}
+        }
+        return true;
+      },
       async toggleTheme() {
         // 复用启动 loading（logo + 进度条 + 文字）作全局遮罩。平滑策略：
         //  1) 先把遮罩背景/文字固定为【切换前】主题色（inline style）——切换瞬间 var(--bg-primary)
@@ -156,26 +268,14 @@
         const showTime = Date.now();
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         try {
-          if (this.settings.themeMode !== 'light' && this.settings.themeMode !== 'dark') {
-            this.settings.themeMode = this.isDark ? 'light' : 'dark';
-            if (this._selects && this._selects.themeMode) this._selects.themeMode.setValue(this.settings.themeMode, true);
-          }
+          // 「系统跟随」模式不需要先按旧 isDark 算一遍 themeMode：紧随其后的赋值会按**翻转后**
+          // 的 isDark 无条件重写，两者结果恒等（旧实现是把同一个值写两遍、setValue 也调两次）。
           this.isDark = !this.isDark;
           this.settings.themeMode = this.isDark ? 'dark' : 'light';
           if (this._selects && this._selects.themeMode) this._selects.themeMode.setValue(this.settings.themeMode, true);
           this.saveSettings();
-          document.documentElement.setAttribute('data-theme', this.isDark ? 'dark' : 'light');
-          document.documentElement.setAttribute('data-color-scheme', this.settings.colorScheme || 'default');
-          this.cm.setOption('theme', this.isDark ? 'material-darker' : 'default');
-          this.updateThemeIcon();
-  
-          const highlightTheme = document.getElementById('highlight-theme');
-          if (highlightTheme) {
-            highlightTheme.href = this.isDark
-              ? 'lib/highlight.js/github-dark.min.css'
-              : 'lib/highlight.js/github.min.css';
-          }
-  
+          this._applyThemeToDom();
+
           await this.rerenderMermaid();
         } finally {
           // 最小显示时长：图表少/切换很快时遮罩也不一闪而过，保证用户能看清 loading 界面

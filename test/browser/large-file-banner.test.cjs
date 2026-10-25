@@ -40,9 +40,12 @@ const puppeteer = require('puppeteer-core');
   });
   const page = await browser.newPage();
   let failed = 0;
+  // 输出格式与 test/browser/outline-jump、scroll-sync-headless 保持一致（`✅ PASS` / `❌ FAIL`）：
+  // scripts/run-tests.cjs 的 runBrowserOne() 正是靠这两个标记统计「通过/失败」条数，
+  // 用自创的 `✓/✗` 会让汇总里显示成 0/0（实际在跑，失败只靠 exit code 兜住），覆盖数被低估。
   const assert = (name, cond) => {
-    if (cond) { console.log('  ✓ ' + name); }
-    else { console.log('  ✗ ' + name); failed++; }
+    if (cond) { console.log('  ✅ PASS  ' + name); }
+    else { console.log('  ❌ FAIL  ' + name); failed++; }
   };
 
   try {

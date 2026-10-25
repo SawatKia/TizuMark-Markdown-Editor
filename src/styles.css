@@ -758,7 +758,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
   flex-shrink: 0;
 }
 
@@ -782,13 +782,25 @@ body {
   color: var(--accent-text) !important;
 }
 
+/* 分段控件（浅色指示器方案 A）：轨道用 --bg-primary 做「白色胶囊」，
+   轮廓由它与 --bg-toolbar 的明度差界定，不再描边。9 套主题实测 --bg-primary
+   恒比 --bg-toolbar 亮一档（浅色）/ 暗一档（深色），去边框不会丢轮廓。
+   与工具栏上下横线留空隙：轨道总高 22px，工具栏内容区 29px（height 30 - 1px
+   分隔线），flex 居中后上下各余 3.5px。改 padding / 行高会连带改变间隙。 */
 .view-mode-tabs {
   display: flex;
   background-color: var(--bg-primary);
-  border: 1px solid var(--border-color);
+  border: none;
   border-radius: 20px;
-  padding: 3px;
-  gap: 0;
+  padding: 2px;
+  /* 项间距交给 flex gap（原为容器 gap:0 + 相邻项 margin-left:2px 的等价写法，
+     两处维护同一个数值没必要） */
+  gap: 2px;
+  /* 发丝内环用 inset box-shadow 而不是 border：box-shadow 不参与布局，
+     所以在补上「机加工边」的同时不会吃掉上面算好的 3.5px 空隙。
+     颜色取 --text-primary 低透明度 —— 浅色主题是暗边、深色主题是亮边，
+     一套写法在两种主题下都成立（不用为深色再开一条规则）。 */
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 8%, transparent);
 }
 
 .view-mode-tab {
@@ -796,12 +808,19 @@ body {
   align-items: center;
   gap: 4px;
   padding: 2px 14px;
+  /* 行高锁 1：不锁的话文字行盒随 --ui-font-size 膨胀（界面字号 15px 时行盒 19px、
+     18px 时 26px），胶囊会重新顶满 30px 工具栏甚至被 .toolbar-center 的 overflow
+     裁掉。锁 1 后内容高恒为 max(图标 14, 字号)，胶囊总高 22~25px，各字号下都留有空隙。 */
+  line-height: 1;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   font-size: calc(var(--ui-font-size) * 0.9231);
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.2s ease;
+  /* 每个属性都要写自己的时长：写成 `transition: background-color, color, ... 0.2s`
+     时只有最后一项拿到 0.2s，其余按规范是 0s —— 实测 background-color/color 均为 0s，
+     切模式是瞬变、没有过渡。 */
+  transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
   border-radius: 16px;
   -webkit-app-region: no-drag;
 }
@@ -813,16 +832,30 @@ body {
 
 .view-mode-tab:hover {
   color: var(--text-primary);
+  background-color: var(--bg-hover);
 }
 
+/* 选中项用「主题色淡底 + 主题色文字」而不是实心填充：模式切换不是主操作，
+   实心色块在深色主题下会成为全窗口最亮的一块，抢正文的视觉重心。 */
 .view-mode-tab.active {
-  background-color: var(--accent-color);
-  color: var(--accent-text);
-  box-shadow: 0 1px 4px var(--accent-muted);
+  background-color: var(--accent-muted);
+  color: var(--accent-color);
+  /* 主题色发丝内环 + 主题自带的一档微投影：选中格看起来像嵌进轨道里的一小片玻璃。
+     环用 inset box-shadow —— 不参与布局，不会撑动胶囊尺寸；--shadow-sm 浅色是
+     rgba(0,0,0,.04)、深色是 .18，同一个写法两套主题都成立。
+     与 :focus-visible（2px outline + 2px offset，画在外面）形态不同，不会被误读成焦点环。 */
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent-color) 28%, transparent),
+    var(--shadow-sm);
+  /* 不用 font-weight: 500 加粗选中项 —— 字重变化会改字宽，切换时整个胶囊会跟着跳动。
+     text-shadow 只让笔画外扩 0.3px，观感更实、度量不变（零位移）。 */
+  text-shadow: 0 0 0.3px currentColor;
 }
 
-.view-mode-tab + .view-mode-tab {
-  margin-left: 2px;
+/* 选中项 hover 维持淡底，避免落到上面那条 --bg-hover 灰底上（语义变成「未选中」） */
+.view-mode-tab.active:hover {
+  background-color: var(--accent-muted);
+  color: var(--accent-color);
 }
 
 /* 所见即所得全量预渲染中：图标换成 spinner，文案换「渲染中」（JS 切换类 + 文本） */
@@ -924,7 +957,7 @@ body {
   font-size: calc(var(--ui-font-size) * 0.9231);
   color: var(--text-primary);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .dropdown-item .icon {
@@ -941,7 +974,7 @@ body {
   font-size: calc(var(--ui-font-size) * 0.9231);
   color: var(--text-primary);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.12s ease;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
   white-space: nowrap;
 }
 
@@ -1439,7 +1472,7 @@ body {
   max-width: 180px;
   flex-shrink: 0;
   overflow: hidden;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.2s ease;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
   -webkit-app-region: no-drag;
   position: relative;
   border-bottom: 2px solid transparent;
@@ -1670,7 +1703,7 @@ body {
   font-size: calc(var(--ui-font-size) * 0.8462);
   cursor: pointer;
   white-space: nowrap;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .find-btn:hover { background: var(--border-color); }
@@ -1979,7 +2012,7 @@ body.is-resizing .side-btn {
   justify-content: center;
   gap: 5px;
   box-shadow: var(--shadow-sm);
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 100;
 }
 
@@ -2264,7 +2297,7 @@ body.is-resizing .side-btn {
   position: relative;
   top: -1px;
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 .preview-content li input[type="checkbox"]:hover {
   border-color: var(--color-success);
@@ -3306,6 +3339,14 @@ body.is-resizing .side-btn {
   width: 0;
   white-space: nowrap;
 }
+/* 空有序项例外（2026-10-31 用户截图：`1. ` 正文空白时行尾 caret 无盒可锚，rect 0×0
+   → 光标不可见）：空项无正文可对齐，槽给 1px 恢复 caret 盒。仅空项挂 wysiwyg-ol-space-empty
+   （wysiwyg.js 装饰处判定），输入首字符后装饰重算 span 重建自动回落零宽。
+   ⚠️ 不能全局加宽：2026-10-17 曾全局 1px（IME 竖排排查，根治在 marker nowrap），
+   会把非空项正文推右 1px、破坏「正文紧贴 24px 槽右缘」的 S51 像素口径。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-ol-space-empty {
+  width: 1px;
+}
 /* WYSIWYG 列表活动行的块级排版（2026-10-15 用户反馈：编辑态比渲染态「变小、变密、
    缩进不同」）。行类 wysiwyg-plain-text 已给同字号（16px）/行高（1.7），实测差异只剩
    渲染态 ol/ul 的两个块级参数：
@@ -3398,6 +3439,10 @@ body.is-resizing .side-btn {
   position: absolute;
   left: -9.228px;
   top: 0;
+  /* ::after 继承 span 本身的 color:transparent →「)」不可见（2026-10-31 用户截图：
+     二级有序项只显示数字不显示括号）。渲染态 paren-decimal marker 色 = li 文字色，
+     显式给主色同相。 */
+  color: var(--text-primary);
 }
 /* ul 嵌套 marker：渲染 list-style-type 虽按层变（L1 disc / L2 circle / L3 square /
    L4+ disc），但本机 Edge 154（=app WebView2 同引擎）@16px 下三者墨迹均为
@@ -3602,7 +3647,7 @@ body.is-resizing .side-btn {
      同列表同时长——hover/勾选翻转变色同样 0.15s 过渡（2026-10-15 用户要求：勾选框勾选
      前后样式与渲染态完全一致）。 */
   opacity: 0.7;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 /* hover：与渲染态 input:hover 同口径——边框变成功色（整 24px 槽即可点击区，故整槽 hover） */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-task-prefix:hover::before {
@@ -4296,17 +4341,31 @@ body.is-resizing .side-btn {
 .editor-container.wysiwyg-mode .CodeMirror pre.wysiwyg-quote-line:has(span.CodeMirror-widget .wysiwyg-block-mask)::before {
   display: none;
 }
-/* 引用/提示块光标行撤 CM active-line 底色（2026-10-25 用户「直接与渲染态样式完全一致」）：
-   app 保留 styleActiveLine（editor-core L172；光标行底色 codemirror.css #e8f2ff + 失步守卫
-   仍依赖 addon 本体，见 wysiwyg.js「光标行类改挂 pre」注释）。#e8f2ff 不透明底色垫在光标
-   pre 背景（--qc-bg/accent-subtle）之下 → 光标行比上下段盒/渲染盒深一截的色差（实测
-   (218,231,254) vs 盒 (240,244,254)）。引用块光标行底色即渲染盒本貌，再垫 #e8f2ff 属
-   规则叠加 → 该行 active-line 背景透明（仅引用光标行：光标行 DOM 为
-   div.CodeMirror-activeline > [linebackground, 0 宽 gutter-background, pre]——pre 是
-   linebackground 的后续兄弟（中间隔着 gutter 垫底 div），须用 ~ 而非 + 命中；
-   非引用行 active-line 底色不受影响）。 */
-.editor-container.wysiwyg-mode .CodeMirror .CodeMirror-linebackground.CodeMirror-activeline-background:has(~ pre.wysiwyg-quote-line) {
+/* WYSIWYG 里 CM 的 active-line 底色（codemirror.css:145 `#e8f2ff`）一律不画。
+   编辑中那一行的指示由 JS 挂在**同一个** linebackground 元素上的 cm-wysiwyg-active-block
+   （灰 --code-bg / 代码盒 / 折叠盒 ::before）负责，蓝底纯属叠加；而 addon 是按「CM 光标行」
+   挂的，与「这行此刻是否真在编辑」并不一一对应，于是蓝底会跑到不该出现的行上：
+     · 光标停在某块 → 该块被重新上遮罩（点表格格触发 _wysiwygReMaskActiveForCellEdit 重遮
+       上一块，且 _applyWysiwygActiveHighlight 在格编辑期按设计不挂灰底）→ 该行只剩蓝底，
+       透在已渲染的标题/段落下面 = 用户反馈「编辑表格时上面一行会变成蓝色」；
+     · 格编辑提交后光标归位的瞬间，活动块表尚未跟上 → 同样只剩蓝底（灰底下一拍才回来）；
+     · 引用/提示块光标行原本要单独撤底（#e8f2ff 垫在 --qc-bg 下形成色差），一并由本条覆盖。
+   灰底不受影响：cm-wysiwyg-active-block / cm-wysiwyg-code-box 那些选择器多一个元素选择器
+   div，特异性 (0,5,1) 高于本条 (0,5,0)，照样赢。
+   只撤底色、不动 addon 本体 —— 同步逻辑仍靠 state.activeLines 做遮罩失步守卫。 */
+.editor-container.wysiwyg-mode .CodeMirror .CodeMirror-linebackground.CodeMirror-activeline-background {
   background: transparent;
+}
+
+/* WYSIWYG 光标（I 型插入符）颜色：caret-color 是继承属性，默认 auto = currentColor。
+   活动块的「隐藏标记」span 自身 color: transparent（渲染符号由 ::before 另画：列表圆点 `- `、
+   任务框 `[x] `、引用 `> ` 槽等），光标一落进这些字符就继承到透明 —— 真机实测 ul 行 ch0、
+   task 行 ch0~ch4 的 computed caret-color 都是 rgba(0,0,0,0)，即「光标看不见」
+   （2026-10-25 用户反馈「亮色主题下鼠标变白，白色背景上看不到」）。
+   在这里写死具体颜色：var 在 .CodeMirror 上解析成实色后再继承，后代只会继承结果，
+   隐藏标记再透明也影响不到光标。取 --text-primary，明暗两套主题自动对底色反色。 */
+.editor-container.wysiwyg-mode .CodeMirror {
+  caret-color: var(--text-primary);
 }
 
 /* callout 光标行（.wysiwyg-callout-cursor-line + .wysiwyg-callout-{type}，仅光标行挂；
@@ -4469,6 +4528,13 @@ body.is-resizing .side-btn {
    slot-inner，行为不变。特异性与上方透明规则同级、顺序在后 → 稳赢。 */
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text.wysiwyg-quote-cursor-line span[class*="wysiwyg-quote-slot-inner"] {
   color: var(--text-secondary);
+}
+/* 空引用行（2026-10-31 用户截图：光标行内容剥掉 `> ` 后为空白——如引用末尾回车出的
+   空引用行——裸露 `> ` 像破了一样）：> 字符保持透明，空引用行 = 空段落 + 左竖条，
+   与渲染态空 blockquote 一致。类由 syncWysiwygActiveBlock 差分挂/撤（输入首字符即撤）。
+   特异性 (0,7,1) 压过上方光标行显色规则 (0,6,1)。 */
+.editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text.wysiwyg-quote-cursor-line.wysiwyg-quote-blank-cur span[class*="wysiwyg-quote-slot-inner"] {
+  color: transparent;
 }
 .editor-container.wysiwyg-mode .CodeMirror .wysiwyg-plain-text span[class*="wysiwyg-heading-hash"] {
   color: var(--text-secondary);
@@ -5718,7 +5784,7 @@ body.tree-dragging {
   font-size: calc(var(--ui-font-size) * 0.9231);
   color: var(--text-primary);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.12s ease;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
   white-space: nowrap;
 }
 
@@ -5960,7 +6026,7 @@ body.tree-dragging {
   color: var(--text-primary);
   font-size: calc(var(--ui-font-size) * 0.9231);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .dialog-btn:hover {
@@ -7233,7 +7299,7 @@ select option {
   align-items: center;
   justify-content: space-between;
   padding: 6px 14px;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .shortcut-row:hover {
@@ -7280,7 +7346,7 @@ select option {
   background: var(--bg-primary);
   color: var(--text-primary);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 
 .shortcut-record-btn:hover {
@@ -7308,7 +7374,7 @@ select option {
   background: var(--bg-primary);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background-color, color, border-color, opacity, transform, box-shadow 0.15s;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 
 .shortcut-clear-btn:hover {
@@ -7486,8 +7552,10 @@ select option {
   .view-mode-tab span {
     display: none;
   }
+  /* 只显示图标时内容高 14px：垂直内边距保持与正文态一致的「胶囊不贴横线」口径
+     （4px 会让胶囊重新顶满工具栏，见 .view-mode-tabs 注释） */
   .view-mode-tab {
-    padding: 4px 10px;
+    padding: 2px 10px;
   }
 }
 
@@ -7502,7 +7570,7 @@ select option {
     display: none;
   }
   .view-mode-tab {
-    padding: 4px 8px;
+    padding: 2px 8px;
   }
   .dropdown-arrow {
     display: none;
@@ -8036,6 +8104,12 @@ select option {
 }
 .settings-row input[type="range"]::-webkit-slider-thumb:hover {
   transform: scale(1.2);
+}
+/* 按压反馈：hover 时圆点放大到 1.2，按下后要「收一点」才有触感 —— 滑块可点的只有这个
+   14px 圆点，拖动全程若一直停在 1.2，用户分不清「已按住」和「只是悬停」。
+   1.1 落在默认 1 与 hover 1.2 之间，按下是可感知的回缩，松手回 1.2 再回 1。 */
+.settings-row input[type="range"]::-webkit-slider-thumb:active {
+  transform: scale(1.1);
 }
 .settings-row .range-label {
   min-width: 32px;

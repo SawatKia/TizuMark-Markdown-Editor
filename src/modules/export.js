@@ -9,9 +9,12 @@
       // 导出时把预览里的图片全部内联为 base64 data URI，使导出文档自包含、不受运行时
       // blob: 回收 / 源解析影响（同源 srcdoc 打印帧在 PDF 导出、外部打开在 HTML 导出都适用）。
       // 分支：blob:→fetch 还原；file://→Rust 读盘；相对路径→按文档目录 Rust 读盘；data:/http(s): 保留。
+      //
+      // 2026-10-25：未保存文档（无 filePath）不再整体早退 —— blob:/http(s): 两条分支不依赖
+      // 文档目录，照样要内联。长图（SVG foreignObject）尤其需要：SVG-as-image 无法访问 blob:，
+      // 留着原 url 的图片在成图里就是空白。只有「相对路径」分支确实需要 dir，那里单独判断。
       async _inlineImagesForExport(clone, filePath) {
-        if (!filePath) return; // 未保存文档：相对路径无法解析，跳过（保留原 src）
-        const dir = filePath.replace(/[/\\][^/\\]*$/, '');
+        const dir = filePath ? filePath.replace(/[/\\][^/\\]*$/, '') : '';
         const mimeOfExt = (name) => {
           const ext = String(name).split('.').pop().toLowerCase();
           if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
@@ -69,10 +72,14 @@
               const base64 = await TauriApi.fetchImageAsBase64({ url });
               dataUri = `data:${mimeOfExt(url)};base64,${base64}`;
             } else {
-              // 纯相对路径：按当前 .md 所在目录补全
+              // 纯相对路径：按当前 .md 所在目录补全。
+              // 未保存文档（无 filePath）没有目录可解析 —— 保留原 src 即可，不能拼出
+              // '/images/a.png' 这种绝对路径去读盘（会读不到，且把 src 改写成 base64,null）。
+              if (!dir) return;
               let rel = src;
               if (rel.startsWith('/')) rel = rel.slice(1);
               const base64 = await TauriApi.fetchImageAsBase64({ url: dir + '/' + rel });
+              if (!base64) return;
               dataUri = `data:${mimeOfExt(rel)};base64,${base64}`;
             }
             if (dataUri) img.src = dataUri;
@@ -200,6 +207,131 @@
         ${p}.mermaid-container { overflow: visible !important; }
         ${p}.katex-display-wrapper, ${p}.math-display, ${p}.katex-display { overflow: visible !important; }
         ${p}.md2-error pre { overflow: visible !important; }`;
+      },
+      // ---------- 导出公共：样式采集 / MathML 去重 / 遮罩 ----------
+      //
+      // 样式采集铁律：导出帧要的样式一律从「主文档已加载的样式表」按 CSSOM 直读，不走网络。
+      // 原实现用裸 fetch('lib/katex/katex.min.css')，失败时是**静默**的（catch 吞掉 → 空串），
+      // 后果在用户侧表现为两类看似无关的现象：
+      //   · 导出帧缺 katex 样式 → .katex-mathml 副本不再被 clip-path 隐藏 → 公式后面平铺出
+      //     第二份纯文本（a²+b²=c² 紧跟 a2 + b2 = c2），且公式自身排版退化；
+      //   · 导出帧缺 hljs 样式 → 代码块 token 全黑，等于高亮尽失。
+      // 而 fetch 在自定义协议、打包路径差异、离线等场景都有失败面；CSSOM 直读只依赖
+      // 「页面已正常渲染」这一个前提 —— 预览本身能着色，导出的帧就一定能着色。
+      // matchFn 收到小写 href，返回该样式表全文；读不到规则（跨域/未加载）时继续找下一张。
+      _exportStyleFromLink(matchFn) {
+        const links = Array.from(document.querySelectorAll('link[rel="stylesheet"]'));
+        for (const link of links) {
+          const href = link.getAttribute('href') || '';
+          if (!matchFn(href.toLowerCase())) continue;
+          const sheet = link.sheet;
+          if (!sheet) continue;
+          try {
+            const rules = Array.from(sheet.cssRules).map((r) => r.cssText);
+            if (rules.length) return { css: rules.join('\n'), base: link.href || '' };
+          } catch (_e) { /* 跨域 / 未加载完：换下一张 */ }
+        }
+        return { css: '', base: '' };
+      },
+      // 把 CSS 里相对的 url() 按样式表自身位置补成绝对地址。
+      // KaTeX 的字体写作 url(fonts/KaTeX_*.woff2)；以文本形式注入导出帧 / foreignObject 后，
+      // 这些相对路径会按**宿主文档**解析（→ 404），公式字形退化成 Times New Roman。
+      _absolutizeCssUrls(css, baseHref) {
+        if (!css || !baseHref) return css;
+        return css.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g, (m, _q, u) => {
+          if (/^(data:|blob:|https?:|file:|about:|\/\/)/i.test(u)) return m;
+          try { return `url("${new URL(u, baseHref).href}")`; } catch (_e) { return m; }
+        });
+      },
+      // 把 CSS 里的字体文件 url() 内联为 data URI（只处理字体扩展名）。
+      // 长图走 SVG-as-image，属受限环境，**不能加载任何外部资源**：KaTeX 的 woff2 若不内联，
+      // 成图里公式字形会整体退化成 Times New Roman（与阅读模式肉眼可辨）。
+      // 只内联 woff2 —— 它是 Chromium 必然支持的格式，且 KaTeX 每个 @font-face 都以它打头；
+      // woff/ttf 备选项保留原 url（浏览器不会去取），避免把 1.2MB 字体目录全部塞进 SVG。
+      async _inlineCssFonts(css, baseHref) {
+        if (!css || !baseHref) return css;
+        const re = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
+        const targets = new Set();
+        let m;
+        while ((m = re.exec(css))) {
+          const u = m[2];
+          if (/^data:/i.test(u)) continue;
+          if (!/\.woff2(\?|$)/i.test(u)) continue;
+          targets.add(u);
+        }
+        if (!targets.size) return css;
+        const map = new Map();
+        await Promise.all(Array.from(targets).map(async (u) => {
+          try {
+            const abs = new URL(u, baseHref).href;
+            const resp = await fetch(abs);
+            if (!resp.ok) return;
+            const blob = await resp.blob();
+            const dataUri = await new Promise((res, rej) => {
+              const fr = new FileReader();
+              fr.onload = () => res(fr.result);
+              fr.onerror = () => rej(fr.error || new Error('readAsDataURL failed'));
+              fr.readAsDataURL(blob);
+            });
+            map.set(u, dataUri);
+          } catch (_e) { /* 单个字体失败不阻断：保留原 url，字形可能退化 */ }
+        }));
+        return css.replace(re, (mm, _q, u) => (map.has(u) ? `url("${map.get(u)}")` : mm));
+      },
+      // 等容器内图片解码完（宽度/高度参与度量，未加载完会量出偏小的高度把图截断）。
+      // 失败/超时都放行：宁可尺寸略偏，不能把导出卡死。
+      async _waitImagesReady(root, timeoutMs = 8000) {
+        const pending = Array.from(root.querySelectorAll('img')).filter((i) => !i.complete || !i.naturalWidth);
+        if (!pending.length) return;
+        await Promise.all(pending.map((i) => new Promise((resolve) => {
+          const done = () => resolve();
+          i.addEventListener('load', done, { once: true });
+          i.addEventListener('error', done, { once: true });
+          setTimeout(done, timeoutMs);
+        })));
+      },
+      // 导出帧不需要 KaTeX 的 MathML 副本：它只是给屏幕阅读器/复制用的等价描述，
+      // 视觉层完全由 .katex-html 负责，平时靠 CSS 的 clip-path: inset(50%) 隐藏。
+      // 「靠 CSS 隐藏」在导出链路上有两处会破：① 样式表采集失败（见上面 _exportStyleFromLink）；
+      // ② 栅格化 / 打印后端对 clip-path 的处理与屏幕不一致（长图走 canvas 尤其如此）。
+      // 一旦破了，MathML 就按文本流铺开 —— 读者看到的就是 a²+b²=c² 后面又跟一遍 a2 + b2 = c2。
+      // 故导出前直接从 clone 里摘掉，不再依赖任何 CSS 行为。
+      //
+      // 边界：DOCX 导出（export-docx.js）正是从 .katex-mathml 的 <math> 取源转 OMML 的，
+      // 绝不能移除；它走独立流程、读的是 live preview，与这里的 clone 互不影响。
+      _stripKatexMathml(clone) {
+        if (!clone || !clone.querySelectorAll) return clone;
+        clone.querySelectorAll('.katex-mathml').forEach((el) => el.remove());
+        return clone;
+      },
+      // 导出遮罩：长图 / HTML / PDF 三条链路共用。三处都自己拼 overlay 会各写一套 z-index
+      // 与样式；统一在这里，且由调用方 finally 保证移除（导出失败/取消同样收干净）。
+      _showExportOverlay(text) {
+        this._hideExportOverlay();
+        const overlay = document.createElement('div');
+        overlay.id = 'tm-export-overlay';
+        overlay.setAttribute('role', 'status');
+        overlay.innerHTML = '<div class="tm-export-spinner"></div><div class="tm-export-text"></div>';
+        overlay.querySelector('.tm-export-text').textContent = text || '';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:10001;display:flex;flex-direction:column;'
+          + 'align-items:center;justify-content:center;background:rgba(0,0,0,0.32);cursor:progress;';
+        if (!document.getElementById('tm-export-overlay-style')) {
+          const s = document.createElement('style');
+          s.id = 'tm-export-overlay-style';
+          s.textContent = '.tm-export-spinner{width:34px;height:34px;border:3px solid rgba(255,255,255,0.28);'
+            + 'border-top-color:#fff;border-radius:50%;animation:tm-export-spin .7s linear infinite;margin-bottom:12px;}'
+            + '@keyframes tm-export-spin{to{transform:rotate(360deg)}}'
+            + '.tm-export-text{color:#fff;font-size:14px;letter-spacing:.4px;}';
+          document.head.appendChild(s);
+        }
+        document.body.appendChild(overlay);
+        // 强制一次样式计算，确保遮罩在后续同步重活（Mermaid 渲染 / canvas 绘制）前已经上屏
+        overlay.offsetHeight;
+        return overlay;
+      },
+      _hideExportOverlay() {
+        const old = document.getElementById('tm-export-overlay');
+        if (old && old.parentNode) old.parentNode.removeChild(old);
       },
       // 裁剪 canvas 四周空白/透明/背景色边距，仅保留有内容的区域。
       // backgroundColor 为 null 时只裁剪完全透明像素；传入 {r,g,b} 时按颜色裁剪（容差 15）。
@@ -666,7 +798,21 @@
           katex.replaceWith(span);
         }
       },
+      // 导出 HTML。
+      //
+      // 2026-10-25 重做（用户反馈：导出 HTML 与阅读模式不一致 / 公式出现第二份纯文本 /
+      // 代码高亮丢失）。三个根因：
+      //   1) 原来用的是手写的 _documentExportCSS()，与 styles.css 的阅读样式是两套平行实现，
+      //      必然漂移（同一份文档在阅读模式和导出 HTML 里长得不一样）；
+      //   2) katex / hljs 样式走裸 fetch，失败即静默为空 → MathML 副本暴露、token 无色；
+      //   3) body 里直接铺 clone.innerHTML，丢掉了 .preview-content 这个作用域根，
+      //      而 styles.css 的阅读样式几乎全是 `.preview-content xxx` 后代选择器 —— 等于全部失效。
+      // 现在：样式一律 CSSOM 直读完整 styles.css（含 :root 主题变量）+ 绝对化字体 url，
+      // body 保留 .preview-content 容器与原 class（code-line-numbers 等状态类一并继承），
+      // 只为「独立文档没有应用外壳」这一事实补少量修正。
+      // DOCX 不走本方法（exportWord → export-docx.js），导出逻辑与样式均不受影响。
       async exportHTML() {
+        let overlayOn = false;
         try {
           const path = await dialogSave({
             defaultPath: this.activeTab.filePath
@@ -675,6 +821,11 @@
             filters: [{ name: 'HTML', extensions: ['html'] }]
           });
           if (!path) return;
+  
+          overlayOn = true;
+          this._showExportOverlay(this.t('exportingHTML'));
+          // 让遮罩先上屏，再开始图片内联/样式序列化这类同步重活
+          await new Promise(r => requestAnimationFrame(r));
   
           const clone = this.preview.cloneNode(true);
           clone.style.position = '';
@@ -688,37 +839,63 @@
           clone.querySelectorAll('.copy-btn').forEach(el => el.remove());
           const abbrData = clone.querySelector('#abbr-data');
           if (abbrData) abbrData.remove();
+          // 摘掉 KaTeX 的 MathML 副本（不依赖 clip-path 隐藏，详见 _stripKatexMathml）
+          this._stripKatexMathml(clone);
   
           await this._inlineImagesForExport(clone, this.activeTab.filePath);
   
-          let katexCSS = '';
-          try {
-            const resp = await fetch('lib/katex/katex.min.css');
-            if (resp.ok) katexCSS = await resp.text();
-          } catch (e) { /* skip */ }
+          // 样式：CSSOM 直读（应用样式 + KaTeX + 当前高亮主题），字体 url 绝对化
+          const appSheet = this._exportStyleFromLink((h) => /(^|\/)styles\.css(\?|$)/.test(h));
+          const katexSheet = this._exportStyleFromLink((h) => /katex/.test(h) && /\.css(\?|$)/.test(h));
+          const hljsThemeEl = document.getElementById('highlight-theme');
+          const hljsHref = ((hljsThemeEl && hljsThemeEl.getAttribute('href')) || '').toLowerCase();
+          const hljsSheet = this._exportStyleFromLink((h) => (hljsHref
+            ? h.endsWith(hljsHref)
+            : /highlight|hljs|github/.test(h)));
   
-          let hljsCSS = '';
-          try {
-            const themeLink = document.getElementById('highlight-theme');
-            if (themeLink) {
-              const resp = await fetch(themeLink.getAttribute('href'));
-              if (resp.ok) hljsCSS = await resp.text();
-            }
-          } catch (e) { /* skip */ }
+          const appCSS = this._absolutizeCssUrls(appSheet.css, appSheet.base);
+          // KaTeX 字体必须内联：导出的 HTML 是要被搬走的独立文件，写成 http/file 绝对地址
+          // 换台机器/换个目录就取不到，公式字形会退化成 Times（实测 file:// 打开即如此）。
+          const katexCSS = this._absolutizeCssUrls(await this._inlineCssFonts(katexSheet.css, katexSheet.base), katexSheet.base);
+          const hljsCSS = this._absolutizeCssUrls(hljsSheet.css, hljsSheet.base);
+  
+          // 自定义预览字体的 @font-face（base64 内联）由 #custom-fonts-style 持有，导出要一并带上
+          const customFontStyleEl = document.getElementById('custom-fonts-style');
+          const customFontCSS = customFontStyleEl ? (customFontStyleEl.textContent || '') : '';
+  
+          const theme = document.documentElement.getAttribute('data-theme') || 'light';
+          const colorScheme = document.documentElement.getAttribute('data-color-scheme') || 'default';
+  
+          // 独立文档修正：styles.css 的 body 规则是为「固定视口 + 内部滚动」的应用外壳写的
+          // （height:100vh + overflow:hidden + 禁用选中），在独立 HTML 里会把内容直接裁掉，
+          // 且读者需要能选中/复制文本。除此之外不改任何阅读样式。
+          const docFix = `
+    html, body { height: auto !important; overflow: visible !important; background: var(--preview-bg, #fff) !important; }
+    body { -webkit-user-select: text !important; user-select: text !important; }
+    .preview-content { overflow: visible !important; max-width: 860px; margin: 0 auto; }`;
+
+          // 全量展开（与长图 / PDF 同一口径 _exportExpandRules）。
+          // 阅读模式里的 .code-scroll（max-height:300px + overflow-y）靠 JS 在内容真的超高时
+          // 才把 overflow-y 改成 auto；导出的是**静态文档**，没有那段 JS —— 留着 max-height
+          // 就是直接裁掉 300px 以下的代码，且「代码块换行」关掉时 .code-line-text 是
+          // white-space:pre，横向也滚不出去。同理宽表 / 宽公式 / 宽图表。故导出 HTML 也展开。
+          const expandCSS = this._exportExpandRules('');
   
           const escapedTitle = this.activeTab.name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+          const containerClass = (clone.getAttribute('class') || 'preview-content');
           const fullHTML = `<!DOCTYPE html>
-    <html lang="zh-CN">
+    <html lang="zh-CN" data-theme="${theme}" data-color-scheme="${colorScheme}">
     <head>
       <meta charset="UTF-8">
       <title>${escapedTitle}</title>
       <style>
-        ${this._documentExportCSS()}
-    ${katexCSS ? katexCSS + '\n' : ''}${hljsCSS ? hljsCSS : ''}
+    ${customFontCSS}${appCSS}
+    ${hljsCSS ? hljsCSS + '\n' : ''}${katexCSS ? katexCSS + '\n' : ''}${docFix}
+    ${expandCSS}
       </style>
     </head>
     <body>
-    ${clone.innerHTML}
+    <div class="${containerClass}">${clone.innerHTML}</div>
     </body>
     </html>`;
   
@@ -726,6 +903,8 @@
           this.setStatus(`${this.t('exportedHTML')}: ${path}`);
         } catch (error) {
           this.setStatus(`${this.t('exportFailed')}: ${error}`);
+        } finally {
+          if (overlayOn) this._hideExportOverlay();
         }
       },
       // docx 页面尺寸（twips，1/20 pt）：A4 / Letter，支持纵向/横向。
@@ -1126,119 +1305,165 @@
           onDone(false);
         }
       },
+      // 长图导出（2026-10-25 重做，换掉 html2canvas）
+      //
+      // 原实现用 html2canvas 把 DOM 重画到 canvas。它自带一套 CSS 解析与绘制器，不支持
+      // MathML、clip-path、color-mix()、部分 flex 与伪元素 —— 那套渲染器和 Blink 不可能
+      // 逐像素对齐，于是「导出长图与阅读模式差异太大」。现改为 <svg><foreignObject> 方案：
+      // 内容交给浏览器自己的排版引擎渲染，再 drawImage 到 canvas，CSS / 字体 / 公式 / 图表
+      // 全部由 Blink 计算，与阅读模式同源同参。
+      //
+      // 三个必须处理的差异：
+      //  · SVG-as-image 是受限环境，**不能加载任何外部资源**：KaTeX 的 woff2 必须内联成
+      //    data URI（否则公式字形退化成 Times New Roman），图片沿用 _inlineImagesForExport；
+      //  · 独立 SVG 文档里没有 <html>/<body>：主题变量靠 `:root`（命中 <svg> 根）继承，
+      //    再加包裹元素自带 data-theme / data-color-scheme 命中 [data-theme=...] 规则；
+      //  · SVG 走 XML 解析，必须用 XMLSerializer 输出 well-formed XHTML（innerHTML 里
+      //    的 <br> 这类未闭合标签会直接让整张图渲染失败）；
+      //  · canvas 单边 ≤ 32767px、面积约 ≤ 268MP：超长文档按此自动降 scale（不裁内容）。
       async exportImage() {
-        if (typeof html2canvas === 'undefined') {
-          this.reportError('E_RENDER', { detail: '导出组件未加载（html2canvas not loaded）' });
-          return;
-        }
-  
-        let clone = null;
+        const result = await dialogSave({
+          defaultPath: `${this.activeTab.name.replace(/\.[^.]+$/, '')}.png`,
+          filters: [{ name: 'PNG', extensions: ['png'] }]
+        });
+        if (!result) return; // 先问路径：避免渲染几十秒后用户才取消
+
+        let overlayOn = false;
+        let host = null;
         let expandStyle = null;
         try {
-          this.setStatus(this.t('generatingImg'));
-  
-          clone = this.preview.cloneNode(true);
-          clone.style.position = 'fixed';
-          clone.style.left = '-9999px';
-          clone.style.top = '0';
-          clone.style.width = '800px';
-          clone.style.padding = '32px';
-          clone.style.background = this.isDark ? '#1a1b1e' : '#ffffff';
-          clone.style.color = this.isDark ? '#d4d4d8' : '#2a2a2e';
-          clone.style.overflow = 'visible';
-          clone.style.height = 'auto';
-          document.body.appendChild(clone);
-          // 2026-10-28 用户要求：导出长图时所有超长滚动容器（代码块/宽表/宽公式）一律展开显示全部，
-          // 不管设置里代码块选的是「滚动」还是「全部」。clone 在同一文档内，渲染态 styles.css 规则
-          // （.code-scroll 300px 裁切、table display:block+overflow-x 等）同样作用于它 → 注入
-          // 按 clone id 作用域的展开 CSS（不污染活动预览），finally 移除。
-          clone.id = 'tm-png-export-root';
+          overlayOn = true;
+          this._showExportOverlay(this.t('generatingImg'));
+          await new Promise(r => requestAnimationFrame(r));
+
+          // ---- 1) 离屏宿主：在本文档内，样式与阅读模式同源，用于度量与图片内联 ----
+          const source = this.preview.cloneNode(true);
+          source.querySelectorAll('.copy-btn').forEach(el => el.remove());
+          const abbrData = source.querySelector('#abbr-data');
+          if (abbrData) abbrData.remove();
+          this._stripKatexMathml(source);
+
+          const theme = document.documentElement.getAttribute('data-theme') || 'light';
+          const colorScheme = document.documentElement.getAttribute('data-color-scheme') || 'default';
+          host = document.createElement('div');
+          host.id = 'tm-png-export-root';
+          host.className = source.getAttribute('class') || 'preview-content';
+          host.setAttribute('data-theme', theme);
+          host.setAttribute('data-color-scheme', colorScheme);
+          host.style.cssText = 'position:fixed;left:-99999px;top:0;width:800px;height:auto;overflow:visible;';
+          host.innerHTML = source.innerHTML;
+          document.body.appendChild(host);
+
+          // 展开所有滚动/裁切容器（与 PDF/DOCX 共用口径），否则长图只能截到一屏
           expandStyle = document.createElement('style');
           expandStyle.id = 'tm-export-expand-style';
           expandStyle.textContent = this._exportExpandRules('#tm-png-export-root');
           document.head.appendChild(expandStyle);
-  
-          // 图片加载策略与实时预览 processImages 保持一致：
-          // data:/http(s):/file:/blob: 直接保留；绝对路径直接读取；相对路径按当前文档目录解析
-          const images = clone.querySelectorAll('img');
-          const tabFile = this.activeTab ? this.activeTab.filePath : '';
-          const imgDir = tabFile ? tabFile.replace(/[/\\][^/\\]*$/, '') : '';
-          const imagePromises = Array.from(images).map(async (img) => {
-            const src = img.getAttribute('src');
-            if (!src || src.startsWith('data:') || src.startsWith('http://') ||
-                src.startsWith('https://') || src.startsWith('file://') || src.startsWith('blob:')) return;
-  
-            let url = src;
-            if (!(src.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(src)) && imgDir) {
-              url = imgDir + '/' + src; // 相对路径按文档目录解析
-            }
-  
-            try {
-              const base64 = await TauriApi.fetchImageAsBase64({ url });
-              const ext = src.split('.').pop().split('?')[0].toLowerCase();
-              let mime = 'image/png';
-              if (ext === 'jpg' || ext === 'jpeg') mime = 'image/jpeg';
-              else if (ext === 'gif') mime = 'image/gif';
-              else if (ext === 'svg') mime = 'image/svg+xml';
-              else if (ext === 'webp') mime = 'image/webp';
-              img.src = `data:${mime};base64,${base64}`;
-            } catch (e) {
-              img.style.border = '1px solid red';
-              img.alt = this.t('imageLoadFailed');
-            }
+
+          await this._inlineImagesForExport(host, this.activeTab.filePath);
+          await this._waitImagesReady(host);
+          await new Promise(r => setTimeout(r, 60));
+
+          // 超宽内容（超宽公式/宽表展开后）按内容宽度兜底，保证不裁切
+          const W = Math.max(800, Math.ceil(host.scrollWidth));
+          host.style.width = W + 'px';
+          await new Promise(r => requestAnimationFrame(r));
+          const H = Math.ceil(Math.max(host.scrollHeight, host.getBoundingClientRect().height));
+          if (!(H > 8)) throw new Error('导出内容为空（高度 ' + H + 'px）');
+          const bg = getComputedStyle(host).backgroundColor || '#ffffff';
+
+          // ---- 2) 样式：CSSOM 直读（不走网络）+ KaTeX 字体 data URI 内联 ----
+          const appSheet = this._exportStyleFromLink((h) => /(^|\/)styles\.css(\?|$)/.test(h));
+          const katexSheet = this._exportStyleFromLink((h) => /katex/.test(h) && /\.css(\?|$)/.test(h));
+          const hljsThemeEl = document.getElementById('highlight-theme');
+          const hljsHref = ((hljsThemeEl && hljsThemeEl.getAttribute('href')) || '').toLowerCase();
+          const hljsSheet = this._exportStyleFromLink((h) => (hljsHref ? h.endsWith(hljsHref) : /highlight|hljs|github/.test(h)));
+          const customFontStyleEl = document.getElementById('custom-fonts-style');
+          const customFontCSS = customFontStyleEl ? (customFontStyleEl.textContent || '') : '';
+
+          const appCSS = this._absolutizeCssUrls(appSheet.css, appSheet.base);
+          const hljsCSS = this._absolutizeCssUrls(hljsSheet.css, hljsSheet.base);
+          const katexCSS = await this._inlineCssFonts(katexSheet.css, katexSheet.base);
+
+          // ---- 3) 组装 SVG：样式塞进宿主内部一起序列化（XMLSerializer 会正确转义 CSS 里的 < &） ----
+          const styleEl = document.createElement('style');
+          styleEl.textContent = customFontCSS + appCSS + hljsCSS + katexCSS;
+          host.insertBefore(styleEl, host.firstChild);
+          // 清掉离屏定位等宿主专用内联样式，只留排版必需的宽度/背景/取消内部滚动
+          host.setAttribute('style', `width:${W}px;height:auto;overflow:visible;background:${bg};`);
+          const contentXML = new XMLSerializer().serializeToString(host);
+          styleEl.remove();
+
+          const svgMarkup = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '">'
+            + '<foreignObject x="0" y="0" width="' + W + '" height="' + H + '">'
+            + contentXML
+            + '</foreignObject></svg>';
+
+          // 必须用 data: URL 而不是 blob: —— 实测（Chromium）blob: 形式的 SVG 画进 canvas 后
+          // 画布即被标记为 tainted，toDataURL 直接抛 SecurityError；同样的内容换成 data: 就正常。
+          // 用 base64 而非 encodeURIComponent：CSS + 内联字体的体积大，base64 只涨 1/3。
+          const svgBytes = new TextEncoder().encode(svgMarkup);
+          let svgBin = '';
+          for (let i = 0; i < svgBytes.length; i += 0x8000) {
+            svgBin += String.fromCharCode.apply(null, svgBytes.subarray(i, i + 0x8000));
+          }
+          const svgDataUrl = 'data:image/svg+xml;base64,' + btoa(svgBin);
+          const img = new Image();
+          await new Promise((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = () => reject(new Error('SVG 渲染失败（内容过大或样式异常）'));
+            img.src = svgDataUrl;
           });
-  
-          await Promise.all(imagePromises);
-          await new Promise(r => setTimeout(r, 300));
-  
-          // 展开后内容可能宽于 800（超宽公式等）：画布按内容宽度兜底放大，保证不裁切
-          // （2026-10-28 用户要求：任何导出不得丢失信息）
-          const exportW = Math.max(800, clone.scrollWidth);
-  
-          const canvas = await html2canvas(clone, {
-            scale: 2,
-            useCORS: true,
-            allowTaint: true,
-            logging: false,
-            backgroundColor: this.isDark ? '#1a1b1e' : '#ffffff',
-            width: exportW,
-            windowWidth: exportW
-          });
-  
+
+          // ---- 4) 画到 canvas：按浏览器上限自动降 scale ----
+          const MAX_SIDE = 32767;
+          const MAX_AREA = 268000000;
+          let scale = 2;
+          scale = Math.min(scale, MAX_SIDE / W, MAX_SIDE / H, Math.sqrt(MAX_AREA / (W * H)));
+          scale = Math.max(scale, 0.05);
+
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(W * scale));
+          canvas.height = Math.max(1, Math.round(H * scale));
+          const ctx = canvas.getContext('2d');
+          if (!ctx) throw new Error('canvas 2d context 不可用');
+          ctx.fillStyle = bg;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
           const imgData = canvas.toDataURL('image/png');
-  
-          const result = await dialogSave({
-            defaultPath: `${this.activeTab.name.replace(/\.[^.]+$/, '')}.png`,
-            filters: [{ name: 'PNG', extensions: ['png'] }]
-          });
-  
-          if (!result) return;
-  
+          if (!imgData || imgData.length < 128) throw new Error('长图编码失败（可能超出 canvas 上限）');
+
+          // ---- 5) 落盘 ----
           const base64 = imgData.split(',')[1];
           const binaryStr = atob(base64);
           const bytes = new Uint8Array(binaryStr.length);
-          for (let i = 0; i < binaryStr.length; i++) {
-            bytes[i] = binaryStr.charCodeAt(i);
-          }
-  
-          const arr = Array.from(bytes);
-          await TauriApi.writeBinaryFile({ path: result, contents: arr });
-  
+          for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+          await TauriApi.writeBinaryFile({ path: result, contents: Array.from(bytes) });
+
           this.setStatus(`${this.t('exportedImg')}: ${result}`);
         } catch (error) {
           this.setStatus(`${this.t('exportFailed')}: ${error}`);
+          console.error('[exportImage]', error);
         } finally {
-          if (expandStyle && expandStyle.parentNode) {
-            expandStyle.parentNode.removeChild(expandStyle);
-          }
-          if (clone && clone.parentNode) {
-            clone.parentNode.removeChild(clone);
-          }
+          if (expandStyle && expandStyle.parentNode) expandStyle.parentNode.removeChild(expandStyle);
+          if (host && host.parentNode) host.parentNode.removeChild(host);
+          if (overlayOn) this._hideExportOverlay();
         }
       },
+      // PDF 导出（2026-10-25 重做）。
+      //
+      // 旧路径：iframe.srcdoc + contentWindow.print() —— 会拉起 Chromium 打印预览，用户
+      // 「另存为 PDF」走的是浏览器下载管线，窗口右上角会弹出 Edge 风格的下载气泡（用户反馈）；
+      // 而且打印帧是另建的文档，appCSS / katex / hljs 全靠手工拼进去，拼漏一项就与阅读模式
+      // 不一致（用户反馈的公式出现第二份纯文本、代码高亮丢失都出在这条路上）。
+      //
+      // 新路径：先选保存路径 → 把预览搬进 body 直下的 #pdf-print-root、隐藏其余 UI →
+      // 调 Rust 的 print_to_pdf（WebView2 PrintToPdf）直接写文件。全程无对话框、无下载气泡，
+      // 样式就是当前文档那一套（同一个文档、同一份 styles.css），与阅读模式天然一致。
+      // 旧版 WebView2 运行时缺 PrintToPdf 时自动回退原来的系统打印路径。
       async exportPDF() {
-        // Print tips + 醒目警示（"文件较大时生成 PDF 耗时较长..."）一起在确认框里展示，
-        // 用户点确认后直接走系统打印对话框，不再做任何"是否写完"的承诺。
+        // Print tips + 醒目警示（"文件较大时生成 PDF 耗时较长..."）一起在确认框里展示
         const proceed = await this.showConfirmDialog(
           this.t('exportPDF'),
           this.t('printTip1') + '\n\n' + this.t('printTip2'),
@@ -1246,146 +1471,203 @@
           this.t('pdfBigFileWarn'),
         );
         if (!proceed) return;
-  
-        // --- Loading overlay (打印准备中，afterprint 立即收尾) ---
-        const overlay = document.createElement('div');
-        overlay.innerHTML = `<div class="pdf-loading-spinner"></div><div class="pdf-loading-text">${this.t('preparingPrint')}</div>`;
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,0.35);font-family:-apple-system,sans-serif;';
-        if (!document.getElementById('pdf-loading-style')) {
-          const s = document.createElement('style');
-          s.id = 'pdf-loading-style';
-          s.textContent = '.pdf-loading-spinner{width:36px;height:36px;border:3px solid rgba(255,255,255,0.25);border-top-color:#fff;border-radius:50%;animation:pdf-spin .7s linear infinite;margin-bottom:14px;}@keyframes pdf-spin{to{transform:rotate(360deg)}}.pdf-loading-text{color:#fff;font-size:15px;letter-spacing:.5px;}';
-          document.head.appendChild(s);
-        }
-        document.body.appendChild(overlay);
-  
-        let overlayDone = false;
-        const hideOverlay = () => {
-          if (overlayDone) return;
-          overlayDone = true;
-          if (overlay.parentNode) overlay.remove();
-        };
-  
+
+        const pdfBaseName = String(this.activeTab.name || '').replace(/\.[^.]+$/, '');
+        const safeBaseName = pdfBaseName || this.t('untitled') || 'document';
+        // 先问路径：PrintToPdf 直接落盘，不再依赖系统打印对话框的默认文件名
+        const targetPath = await dialogSave({
+          defaultPath: this.activeTab.filePath
+            ? this.activeTab.filePath.replace(/\.[^./\\]+$/, '.pdf')
+            : safeBaseName + '.pdf',
+          filters: [{ name: 'PDF', extensions: ['pdf'] }],
+        });
+        if (!targetPath) return;
+
+        this._showExportOverlay(this.t('preparingPrint'));
+        let clone = null;
+        let printRoot = null;
+        let printStyle = null;
+        let expandStyle = null;
+        let handedOverToPrint = false;
         try {
-          // Yield so the overlay paints before CPU-heavy Mermaid work
           await new Promise(r => requestAnimationFrame(r));
-  
-          // 文件名：取自当前 md，去扩展名。系统打印对话框默认文件名走主窗口 document.title
-          // （_exportViaSystemPrint 在 iframe.onload 里临时覆盖为该值），无需在应用内另弹保存框。
-          const pdfBaseName = String(this.activeTab.name || '').replace(/\.[^.]+$/, '');
-          const safeBaseName = pdfBaseName || this.t('untitled') || 'document';
-  
-          const clone = this.preview.cloneNode(true);
-          clone.querySelectorAll('.copy-btn, #abbr-data').forEach(el => el.remove());
-  
-          // 图片内联：把预览里的 blob:/file:///相对路径图片全部转内联 base64，
-          // 使打印帧自包含（不受 blob LRU 回收 / 源解析影响，根除 PDF 空白图）。
-          await this._inlineImagesForExport(clone, this.activeTab.filePath);
-  
-          // Re-render Mermaid via mermaid.render() so every diagram gets a
-          // consistent viewBox regardless of the current preview-pane width.
-          const mermaidContainers = Array.from(clone.querySelectorAll('.mermaid-container'));
-          if (typeof mermaid !== 'undefined' && mermaidContainers.length) {
-            const ff = this._exportPdfFontStack();
-            // 导出帧纸面恒为白底（下方 data-theme="light"）→ 图一律用亮色 default 主题，
-            // 与 hljs 亮色主题同一口径，避免暗色模式下暗色主题的浅色线条/文字在白纸上看不清
-            mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose', fontFamily: ff, themeVariables: { fontSize: '14px' } });
-            for (let i = 0; i < mermaidContainers.length; i++) {
-              const code = (mermaidContainers[i].getAttribute('data-code') || mermaidContainers[i].textContent || '').trim();
-              if (!code) continue;
-              try {
-                const result = await mermaid.render('pdf-mermaid-' + i, PreviewPost.autoStyleMermaid(code, this.settings.mermaidAutoStyle !== false));
-                const wrapper = document.createElement('div');
-                wrapper.className = 'mermaid-container';
-                wrapper.innerHTML = result.svg;
-                const svgEl = wrapper.querySelector('svg');
-                if (svgEl) {
-                  svgEl.removeAttribute('style');
-                  svgEl.removeAttribute('width');
-                  svgEl.removeAttribute('height');
-                  const vb = svgEl.getAttribute('viewBox');
-                  if (vb) {
-                    const parts = vb.split(/\s+/);
-                    if (parts.length >= 4) {
-                      svgEl.setAttribute('width', parts[2]);
-                      svgEl.setAttribute('height', parts[3]);
-                    }
+
+          clone = await this._preparePdfClone();
+
+          // ---- 打印态：预览独占页面，其余 UI 全部隐藏（finally 里原样复原）----
+          printRoot = document.createElement('div');
+          printRoot.id = 'pdf-print-root';
+          printRoot.className = clone.getAttribute('class') || 'preview-content';
+          printRoot.innerHTML = clone.innerHTML;
+          printRoot.style.cssText = 'width:680px;margin:0 auto;box-sizing:border-box;';
+          document.body.appendChild(printRoot);
+
+          printStyle = document.createElement('style');
+          printStyle.id = 'tm-pdf-print-style';
+          // 注意 body > * 的优先级：这里一律用 ID 选择器回显需要保留的两块（#pdf-print-root /
+          // #tm-export-overlay），否则会被 `body > *` 的 display:none 一起吞掉。
+          printStyle.textContent = `
+    html.pdf-printing, body.pdf-printing { height: auto !important; overflow: visible !important; }
+    html.pdf-printing body > * { display: none !important; }
+    html.pdf-printing #pdf-print-root { display: block !important; overflow: visible !important; height: auto !important; }
+    /* 进度遮罩要留在屏幕上，但绝不能被打进 PDF（@media print 只作用于打印渲染） */
+    html.pdf-printing #tm-export-overlay { display: flex !important; }
+    /* 打印媒体里必须再声明一遍：styles.css 自带 @media print 块（8121 行起，旧「直接打印主窗口」
+       方案的遗留）会用 #app{display:block!important} 把整个应用重新显示出来 —— ID 选择器 +
+       !important 压得过 body > *，结果 PDF 第一页直接印出标签栏和整块预览（实测）。 */
+    @media print {
+      html.pdf-printing body > * { display: none !important; }
+      html.pdf-printing #app { display: none !important; }
+      html.pdf-printing #pdf-print-root { display: block !important; }
+      /* 必须与上面屏幕规则的**同一选择器**（同特异性、后声明）才能压过它 ——
+         只写 #tm-export-overlay 会因特异性更低而输，遮罩照样被印进 PDF（实测）。 */
+      html.pdf-printing #tm-export-overlay { display: none !important; }
+    }
+    #pdf-print-root .mermaid-container { margin: 8px 0 !important; max-width: 100% !important; page-break-inside: avoid; }
+    #pdf-print-root .mermaid-container svg { width: auto !important; max-width: 100% !important; height: auto !important; display: block !important; margin: 0 auto !important; }
+    #pdf-print-root h1, #pdf-print-root h2, #pdf-print-root h3 { page-break-after: avoid; }
+    #pdf-print-root blockquote, #pdf-print-root table, #pdf-print-root img,
+    #pdf-print-root .math-display, #pdf-print-root .alert, #pdf-print-root .mermaid-container { page-break-inside: avoid; }
+    #pdf-print-root p, #pdf-print-root li { orphans: 3; widows: 3; }`;
+          document.head.appendChild(printStyle);
+
+          // 展开所有滚动/裁切容器（与长图 / DOCX 同一口径），否则打印只出可视区那一屏
+          expandStyle = document.createElement('style');
+          expandStyle.id = 'tm-export-expand-style';
+          expandStyle.textContent = this._exportExpandRules('#pdf-print-root');
+          document.head.appendChild(expandStyle);
+
+          document.documentElement.classList.add('pdf-printing');
+          document.body.classList.add('pdf-printing');
+          await this._waitImagesReady(printRoot);
+          await new Promise(r => requestAnimationFrame(r));
+          await new Promise(r => setTimeout(r, 80));
+
+          // A4 = 8.27 × 11.69 英寸；1.5cm ≈ 0.59 英寸（与原 @page margin 保持一致）
+          await TauriApi.printToPdf({
+            options: {
+              path: targetPath,
+              pageWidth: 8.27,
+              pageHeight: 11.69,
+              marginTop: 0.59,
+              marginBottom: 0.59,
+              marginLeft: 0.59,
+              marginRight: 0.59,
+            },
+          });
+          this.setStatus(`${this.t('exportedPDF')}: ${targetPath}`);
+        } catch (e) {
+          // 旧版 WebView2 运行时没有 ICoreWebView2_7::PrintToPdf → 回退系统打印，功能不丢
+          console.warn('[exportPDF] PrintToPdf 不可用，回退系统打印:', e);
+          handedOverToPrint = true;
+          try {
+            const fallbackClone = clone || await this._preparePdfClone();
+            const html = await this._buildPdfPrintFrameHtml(fallbackClone);
+            const escapedTitle = safeBaseName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            await this._exportViaSystemPrint(html, safeBaseName, escapedTitle, () => this._hideExportOverlay());
+          } catch (e2) {
+            console.error('exportPDF fallback error:', e2);
+            this.setStatus(this.t('exportError'));
+          }
+        } finally {
+          document.documentElement.classList.remove('pdf-printing');
+          document.body.classList.remove('pdf-printing');
+          if (printStyle && printStyle.parentNode) printStyle.parentNode.removeChild(printStyle);
+          if (expandStyle && expandStyle.parentNode) expandStyle.parentNode.removeChild(expandStyle);
+          if (printRoot && printRoot.parentNode) printRoot.parentNode.removeChild(printRoot);
+          if (!handedOverToPrint) this._hideExportOverlay();
+        }
+      },
+      // PDF 用的 clone 准备：去交互件、摘 MathML 副本、图片内联、Mermaid 按固定 viewBox 重绘。
+      // PrintToPdf 与回退系统打印两条路径共用，避免口径分叉。
+      async _preparePdfClone() {
+        const clone = this.preview.cloneNode(true);
+        clone.querySelectorAll('.copy-btn, #abbr-data').forEach(el => el.remove());
+        // 摘掉 KaTeX 的 MathML 副本：打印管线一旦不认 clip-path，它就会平铺成第二份公式文本
+        this._stripKatexMathml(clone);
+        await this._inlineImagesForExport(clone, this.activeTab.filePath);
+
+        const mermaidContainers = Array.from(clone.querySelectorAll('.mermaid-container'));
+        if (typeof mermaid !== 'undefined' && mermaidContainers.length) {
+          const ff = this._exportPdfFontStack();
+          // 图表一律按亮色 default 主题重绘：纸面是白底，暗色主题的浅色线条在白纸上几乎不可见
+          mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose', fontFamily: ff, themeVariables: { fontSize: '14px' } });
+          for (let i = 0; i < mermaidContainers.length; i++) {
+            const code = (mermaidContainers[i].getAttribute('data-code') || mermaidContainers[i].textContent || '').trim();
+            if (!code) continue;
+            try {
+              const result = await mermaid.render('pdf-mermaid-' + i, PreviewPost.autoStyleMermaid(code, this.settings.mermaidAutoStyle !== false));
+              const wrapper = document.createElement('div');
+              wrapper.className = 'mermaid-container';
+              wrapper.innerHTML = result.svg;
+              const svgEl = wrapper.querySelector('svg');
+              if (svgEl) {
+                svgEl.removeAttribute('style');
+                svgEl.removeAttribute('width');
+                svgEl.removeAttribute('height');
+                const vb = svgEl.getAttribute('viewBox');
+                if (vb) {
+                  const parts = vb.split(/\s+/);
+                  if (parts.length >= 4) {
+                    svgEl.setAttribute('width', parts[2]);
+                    svgEl.setAttribute('height', parts[3]);
                   }
                 }
-                mermaidContainers[i].replaceWith(wrapper);
-              } catch (e) {
-                console.error('Mermaid PDF render error for diagram', i, ':', e);
               }
+              mermaidContainers[i].replaceWith(wrapper);
+            } catch (e) {
+              console.error('Mermaid PDF render error for diagram', i, ':', e);
             }
           }
-  
-          // 完整 styles.css：优先 fetch（原始文本保真），失败回退已加载样式表 CSSOM（加固，避免软依赖）
-          const appCSS = await this._loadStylesheetText('styles.css');
-          // 代码高亮口径：导出帧纸面恒为白底（下方 data-theme="light"），一律取亮色主题 hljs CSS。
-          // 若取当前已加载的 #highlight-theme，暗色模式下会是 github-dark 的浅灰 token 色，
-          // 落白纸面几乎不可见（用户反馈：暗黑模式导出 PDF 代码块文字发灰看不清）。
-          let hljsCSS = '';
-          try { const resp = await fetch('lib/highlight.js/github.min.css'); if (resp.ok) hljsCSS = await resp.text(); } catch (e) { /* skip */ }
-          let katexCSS = '';
-          try { const resp = await fetch('lib/katex/katex.min.css'); if (resp.ok) katexCSS = await resp.text(); } catch (e) { /* skip */ }
-          // 自定义字体的 @font-face（base64 内联）由 #custom-fonts-style 持有。打印帧是独立文档，
-          // 必须一并携带，否则用户选了自定义预览字体时，字体链首项在 PDF 里无字形可落。
-          const customFontStyleEl = document.getElementById('custom-fonts-style');
-          const customFontCSS = customFontStyleEl ? (customFontStyleEl.textContent || '') : '';
-  
-          // escapedTitle：用于打印帧 <title> / contentDocument.title（去扩展名文件名已在上文取得）
-          const escapedTitle = safeBaseName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  
-          const colorScheme = document.documentElement.getAttribute('data-color-scheme') || 'default';
-  
-          const printCSS = `
+        }
+        return clone;
+      },
+      // 回退路径用：把 clone 组装成独立打印帧 HTML（完整 appCSS + 亮色 hljs + katex + 打印补充）
+      // async：hljs 亮色主题要优先取原文（见下方注释）。
+      async _buildPdfPrintFrameHtml(clone) {
+        const name = String(this.activeTab.name || '').replace(/\.[^.]+$/, '') || 'document';
+        const escapedTitle = name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const colorScheme = document.documentElement.getAttribute('data-color-scheme') || 'default';
+        const appSheet = this._exportStyleFromLink((h) => /(^|\/)styles\.css(\?|$)/.test(h));
+        const katexSheet = this._exportStyleFromLink((h) => /katex/.test(h) && /\.css(\?|$)/.test(h));
+        const appCSS = this._absolutizeCssUrls(appSheet.css, appSheet.base);
+        const katexCSS = this._absolutizeCssUrls(katexSheet.css, katexSheet.base);
+        // hljs：本帧钉死 light 纸面（data-theme="light"），必须配**亮色**主题 ——
+        // styles.css 里只有 token 映射说明、没有 .hljs-* 配色，缺主题就是一片纯黑；
+        // 而暗色主题的 token 色印在白纸上又几乎看不见（用户反馈过「暗黑模式导出 PDF
+        // 代码块文字发灰看不清」）。故优先取亮色主题原文，取不到才退回当前加载主题。
+        const hljsCSS = (await this._loadStylesheetText('lib/highlight.js/github.min.css'))
+          || this._exportStyleFromLink((h) => /github|highlight|hljs/.test(h)).css;
+        const customFontStyleEl = document.getElementById('custom-fonts-style');
+        const customFontCSS = customFontStyleEl ? (customFontStyleEl.textContent || '') : '';
+
+        const printCSS = `
     @page { margin: 1.5cm; }
     html, body { margin: 0 !important; padding: 0 !important; background: white !important; }
     .preview-content { max-width: 680px !important; margin: 0 auto !important; padding: 16px 24px !important; font-family: ${this._exportPdfFontStack()} !important; }
-    /* 2026-10-28 用户要求：导出 PDF 时所有超长滚动容器展开显示全部（代码块/宽表/宽公式/图表），
-       与长图导出共用 _exportExpandRules 口径——打印帧载入了完整 styles.css（渲染态滚动规则
-       生效），必须在此覆盖。宽表在固定页宽下按 table 布局压缩换行（不裁切、不丢内容）。 */
     ${this._exportExpandRules('.preview-content')}
-    /* 代码块 hljs 默认主题里 .hljs 元素带 background:#ffffff，会盖住 pre 的灰色形成"内白外灰"。
-       强制透明 + 12px 内边距，让整个代码块统一是 pre 的 --code-bg 灰色（与软件预览一致）。 */
     .preview-content pre code.hljs,
     .preview-content pre .hljs { background: transparent !important; padding: 12px 16px !important; }
-    /* 代码块行结构（导出 iframe 没载入 styles.css，code-block.js 输出的 .code-line 必须显式块级化） */
     .code-line { display: flex !important; line-height: 1.8 !important; min-width: 0 !important; }
     .code-line-num { flex-shrink: 0 !important; width: 3em !important; text-align: right !important; padding-right: 0.8em !important; color: #888 !important; user-select: none !important; display: none !important; }
     .preview-content.code-line-numbers .code-line-num { display: inline !important; }
     .code-line-text { flex: 1 1 auto !important; min-width: 0 !important; }
     .mermaid-container { margin: 8px 0 !important; max-width: 100% !important; overflow: hidden !important; break-inside: avoid; page-break-inside: avoid; }
     .mermaid-container svg { width: auto !important; max-width: 100% !important; height: auto !important; display: block !important; margin: 0 auto !important; }
-    .mermaid-container svg text, .mermaid-container svg .nodeLabel, .mermaid-container svg .edgeLabel, .mermaid-container svg .label, .mermaid-container svg textPath { font-size: 14px !important; }
-    .mermaid-container svg foreignObject,
-    .mermaid-container svg foreignObject div,
-    .mermaid-container svg foreignObject span { font-size: 14px !important; line-height: 1.4 !important; }
     h1, h2, h3 { page-break-after: avoid; }
     blockquote, table, img, .math-display, .alert, .mermaid-container { page-break-inside: avoid; }
     p, li { orphans: 3; widows: 3; }
     input[type="checkbox"] { -webkit-appearance: none; appearance: none; margin-right: 8px; width: 16px; height: 16px; border: 1.5px solid #d4d4d8; border-radius: 3px; vertical-align: middle; position: relative; top: -1px; cursor: default; }
-    input[type="checkbox"]:checked { background: #16a34a url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIzIiBmaWxsPSJub25lIj48cGF0aCBkPSJNNSAxM2w0IDRMMTkgNyIvPjwvc3ZnPg==") center / 14px no-repeat; border-color: #16a34a; }
-    input[type="checkbox"]:checked::after { display: none !important; }
-    `;
-  
-          const html = `<!DOCTYPE html>
+    input[type="checkbox"]:checked { background: #16a34a; border-color: #16a34a; }
+    input[type="checkbox"]:checked::after { display: none !important; }`;
+
+        return `<!DOCTYPE html>
     <html lang="zh-CN" data-color-scheme="${colorScheme}" data-theme="light">
     <head><meta charset="UTF-8"><title>${escapedTitle}</title>
     <style>${customFontCSS}${appCSS}${hljsCSS}${katexCSS}${printCSS}</style></head>
     <body>
-    <div class="preview-content">${clone.innerHTML}</div>
+    <div class="${clone.getAttribute('class') || 'preview-content'}">${clone.innerHTML}</div>
     </body></html>`;
-  
-          // 系统打印（iframe + contentWindow.print()）：用 OS 打印引擎生成 PDF，保证文字可选中。
-          // afterprint 即收尾，不做落盘检测——OS 打印后台异步落盘是浏览器架构限制，
-          // 应用拿不到"写完"回调。警示已在确认框里展示，由用户自己判断何时打开。
-          await this._exportViaSystemPrint(html, safeBaseName, escapedTitle, hideOverlay);
-        } catch (e) {
-          console.error('exportPDF error:', e);
-          hideOverlay();
-          this.setStatus(this.t('exportError'));
-        }
       },
       // 系统打印路径（iframe + contentWindow.print()）：用 OS 打印引擎生成 PDF。
       // 不做落盘检测（OS 打印后台异步写盘，应用拿不到"写完"回调；警示已前置到确认框）。
