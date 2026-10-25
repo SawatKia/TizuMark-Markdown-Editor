@@ -91,7 +91,7 @@
           newContainer.id = 'mermaid-' + Date.now() + '-' + i;
           newContainer.setAttribute('data-code', data.code);
           if (data.sourceLine) newContainer.setAttribute('data-source-line', data.sourceLine);
-          newContainer.textContent = data.code;
+          newContainer.textContent = (typeof PreviewPost !== 'undefined' && PreviewPost.autoStyleMermaid) ? PreviewPost.autoStyleMermaid(data.code, this.settings.mermaidAutoStyle !== false) : data.code;
           if (data.nextSibling) {
             data.parent.insertBefore(newContainer, data.nextSibling);
           } else {

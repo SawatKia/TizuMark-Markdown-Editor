@@ -298,6 +298,69 @@ function processHeadings(preview, opts) {
 // 「图表没加载出来」的成因之一）。容器 id 必须全局唯一且跨调用递增，
 // 不能只用 Date.now() + 块内 index（两个 processMermaid 调用同毫秒时 index 都是 0 起）。
 let mermaidIdSeq = 0;
+
+// ===== Mermaid 自动配色 =====
+// 流程图（graph / flowchart）源码里没有任何样式（style / classDef / class / linkStyle / :::）
+// 时，为每个节点追加 `style` 语句：柔和配色填充 + 细描边 + 深色文字，便于一眼区分层次。
+// 只改传给 mermaid 的文本，原文（data-code / 编辑器内容）不动；用户自己写了样式则完全不介入。
+const MERMAID_AUTO_PALETTE = ['#a0c4ff', '#bdb2ff', '#ffc6ff', '#ffd6a5', '#caffbf', '#ffadad', '#fdffb6', '#9bf6ff'];
+
+function mermaidHasStyling(code) {
+  return /^\s*(style|classDef|class|linkStyle)\s/m.test(code) || /:::/.test(code) || /%%\{/.test(code);
+}
+
+// 提取流程图中出现的节点 id（按首次出现顺序）。去掉引号文本、括号内标签、|边标签| 与箭头，
+// 剩余的标识符即节点 id。关键字行（subgraph/end/direction/click…）整行跳过。
+function extractFlowchartNodeIds(code) {
+  const ids = [];
+  const seen = new Set();
+  let headerSeen = false;
+  for (const raw of String(code).split(/\r?\n/)) {
+    const line = raw.replace(/%%.*$/, '').trim();
+    if (!line) continue;
+    if (!headerSeen) { headerSeen = true; continue; } // 首行 graph/flowchart 声明
+    if (/^(subgraph|end|direction|click|accTitle|accDescr|linkStyle|style|class|classDef)\b/i.test(line)) continue;
+    // 逐字符扫描：丢弃引号串与括号内容，只保留括号外字符
+    let out = '';
+    let depth = 0;
+    let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQuote = !inQuote; continue; }
+      if (inQuote) continue;
+      if (ch === '[' || ch === '(' || ch === '{') { depth++; out += ' '; continue; }
+      if (ch === ']' || ch === ')' || ch === '}') { if (depth > 0) depth--; continue; }
+      if (depth > 0) continue;
+      out += ch;
+    }
+    out = out.replace(/\|[^|]*\|/g, ' ')                                   // |边标签|
+             .replace(/--\s+[^-].*?\s+(?:-->|---|--[xo])/g, ' --> ')        // -- 文本 -->
+             .replace(/==\s+[^=].*?\s+(?:==>|===)/g, ' ==> ')               // == 文本 ==>
+             .replace(/-\.\s+[^.].*?\s+\.->/g, ' -.-> ');                   // -. 文本 .->
+    // 按箭头 / & / ; 切段：只有「单个标识符」的段才是节点（多词段是遗漏的标签文字，丢弃，
+    // 避免对不存在的 id 追加 style 而让 mermaid 凭空多出一个节点）
+    const segments = out.split(/\s*(?:[<xo]?(?:-{2,}|={2,}|-\.+-|\.-+|~{3,})[>xo]?|&|;)\s*/);
+    for (const seg of segments) {
+      const id = seg.trim();
+      if (/^[A-Za-z_][\w-]*$/.test(id) && !seen.has(id)) { seen.add(id); ids.push(id); }
+    }
+  }
+  return ids;
+}
+
+function autoStyleMermaid(code, enabled) {
+  if (enabled === false) return code;
+  const text = String(code);
+  const first = text.split(/\r?\n/).find(l => l.trim() && !/^\s*%%/.test(l));
+  if (!first || !/^\s*(graph|flowchart)\b/i.test(first)) return code;
+  if (mermaidHasStyling(text)) return code;
+  const ids = extractFlowchartNodeIds(text);
+  if (ids.length === 0) return code;
+  const styles = ids.map((id, i) =>
+    '    style ' + id + ' fill:' + MERMAID_AUTO_PALETTE[i % MERMAID_AUTO_PALETTE.length] +
+    ',stroke:#333,stroke-width:1px,color:#1f2937');
+  return text.replace(/\s+$/, '') + '\n' + styles.join('\n') + '\n';
+}
 // mermaid.run 串行队列：同一时刻只允许一个 run 在跑。并发 run 除内部 id 碰撞外，
 // 还会交错读写 mermaid 单例内部状态（InitIDGenerator 等）导致随机渲染失败；
 // 串行后各调用按序完成，互不干扰。
@@ -305,6 +368,7 @@ let mermaidRunQueue = Promise.resolve();
 
 async function processMermaid(preview, opts) {
   const { isDark, mermaidCache } = opts;
+  const autoStyle = opts.mermaidAutoStyle !== false;
   if (typeof mermaid === 'undefined') return;
 
   const blocks = Array.from(preview.querySelectorAll('code.language-mermaid'));
@@ -317,7 +381,7 @@ async function processMermaid(preview, opts) {
     const pre = block.parentElement;
     const sourceLine = block.dataset.sourceLine;
     const code = block.textContent;
-    const cacheKey = themeKey + '::' + code;
+    const cacheKey = themeKey + (autoStyle ? '+s' : '') + '::' + code;
 
     const container = document.createElement('div');
     container.className = 'mermaid-container';
@@ -331,7 +395,7 @@ async function processMermaid(preview, opts) {
       container.innerHTML = cached;
     } else {
       // 未命中：放入待渲染队列（textContent 必须是原始 code，mermaid.run 才能解析）
-      container.textContent = code;
+      container.textContent = autoStyleMermaid(code, autoStyle);
       toRender.push({ container, cacheKey });
     }
     pre.replaceWith(container);
@@ -438,13 +502,13 @@ function addCopyButtons(preview, opts) {
 if (typeof window !== 'undefined' && typeof module === 'undefined') {
   window.PreviewPost = {
     processEmojiShortcodes, processMath, processAbbreviations,
-    processHeadings, processMermaid, addCopyButtons, getRawCodeText,
+    processHeadings, processMermaid, addCopyButtons, getRawCodeText, autoStyleMermaid,
   };
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     processEmojiShortcodes, processMath, processAbbreviations,
     processHeadings, processMermaid, addCopyButtons, EMOJI_MAP,
-    protectUnpairedDollar, getRawCodeText,
+    protectUnpairedDollar, getRawCodeText, autoStyleMermaid, extractFlowchartNodeIds,
   };
 }

@@ -1136,6 +1136,14 @@
             </p>
           </div>
           <div class="settings-row">
+            <label>Mermaid 自动配色</label>
+            <label class="toggle"><input type="checkbox" id="set-mermaid-auto-style" checked><span class="toggle-slider"></span></label>
+            <p class="form-hint" id="setting-mermaid-auto-style-hint">
+              <svg class="hint-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 7h18" /><path d="M3 12h18" /><path d="M3 17h18" /></svg>
+              <span class="hint-text">流程图未自定义样式时，自动为各节点配上柔和的配色；已写 style / classDef 的图不受影响。</span>
+            </p>
+          </div>
+          <div class="settings-row">
             <label>自动保存保留天数</label>
             <input type="number" id="set-autosave-days" min="1" max="3650" step="1" value="30" class="settings-text-input" />
             <p class="form-hint" id="setting-autosave-days-hint">

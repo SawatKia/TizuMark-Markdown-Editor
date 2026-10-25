@@ -207,6 +207,7 @@
           escapeAttr: (s) => this.app.escapeAttr(s),
           headingToId: (s) => this.app.headingToId(s),
           mermaidCache: this.app._mermaidCache,
+          mermaidAutoStyle: this.app.settings.mermaidAutoStyle !== false,
         };
         RenderPost.processEmoji(this.app.preview);
         RenderPost.processMath(this.app.preview);

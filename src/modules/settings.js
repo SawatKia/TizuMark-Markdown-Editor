@@ -35,6 +35,7 @@
          // 自动检查遇到同版本不再弹窗；更高版本不受影响。空串=未跳过。
          skippedUpdateVersion: '',
          clearTabsOnQuit: false, // 退出应用时不保存标签会话，下次打开总是空白
+          mermaidAutoStyle: true, // Mermaid 流程图无样式时自动配色
           autoSaveRetentionDays: 30, // 自动保存版本保留天数，超期自动删除
           showAllFiles: false, // 文件树过滤：默认只列受支持格式（markdown/image/text），true 时显示目录内全部文件
           toolbarCollapsed: false,
@@ -160,6 +161,8 @@
         if (efW) { efW.value = s.editorFontWeight; document.getElementById('editor-font-weight-label').textContent = s.editorFontWeight; }
         document.getElementById('settings-image-asset-path').value = s.imageAssetPath || 'assets';
         document.getElementById('set-clear-tabs-on-quit').checked = s.clearTabsOnQuit === true;
+        const mas = document.getElementById('set-mermaid-auto-style');
+        if (mas) mas.checked = s.mermaidAutoStyle !== false;
         const asd = document.getElementById('set-autosave-days');
         if (asd) asd.value = s.autoSaveRetentionDays;
         document.getElementById('set-custom-bg').checked = s.customBgEnabled === true;
@@ -306,6 +309,8 @@
         });
         const ctoq = document.getElementById('set-clear-tabs-on-quit');
         if (ctoq) ctoq.addEventListener('change', (e) => { this.settings.clearTabsOnQuit = e.target.checked; });
+        const masInput = document.getElementById('set-mermaid-auto-style');
+        if (masInput) masInput.addEventListener('change', (e) => { this.settings.mermaidAutoStyle = e.target.checked; });
         const asdInput = document.getElementById('set-autosave-days');
         if (asdInput) asdInput.addEventListener('change', (e) => {
           const n = Math.floor(Number(e.target.value));

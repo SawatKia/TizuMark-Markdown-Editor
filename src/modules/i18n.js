@@ -134,6 +134,9 @@
         setRowLabel('set-close-action', t('closeAction'));
         setRowLabel('set-clear-tabs-on-quit', t('clearTabsOnQuit'));
         setRowLabel('set-autosave-days', t('autosaveRetention'));
+        setRowLabel('set-mermaid-auto-style', t('mermaidAutoStyle'));
+        const masHint = document.querySelector('#setting-mermaid-auto-style-hint .hint-text');
+        if (masHint) masHint.textContent = t('mermaidAutoStyleHint');
         setRowLabel('set-show-tray-icon', t('showTrayIcon'));
         setRowLabel('set-show-all-files-label', t('showAllFiles'));
         setRowLabel('set-image-store-mode-label', t('imageSettingLabel'));

@@ -526,7 +526,7 @@
             try {
               const code = (container.getAttribute('data-code') || '').trim();
               if (code) {
-                const result = await mermaid.render('docx-mermaid-' + Date.now() + '-' + mi, code);
+                const result = await mermaid.render('docx-mermaid-' + Date.now() + '-' + mi, PreviewPost.autoStyleMermaid(code, this.settings.mermaidAutoStyle !== false));
                 container.innerHTML = result.svg;
                 const svgEl = container.querySelector('svg');
                 if (svgEl) {
@@ -1294,7 +1294,7 @@
               const code = (mermaidContainers[i].getAttribute('data-code') || mermaidContainers[i].textContent || '').trim();
               if (!code) continue;
               try {
-                const result = await mermaid.render('pdf-mermaid-' + i, code);
+                const result = await mermaid.render('pdf-mermaid-' + i, PreviewPost.autoStyleMermaid(code, this.settings.mermaidAutoStyle !== false));
                 const wrapper = document.createElement('div');
                 wrapper.className = 'mermaid-container';
                 wrapper.innerHTML = result.svg;

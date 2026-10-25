@@ -1401,6 +1401,7 @@
         escapeAttr: (s) => (this.escapeAttr ? this.escapeAttr(s) : String(s == null ? '' : s)),
         headingToId: (s) => (this.headingToId ? this.headingToId(s) : String(s == null ? '' : s)),
         mermaidCache: this._mermaidCache,
+        mermaidAutoStyle: this.settings.mermaidAutoStyle !== false,
       };
       // 与阅读模式同 stage（RenderPost 共享管线，故障隔离 + 幂等，见其文件头注释）
       RenderPost.enableCheckboxes(node);
@@ -1493,6 +1494,7 @@
           escapeAttr: (s) => (this.escapeAttr ? this.escapeAttr(s) : String(s == null ? '' : s)),
           headingToId: (s) => (this.headingToId ? this.headingToId(s) : String(s == null ? '' : s)),
           mermaidCache: this._mermaidCache,
+          mermaidAutoStyle: this.settings.mermaidAutoStyle !== false,
         }).then(() => {
           if (settled()) this._wysiwygRefreshAfterMaskChange();
         }).catch((e) => console.warn('[wysiwyg] Mermaid error:', e));
