@@ -2,7 +2,7 @@
 
 **TizuMark** is a lightweight, open-source **Markdown editor** for Windows with WYSIWYG live preview, outline navigation, KaTeX & Mermaid support — a free **Typora alternative** built with Tauri + Rust.
 
-🌐 **简体中文** | [English](README.en.md) | [Español](README.es.md)
+🌐 [简体中文](README.zh-CN.md) | **English** | [Español](README.es.md)
 
 <div align="center">
 
@@ -11,9 +11,9 @@
 </div>
 
 <p align="center">
-  <b>⚡轻量 &nbsp;·&nbsp; 🚀高速 &nbsp;·&nbsp; ✨简洁 &nbsp;·&nbsp; 🆓<font color="#16a34a">开源免费</font></b>
+  <b>⚡Lightweight &nbsp;·&nbsp; 🚀Blazing Fast &nbsp;·&nbsp; ✨Minimal &nbsp;·&nbsp; 🆓<font color="#16a34a">Free & Open Source</font></b>
   <br>
-  <b>一个纯粹、快速的 Markdown 编辑器</b>
+  <b>A clean, fast Markdown editor</b>
 </p>
 
 <p align="center">
@@ -26,183 +26,168 @@
   <img src="https://img.shields.io/badge/License-GPL--3.0-blue" alt="License">
 </p>
 
-<p align="center" style="font-size:1.15em"><b>安装包仅 ~7MB · 内存占用 < 50MB · 双击即开</b></p>
+<p align="center" style="font-size:1.15em"><b>~7MB installer · &lt;50MB RAM · Double-click to launch</b></p>
 
 <p align="center">
-  <img src="demo.gif" alt="TizuMark 功能演示" width="880">
+  <img src="demo.gif" alt="TizuMark Feature Demo" width="880">
 </p>
 
 ---
 
-## 为什么你需要 TizuMark？
+## Why TizuMark?
 
-<p align="center"><b>打开、查看、编辑、导出——就是这么简单。</b></p>
+<p align="center"><b>Open. Read. Edit. Export. That's it.</b></p>
 
-市面上不缺 Markdown 编辑器，但大多走向两个极端：要么是动辄几百 MB 的"重型武器"，要么功能简陋得无法日常使用。TizuMark 卡在中间，刚好合适——把写作者最在意的几件事做到极致。
+The world isn't short of Markdown editors. But most fall into one of two camps: heavyweight monsters that hog hundreds of MB, or toys too barebones for real work. TizuMark lands right in the sweet spot.
 
-| 痛点 | 常见方案 | ✨ TizuMark |
+| Pain Point | The Usual Way | ✨ TizuMark |
 |---|---|---|
-| 🐢 **太重** | 几百 MB 内存、几个 G 安装包，启动等半天 | **Rust 原生引擎，安装包 ~7MB、内存 <50MB，双击一秒即开** |
-| 👯 **分屏** | 源码和渲染各一屏，看文档得来回切窗口 | **阅读、源码、实时预览三模式，编辑/预览滚动自动同步** |
-| 🌀 **长文档** | 滚轮滚到手酸，回头找段落得翻半天 | **大纲自动解析标题层级，一键跳转任意章节** |
-| 🧩 **画公式/图** | 装 LaTeX、切画图工具、导出再粘贴 | **内置 KaTeX 与 Mermaid，公式与图表代码即渲染** |
+| 🐢 **Too heavy** | Hundreds of MB RAM, multi-GB install, slow boot | **Rust engine. ~7MB installer, <50MB RAM, up in a second** |
+| 👯 **Split views** | Source on one side, render on the other — scroll and squint | **Live preview, WYSIWYG, editor/preview scroll auto-synced** |
+| 🌀 **Long docs** | Endless scrolling, can't find that one section | **Auto-generated outline from headings, one click to any chapter** |
+| 🧩 **Math & diagrams** | Install LaTeX, switch tools, export, paste, repeat | **Built-in KaTeX & Mermaid — math and diagrams render from code** |
 
 ---
 
-## ✨ 核心特色
+## Key Features
 
-> TizuMark 卡在"重型 IDE"和"简陋记事本"之间，刚好合适——把写作者最在意的几件事做到极致。
+> TizuMark lands right in the sweet spot between heavyweight IDEs and barebones notepads — nailing the things writers care about most.
 
-- ⚡ **极速轻量**：基于 **Rust + Tauri v2**（系统原生 WebView），安装包约 **7MB**、内存占用 **< 50MB**，双击一秒即开，比 Electron 类应用省 4/5 内存。
-- 👁️ **实时预览**：左边写、右边渲染，编辑/预览滚动自动同步，无需来回切换窗口。
-- 🧠 **按文件类型智能切换视图**：Markdown 自动分屏预览/编辑；纯文本与代码一键纯编辑（无预览栏）；图片自动只读预览——每种文件都给最合适的形式。
-- 🧭 **智能大纲导航**：自动解析标题层级，一键跳转任意章节，长文档永不迷路。
-- 📐 **内置 KaTeX 数学公式**：行内公式、独立公式块、矩阵、方程组全支持，兼容 `$…$` / `$$…$$` 与 LaTeX 习惯的 `\(…\)` / `\[…\]` 定界符——写论文、做笔记、记公式直接搞定。
-- 📊 **内置 Mermaid 图表**：流程图、时序图、甘特图、类图、状态图……**用代码画图，自动跟随明暗主题切换配色**，支持 ELK 自动布局引擎。
-- 🖼️ **图片粘贴即插入**：截图/拖拽直接粘贴，支持 assets 目录存储或 Base64 内联，自动去重；支持 Obsidian 风格嵌入 `![[图片路径]]`（可带 `|600` 尺寸）；导出时相对路径解析与预览完全一致。
-- 📤 **多种导出**：HTML 单文件（完整样式、完全离线）、高清长图 PNG、PDF（系统打印对话框）、**Word DOCX**（公式与图表转图片、图片自动等比缩放不撑破页面），均保留暗黑/亮色主题样式。
-- ⌨️ **快捷键全自定义**：每一条快捷键都能在 `文件 → 快捷键设置` 中改键，贴合你的肌肉记忆。
-- 📂 **多标签页 + 工作区**：同时编辑多个文件、拖拽批量打开、文件夹工作区、`.md` 文件关联。
-- 🚀 **海量文档流畅预览**：数万行超大文档采用滑动窗口 + 虚拟渲染，只渲染当前阅读区域，编辑器永不卡顿；外部磁盘变更自动检测并提示重新加载，多工具协作不丢稿。
-- 🎨 **深度个性化**：亮色 / 暗黑 / 跟随系统一键切换；内置 5 套配色方案（基准 / 暖橙 / 翠林 / 极夜 / 暮紫）；编辑器 / 预览 / 代码块字体可选择系统已安装字体（全量枚举、可搜索），或导入本地 `.ttf` / `.otf` / `.woff` / `.woff2` 字体。
-- 🌐 **中 / 英 / 西 界面语言一键切换**：内置完整多语言界面，随时在设置中切换，新手与外文写作都友好。
-- 💾 **会话记忆**：重启自动恢复上次打开的标签页、文件夹工作区与展开目录，打开即回到上次状态。
-
----
-
-## 功能一览
-
-| 📝 编辑 | 👁️ 预览 | 📤 导出 |
-|---|---|---|
-| GFM 完整语法高亮 | 实时同步滚动 | 导出 HTML 单文件（完整样式） |
-| 代码块 100+ 语言着色 | KaTeX 数学公式渲染 | 导出高清长图 PNG |
-| 查找替换（支持正则） | Mermaid 流程图/时序图/甘特图/状态图 | 导出 PDF（系统打印对话框） |
-| 跨文件搜索（`Ctrl+H`） | Emoji 短代码 (`:rocket:` → 🚀) | 保留暗黑/亮色主题样式 |
-| 可折叠格式工具栏 | 图片查看器（拖拽平移 + 滚轮缩放） | 完全离线，无需联网 |
-| 自动补全括号、引号 | 自适应图片尺寸 | 中英文 Emoji 完美适配 |
-| 图片粘贴插入、自动去重（MD5） | 任务列表预览可点击勾选 | 自定义图片存储路径 |
-| 插入菜单 + 「/」快捷插入（表格/提示块/目录等） | 图片自动带宽高属性 | 导出 Word DOCX（公式/图表转图片、图片自动缩放） |
-
-| ⚡ 效率 | 🎨 个性化 | 🔧 专业 |
-|---|---|---|
-| 大纲导航一键跳转 | 亮色 / 暗黑 / 跟随系统 | CLI 命令行打开文件 |
-| 文件夹工作区（侧边栏文件树） | 字体大小/行高/内容宽度可调 | 文件关联 .md / .markdown |
-| 跨文件搜索（Ctrl+H）/ 文件搜索（Ctrl+P 按文件名或路径跳转） | Tab 宽度 / 自动换行开关 | 最近打开文件列表 |
-| 标签页拖拽排序 | 代码块行号 / 代码自动换行开关 | 未保存状态标记 + 关闭提醒 |
-| 拖拽、批量打开文件 | 全套快捷键可自定义 | 系统托盘（可隐藏）+ 关闭行为可选 + 全局热键唤回 |
-| 编辑/预览分屏比例自由拖拽 | 导入自定义字体（编辑器/预览分别指定） | 状态栏实时字数统计 |
-| 预览内查找（支持正则）+ 复制为 HTML | 5 套配色方案 + 字体选择（系统全量可搜索 / 导入本地） | 外部变更检测 + 重新加载提示 |
-| 软换行（回车即换行）开关 | 中 / 英 / 西 界面语言一键切换 | 表格单元格内 `<br>` 换行 |
-| 会话记忆（重启恢复标签页/文件夹） | 自绘无边框窗口（自定义最小化/最大化/关闭） | |
-| | 静默检查更新，有新版自动提示 | |
+- ⚡ **Blazing fast & lightweight**: Built on **Rust + Tauri v2** (native WebView), ~**7MB** installer, **<50MB** RAM, launches in under a second — 4/5 less memory than Electron apps.
+- 👁️ **Live WYSIWYG preview**: Write on the left, see it render on the right. Editor and preview scroll auto-synced — no window switching.
+- 🧠 **Smart view per file type**: Markdown auto splits preview/edit; plain text & code open in a pure editor (no preview pane); images open read-only — each file gets the right view.
+- 🧭 **Smart outline navigation**: Auto-parses heading hierarchy, one click to any chapter. Never get lost in long docs.
+- 📐 **Built-in KaTeX math**: Inline formulas, display blocks, matrices, equation systems; supports `$…$` / `$$…$$` as well as LaTeX-style `\(…\)` / `\[…\]` delimiters — papers, notes, formulas all handled.
+- 📊 **Built-in Mermaid diagrams**: Flowcharts, sequence diagrams, Gantt charts, class diagrams, state diagrams… **draw with code, auto-adapts to light/dark theme**, with ELK auto-layout support.
+- 🖼️ **Paste-to-insert images**: Screenshots or drag-drop, auto-dedup via MD5. Store in `assets/` or inline as Base64. Relative paths resolve identically in preview and export.
+- 📤 **Multi-format export**: Standalone HTML (full styling, fully offline), high-res PNG long screenshot, PDF (system print dialog), and **Word DOCX** (math & diagrams rasterized, images auto-scaled to fit the page) — all preserve dark/light theme.
+- ⌨️ **Fully customizable shortcuts**: Every single shortcut can be rebound in `File → Keyboard Shortcuts` to match your muscle memory.
+- 📂 **Multi-tab + workspace**: Edit multiple files at once, drag-drop batch open, folder workspace with sidebar file tree, `.md` file association.
+- 🚀 **Huge-doc smooth preview**: Sliding-window + virtual rendering for documents with tens of thousands of lines — never lags. External file changes auto-detected with reload prompt.
+- 🎨 **Deep personalization**: Light / Dark / Follow System; 5 color schemes (Default / Sunset / Forest / Nord / Dusk); editor / preview / code-block fonts can use any system-installed font (fully enumerated, searchable), or import local `.ttf` / `.otf` / `.woff` / `.woff2` fonts.
+- 🌐 **Bilingual UI**: Chinese / English interface toggle at any time.
+- 💾 **Session restore**: Reopens tabs, folder workspace, and expanded directories from last session.
 
 ---
 
-## 界面预览
+## Feature Matrix
+
+| 📝 Editing | 👁️ Preview | 📤 Export |
+|---|---|---|
+| Full GFM syntax highlighting | Live scroll-synced preview | Standalone HTML (with full styling) |
+| 100+ language code highlighting | KaTeX math rendering | High-res long screenshot PNG |
+| Find & replace with regex | Mermaid flowcharts, sequences, Gantt, state | Export PDF (system print dialog) |
+| Cross-file search (`Ctrl+H`) | Emoji shortcodes (`:rocket:` → 🚀) | Dark / light theme preserved |
+| Collapsible format toolbar | Image viewer (drag-pan + scroll-zoom) | 100% offline |
+| Auto bracket & quote pairing | Adaptive image sizing | CJK Emoji support |
+| Image paste, auto-dedup (MD5) | Clickable task-list checkboxes | Custom image asset path |
+| Insert menu + "/" quick-insert (tables, callouts, TOC) | Auto width/height on image insert | Export Word DOCX (math & diagrams rasterized, images auto-scaled) |
+
+| ⚡ Productivity | 🎨 Style | 🔧 Power |
+|---|---|---|
+| Outline sidebar — jump anywhere | Light / Dark / Follow System | CLI file opening |
+| Folder workspace (sidebar file tree) | Font size, line height, max width | File association: .md, .markdown |
+| Cross-file search (Ctrl+H) / file search (Ctrl+P by name or path) | Tab width, word wrap toggle | Recently opened files list |
+| Tab drag-to-reorder | Code block line numbers / auto-wrap | Unsaved-state markers + close prompt |
+| Drag & drop, batch file open | Fully rebindable shortcuts | System tray (hideable) + close behavior |
+| Free-drag split pane ratio | Import custom fonts (editor & preview separately) | Status bar word & char count |
+| Find in preview (regex) + copy as HTML | 5 color schemes + font picker (all system fonts, searchable / import local) | External-change detection & reload prompt |
+| Soft line break toggle | Chinese / English UI toggle | |
+| Session restore (tabs & workspace) | Frameless custom window controls | |
+| | Silent update check on startup | |
+
+---
+
+## Screenshots
 
 <p align="center">
-  <img src="screenshots/01-main.png" alt="主界面全貌" width="45%">
-  <img src="screenshots/02-find.png" alt="查找替换" width="45%">
+  <img src="screenshots/01-main.png" alt="Main Interface" width="45%">
+  <img src="screenshots/02-find.png" alt="Find & Replace" width="45%">
   <br>
-  <img src="screenshots/03-findcrossfile.png" alt="跨文件搜索" width="45%">
-  <img src="screenshots/04-findfile.png" alt="文件速达" width="45%">
+  <img src="screenshots/03-findcrossfile.png" alt="Cross-file Search" width="45%">
+  <img src="screenshots/04-findfile.png" alt="File Quick Open" width="45%">
   <br>
-  <img src="screenshots/05-tabs.png" alt="多标签与标签栏滚动" width="45%">
-  <img src="screenshots/06-math.png" alt="KaTeX 数学公式渲染" width="45%">
+  <img src="screenshots/05-tabs.png" alt="Tabs & Scrollable Tab Bar" width="45%">
+  <img src="screenshots/06-math.png" alt="KaTeX Math Rendering" width="45%">
   <br>
-  <img src="screenshots/07-mermaid.png" alt="Mermaid 图表渲染" width="45%">
-  <img src="screenshots/08-code.png" alt="代码语法高亮" width="45%">
+  <img src="screenshots/07-mermaid.png" alt="Mermaid Diagram Rendering" width="45%">
+  <img src="screenshots/08-code.png" alt="Code Syntax Highlighting" width="45%">
   <br>
-  <img src="screenshots/09-callout.png" alt="提示框渲染" width="45%">
-  <img src="screenshots/10-theme.png" alt="暗色主题" width="45%">
+  <img src="screenshots/09-callout.png" alt="Callout Rendering" width="45%">
+  <img src="screenshots/10-theme.png" alt="Dark Theme" width="45%">
   <br>
-  <img src="screenshots/11-font.png" alt="字体设置" width="45%">
-  <img src="screenshots/12-export.png" alt="导出菜单" width="45%">
+  <img src="screenshots/11-font.png" alt="Font Settings" width="45%">
+  <img src="screenshots/12-export.png" alt="Export Menu" width="45%">
   <br>
-  <img src="screenshots/13-shortcuts.png" alt="快捷键自定义设置" width="45%">
-  <img src="screenshots/14-image.png" alt="图片插入与设置" width="45%">
+  <img src="screenshots/13-shortcuts.png" alt="Customizable Shortcuts" width="45%">
+  <img src="screenshots/14-image.png" alt="Image Insert & Settings" width="45%">
   <br>
-  <img src="screenshots/15-workspace.png" alt="文件夹工作区" width="45%">
-  <img src="screenshots/16-large.png" alt="超大文档流畅预览" width="45%">
+  <img src="screenshots/15-workspace.png" alt="Folder Workspace" width="45%">
+  <img src="screenshots/16-large.png" alt="Smooth Large-Document Preview" width="45%">
 </p>
 
 ---
 
-## 快速开始
+## Quick Start
 
-### 下载安装
+### Download
 
-| 平台 | 状态 |
-|------|------|
-| Windows | ✅ 已支持 |
-| macOS | 🔜 计划中 |
-| Linux | 🔜 计划中 |
+| Platform | Status |
+|----------|--------|
+| Windows | ✅ Supported |
+| macOS | 🔜 Planned |
+| Linux | 🔜 Planned |
 
-<b>请打开产品发布页面下载：</b>
+<b>Visit the release page to download:</b>
 
-<a href="https://github.com/tizuio/TizuMark-Markdown-Editor/releases"><img src="https://img.shields.io/badge/⬇_从_GitHub_下载-181717?style=for-the-badge&logo=github&logoColor=white" alt="从 GitHub 下载"></a>
+<a href="https://github.com/tizuio/TizuMark-Markdown-Editor/releases"><img src="https://img.shields.io/badge/⬇_Download_from_GitHub-181717?style=for-the-badge&logo=github&logoColor=white" alt="Download from GitHub"></a>
 &nbsp;&nbsp;
-<a href="https://gitee.com/tizu/TizuMark-Markdown-Editor/releases"><img src="https://img.shields.io/badge/⬇_从_Gitee_下载-C71D23?style=for-the-badge&logo=gitee&logoColor=white" alt="从 Gitee 下载"></a>
+<a href="https://gitee.com/tizu/TizuMark-Markdown-Editor/releases"><img src="https://img.shields.io/badge/⬇_Download_from_Gitee-C71D23?style=for-the-badge&logo=gitee&logoColor=white" alt="Download from Gitee"></a>
 
-> 首次打开会自动展示使用说明，也可在 `帮助 → 使用说明` 中随时查看。
+> On first launch, the user guide opens automatically. You can also find it in `Help → User Guide` anytime.
 
-> 🔔 **首次安装 / 版本升级后，TizuMark 会自动打开使用说明和完整语法演示 demo.md，帮你快速上手新功能。**
+> 🔔 **On first install or after a version upgrade, TizuMark automatically opens the User Guide and the full syntax demo (demo.md) to help you get started with new features.**
 
-📖 想一眼看全所有语法效果？打开 [demo.md](demo.md) 查看完整语法演示。
+📖 Want to see every syntax in action? Open [demo.md](demo.md) for a full syntax showcase.
 
-### 快捷键速览
+### Shortcuts
 
-| 快捷键 | 功能 | 快捷键 | 功能 |
+| Shortcut | Action | Shortcut | Action |
 |---|---|---|---|
-| `Ctrl+N` | 新建文件 | `Ctrl+W` | 关闭标签 |
-| `Ctrl+O` | 打开文件 | `Ctrl+F` | 查找 |
-| `Ctrl+S` | 保存文件 | `Ctrl+H` | 跨文件搜索 |
-| `Ctrl+B` | 加粗 | `Ctrl+I` | 斜体 |
+| `Ctrl+N` | New File | `Ctrl+W` | Close Tab |
+| `Ctrl+O` | Open File | `Ctrl+F` | Find |
+| `Ctrl+S` | Save File | `Ctrl+H` | Find & Replace |
+| `Ctrl+B` | Bold | `Ctrl+I` | Italic |
 
-> 所有快捷键可在 `文件 → 快捷键设置` 中自定义
+> All shortcuts are customizable via `File → Keyboard Shortcuts`
 
-### 从源码构建
+### Build from Source
 
-**Windows 开发环境前置**（为什么需要 C++ Build Tools，见 docs 说明）：
-
-- Node.js ≥ 22
-- Rust stable（MSVC 目标）
-- VS C++ Build Tools 2022（最小组件即可，无需完整 VS IDE）
-- WebView2 Runtime（Win10/11 一般自带）
-
-```powershell
+```bash
 git clone https://github.com/tizuio/TizuMark-Markdown-Editor.git
-# 或国内镜像：
+# Or via Gitee (China mirror):
 git clone https://gitee.com/tizu/TizuMark-Markdown-Editor.git
-cd TizuMark-Markdown-Editor
-
-# 一键初始化环境（VS BuildTools 最小 + Rust + Node）
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-dev.ps1
-# 重开终端后验证：
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-dev.ps1 -VerifyOnly
-
-npm ci
-npm run dev      # 开发模式
-npm run build    # 构建发布版本（发布流程见 CLAUDE.md）
+cd tizu-mark
+npm install
+npm run dev      # dev mode
+npm run build    # production build
 ```
 
-> 📖 完整初始化指南（含「工具链目录跨电脑搬移」等换机场景）：[docs/DEV_SETUP.md](docs/DEV_SETUP.md)
-
 ---
 
-## 🛠 技术架构
+## 🛠 Architecture
 
 ```
 ┌──────────────────────────────────────────────────┐
-│                  前端 (WebView)                   │
-│   CodeMirror 5  │  highlight.js  │    KaTeX      │
-│     Mermaid     │  html2canvas   │     ...       │
+│                 Frontend (WebView)                 │
+│   CodeMirror 5  │  highlight.js  │    KaTeX       │
+│     Mermaid     │  html2canvas   │     ...        │
 └──────────────┬───────────────────────────────────┘
                │ IPC (ipc: / tauri:)
 ┌──────────────┴───────────────────────────────────┐
-│                  后端 (Rust)                      │
-│     Tauri 2.5    │    pulldown-cmark              │
-│     文件 I/O     │     系统对话框                  │
+│                  Backend (Rust)                    │
+│     Tauri 2.5    │    pulldown-cmark               │
+│     File I/O     │    Native Dialogs               │
 └──────────────┬───────────────────────────────────┘
                │
         ┌──────┴──────┐
@@ -212,109 +197,109 @@ npm run build    # 构建发布版本（发布流程见 CLAUDE.md）
         └─────────────┘
 ```
 
-> Tauri v2 使用系统原生 WebView，安装包仅 ~7MB，内存占用不到 Electron 类应用的 1/5。**当前已发布 Windows 版，macOS / Linux 版本规划中。**
+> Tauri v2 uses the OS native WebView — ~7MB installer, ~1/5 the footprint of Electron-based alternatives. **Windows is released today; macOS & Linux are planned.**
 
 ---
 
-## 常见问题
+## FAQ
 
 <details open>
-<summary><b>TizuMark 是免费的吗？</b></summary>
+<summary><b>Is TizuMark really free?</b></summary>
 
-是的，永久免费且开源。基础功能没有任何限制。
+Yes. Free forever, open source, no feature paywalls.
 </details>
 
 <details open>
-<summary><b>如何恢复默认设置？</b></summary>
+<summary><b>How do I restore default settings?</b></summary>
 
-在 `文件 → 设置` 或 `文件 → 快捷键设置` 中点击「恢复默认」按钮即可。
+Click "Restore Default" in `File → Settings` or `File → Keyboard Shortcuts`.
 </details>
 
 <details open>
-<summary><b>支持哪些文件格式？</b></summary>
+<summary><b>What file formats are supported?</b></summary>
 
-支持 **Markdown**（`.md` / `.markdown` / `.mdown` / `.mkd` 等共 7 种扩展名，自动分屏预览）、**图片**（20 种格式，自动只读预览）以及**纯文本 / 代码文件**（`.txt` / `.json` / `.js` 等，纯编辑模式）。Markdown 语法高亮与导出功能面向 Markdown 文件。
+Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, … — 7 extensions, auto split-preview), images (20 formats, read-only preview), and plain-text / code files (`.txt`, `.json`, `.js`, …) all open. Markdown syntax highlighting & export apply to Markdown files.
 </details>
 
 <details open>
-<summary><b>如何反馈问题或建议？</b></summary>
+<summary><b>How do I report a bug or request a feature?</b></summary>
 
-- QQ交流群：**1035294939**
-- [Gitee Issues](https://gitee.com/tizu/TizuMark-Markdown-Editor/issues)
+- QQ Group: **1035294939** (Chinese community)
 - [GitHub Issues](https://github.com/tizuio/TizuMark-Markdown-Editor/issues)
+- [Gitee Issues](https://gitee.com/tizu/TizuMark-Markdown-Editor/issues)
 </details>
 
 ---
 
-## 捐赠支持
+## Donate
 
-<p align="center"><b>一个人的开源，全靠你的支持续命。</b></p>
+<p align="center"><b>One person. No salary. Your support keeps this alive.</b></p>
 
-做 TizuMark 的原因很简单：用了很多 Markdown 工具，不是太臃肿就是不好用，干脆自己撸一个。
+I built TizuMark because I was tired of Markdown tools that were either bloated or broken. So I made my own.
 
-如果 TizuMark 帮到了你——看文档更轻松了、写东西更顺手了、导出的图让人夸好看了——希望能支持一下。您的鼓励会让我实实在在地开心一整天，也意味着这个项目可以活得更久。
+If TizuMark has made your life even a little easier — docs look cleaner, writing flows better, that export earned you a compliment — please consider chipping in. **Your encouragement genuinely makes my day and extends this project's runway.**
 
-不方便打赏也没关系，点个 Star、发给朋友、或者在群里说一声"好用"，就已经是莫大的鼓励。
+Can't donate? No worries. A GitHub star, a shout-out to a friend, a "nice tool" in the group chat — that's already huge.
 
 <table align="center">
   <tr>
     <td align="center">
-      <img src="donate-wechat.png" alt="微信赞赏" width="220"><br>
+      <img src="donate-wechat.png" alt="WeChat Pay" width="220"><br>
       <span style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;font-size:14px;font-weight:500">
         <svg role="img" viewBox="0 0 24 24" width="18" height="18" style="vertical-align:middle;fill:#07C160">
           <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/>
         </svg>
-        微信
+        WeChat
       </span>
     </td>
     <td width="40"></td>
     <td align="center">
-      <img src="donate-alipay.png" alt="支付宝赞赏" width="220"><br>
+      <img src="donate-alipay.png" alt="Alipay" width="220"><br>
       <span style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;font-size:14px;font-weight:500">
         <svg role="img" viewBox="0 0 24 24" width="18" height="18" style="vertical-align:middle;fill:#1677FF">
           <path d="M19.695 15.07c3.426 1.158 4.203 1.22 4.203 1.22V3.846c0-2.124-1.705-3.845-3.81-3.845H3.914C1.808.001.102 1.722.102 3.846v16.31c0 2.123 1.706 3.845 3.813 3.845h16.173c2.105 0 3.81-1.722 3.81-3.845v-.157s-6.19-2.602-9.315-4.119c-2.096 2.602-4.8 4.181-7.607 4.181-4.75 0-6.361-4.19-4.112-6.949.49-.602 1.324-1.175 2.617-1.497 2.025-.502 5.247.313 8.266 1.317a16.796 16.796 0 0 0 1.341-3.302H5.781v-.952h4.799V6.975H4.77v-.953h5.81V3.591s0-.409.411-.409h2.347v2.84h5.744v.951h-5.744v1.704h4.69a19.453 19.453 0 0 1-1.986 5.06c1.424.52 2.702 1.011 3.654 1.333m-13.81-2.032c-.596.06-1.71.325-2.321.869-1.83 1.608-.735 4.55 2.968 4.55 2.151 0 4.301-1.388 5.99-3.61-2.403-1.182-4.438-2.028-6.637-1.809"/>
         </svg>
-        支付宝
+        Alipay
       </span>
     </td>
   </tr>
 </table>
 
-<p align="center"><sub>每一笔我都会认真看。谢谢你。</sub></p>
+<p align="center"><sub>I read every donation notification. Thank you.</sub></p>
 
 ---
 
-## 联系作者
+## Contact
 
-| 方式 | 链接 |
+| Channel | Link |
 |---|---|
-| QQ群 | **1035294939** [@点击链接加入群聊【Tizu交流群】](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=G0xAh9l042apAmjy9MAKOI6pSMWhV5jI&authKey=hWwxCXRZkWorgQZtiBNeRE6L12Ow6CLSo9K9dWzSjDFNuIEfmnmLAWH1T3qooH40&noverify=0&group_code=1035294939)|
-| Gitee | [@tizu](https://gitee.com/tizu) |
+| QQ Group | **1035294939** [@Join the group【Tizu交流群】](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=G0xAh9l042apAmjy9MAKOI6pSMWhV5jI&authKey=hWwxCXRZkWorgQZtiBNeRE6L12Ow6CLSo9K9dWzSjDFNuIEfmnmLAWH1T3qooH40&noverify=0&group_code=1035294939)|
 | GitHub | [@tizuio](https://github.com/tizuio) |
+| Gitee | [@tizu](https://gitee.com/tizu) |
 
-有问题、建议、合作，欢迎加群或提 Issue。
+Questions, feedback, collaboration — open an issue or join the QQ group.
 
 ---
 
-## 许可证
+## License
 
 Copyright (c) 2024-2026 TizuMark
 
-本软件基于 [GNU General Public License v3.0](LICENSE) 开源发布。你可以自由使用、修改和分发，但衍生作品必须延续 GPL v3 协议。
+This software is released under the [GNU General Public License v3.0](LICENSE). You are free to use, modify, and distribute it, but derivative works must remain under GPL v3.
 
-内置开源组件按其各自许可证授权，详见应用内 `帮助 → 关于` 页面。
+Bundled open-source components are licensed under their respective terms. See `Help → About` in the app for details.
 
 ---
 
 <p align="center">
-  <b>✨ TizuMark — 轻得不像话，快得刚刚好</b><br><br>
-  <a href="https://github.com/tizuio/TizuMark-Markdown-Editor/releases"><img src="https://img.shields.io/badge/⬇_GitHub_下载-black?style=for-the-badge&logo=github" alt="GitHub Download"></a>
+  <b>✨ TizuMark — Stupidly light. Exactly fast enough.</b><br><br>
+  <a href="https://github.com/tizuio/TizuMark-Markdown-Editor/releases"><img src="https://img.shields.io/badge/⬇_GitHub_Download-black?style=for-the-badge&logo=github" alt="GitHub Download"></a>
   &nbsp;
-  <a href="https://gitee.com/tizu/TizuMark-Markdown-Editor/releases"><img src="https://img.shields.io/badge/⬇_Gitee_下载-C71D23?style=for-the-badge&logo=gitee" alt="Gitee Download"></a>
+  <a href="https://gitee.com/tizu/TizuMark-Markdown-Editor/releases"><img src="https://img.shields.io/badge/⬇_Gitee_Download-C71D23?style=for-the-badge&logo=gitee" alt="Gitee Download"></a>
   <br><br>
   <a href="https://github.com/tizuio/TizuMark-Markdown-Editor">⭐ GitHub Star</a>
   &nbsp;·&nbsp;
   <a href="https://gitee.com/tizu/TizuMark-Markdown-Editor">⭐ Gitee Star</a>
   &nbsp;·&nbsp;
-  <b>QQ群 1035294939</b>
+  <a href="https://github.com/tizuio/TizuMark-Markdown-Editor/issues">🐛 Report Bug</a>
 </p>
