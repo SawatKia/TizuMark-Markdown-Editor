@@ -46,14 +46,21 @@ function fontFamilyValue(body) {
   return m ? m[1].trim() : '';
 }
 
-async function runExportPdf(w, ed) {
+// 2026-10-25：exportPDF 主路径改为 WebView2 PrintToPdf（直接落盘）。字体链是本文件守护的
+// **回退打印帧**（`_buildPdfPrintFrameHtml`）契约，故把导出逼上回退：printToPdf 抛错。
+function forceFallbackPath(w, ed) {
   ed.showConfirmDialog = async () => true;
+  w.TauriApi.printToPdf = async () => { throw new Error('模拟旧版 WebView2：无 ICoreWebView2_7::PrintToPdf'); };
+}
+
+async function runExportPdf(w, ed) {
+  forceFallbackPath(w, ed);
   ed.activeTab.name = 'NOTE.md';
   await ed.exportPDF().catch(() => {});
 }
 
 test('exportPDF: 未设置预览字体时正文钉 TrueType 中文尾链（无 Noto/SourceHan/PingFang）', async () => {
-  await withEditor({}, async (w, ed) => {
+  await withEditor({ invokeImpl: (cmd) => (cmd === 'plugin:dialog|save' ? '/tmp/out.pdf' : null) }, async (w, ed) => {
     const h = capturePdfIframe(w);
     try {
       await runExportPdf(w, ed);
@@ -74,7 +81,7 @@ test('exportPDF: 未设置预览字体时正文钉 TrueType 中文尾链（无 N
 });
 
 test('exportPDF: 用户设置的预览字体排在字体链首位（不被硬编码整链顶掉）', async () => {
-  await withEditor({}, async (w, ed) => {
+  await withEditor({ invokeImpl: (cmd) => (cmd === 'plugin:dialog|save' ? '/tmp/out.pdf' : null) }, async (w, ed) => {
     ed.settings.previewFont = 'IBM Plex Serif';
     const h = capturePdfIframe(w);
     try {
@@ -101,7 +108,7 @@ test('exportPDF: 用户设置的预览字体排在字体链首位（不被硬编
 });
 
 test('exportPDF: 自定义预览字体的 @font-face 一并注入打印帧', async () => {
-  await withEditor({}, async (w, ed) => {
+  await withEditor({ invokeImpl: (cmd) => (cmd === 'plugin:dialog|save' ? '/tmp/out.pdf' : null) }, async (w, ed) => {
     ed.settings.customFonts = [{ id: 'abc', name: 'MyFont', fileName: 'my.ttf', hash: 'h' }];
     ed.settings.previewFont = 'abc';
     // 复用已存在的 #custom-fonts-style（registerCustomFonts 初始化时可能已建同 id 元素，
@@ -135,7 +142,7 @@ test('exportPDF: 自定义预览字体的 @font-face 一并注入打印帧', asy
 });
 
 test('exportPDF: mermaid 重渲染字体链 = 用户字体 + 中文尾链', async () => {
-  await withEditor({}, async (w, ed) => {
+  await withEditor({ invokeImpl: (cmd) => (cmd === 'plugin:dialog|save' ? '/tmp/out.pdf' : null) }, async (w, ed) => {
     ed.settings.previewFont = 'IBM Plex Serif';
     let capturedFontFamily = null;
     w.mermaid = {
@@ -157,7 +164,7 @@ test('exportPDF: mermaid 重渲染字体链 = 用户字体 + 中文尾链', asyn
 });
 
 test('exportPDF: 正文字体不污染代码字体（pre/code 仍走 --font-code-preview）', async () => {
-  await withEditor({}, async (w, ed) => {
+  await withEditor({ invokeImpl: (cmd) => (cmd === 'plugin:dialog|save' ? '/tmp/out.pdf' : null) }, async (w, ed) => {
     const h = capturePdfIframe(w);
     try {
       await runExportPdf(w, ed);

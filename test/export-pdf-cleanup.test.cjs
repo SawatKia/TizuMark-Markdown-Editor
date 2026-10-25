@@ -23,6 +23,15 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { withEditor } = require('./helpers/app-env.cjs');
 
+// 2026-10-25：exportPDF 主路径改为 WebView2 PrintToPdf（直接落盘，无打印对话框、无下载气泡）。
+// 本文件守护的是**回退路径**（旧 WebView2 运行时 / PrintToPdf 抛错）的 iframe 收尾逻辑，
+// 故每条用例都先把导出逼上回退：给定保存路径 + 让 printToPdf 抛错。
+const pdfSaveInvoke = (cmd) => (cmd === 'plugin:dialog|save' ? '/tmp/out.pdf' : null);
+function forceFallbackPath(w, ed) {
+  ed.showConfirmDialog = async () => true;
+  w.TauriApi.printToPdf = async () => { throw new Error('模拟旧版 WebView2：无 ICoreWebView2_7::PrintToPdf'); };
+}
+
 function installPdfTestHarness(w) {
   // 拦截 createElement 捕获 iframe
   const capturedIframes = [];
@@ -58,8 +67,8 @@ function installPdfTestHarness(w) {
 }
 
 test('exportPDF: afterprint 后 30s 清理不再 NPE（contentWindow 已 null）', async () => {
-  await withEditor({}, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
+  await withEditor({ invokeImpl: pdfSaveInvoke }, async (w, ed) => {
+    forceFallbackPath(w, ed);
     const h = installPdfTestHarness(w);
     try {
       await ed.exportPDF().catch(() => {});
@@ -94,8 +103,8 @@ test('exportPDF: afterprint 后 30s 清理不再 NPE（contentWindow 已 null）
 
 test('exportPDF: 无 afterprint 触发时，30s 清理路径正常移除 iframe', async () => {
   // 场景：用户在打印对话框选"取消"或不操作，30s 后 setTimeout 清理。
-  await withEditor({}, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
+  await withEditor({ invokeImpl: pdfSaveInvoke }, async (w, ed) => {
+    forceFallbackPath(w, ed);
     const h = installPdfTestHarness(w);
     try {
       await ed.exportPDF().catch(() => {});
@@ -119,8 +128,8 @@ test('exportPDF: 无 afterprint 触发时，30s 清理路径正常移除 iframe'
 test('exportPDF: cleanup 互斥——after 路径先到，30s 路径后到不重复操作', async () => {
   // 验证 cleaned 标志位：两条路径都触发也只 remove 一次。
   // 通过劫持 contentWindow.removeEventListener 计数验证。
-  await withEditor({}, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
+  await withEditor({ invokeImpl: pdfSaveInvoke }, async (w, ed) => {
+    forceFallbackPath(w, ed);
     const h = installPdfTestHarness(w);
     try {
       await ed.exportPDF().catch(() => {});
@@ -158,8 +167,8 @@ test('exportPDF: cleanup 互斥——after 路径先到，30s 路径后到不重
 });
 
 test('exportPDF: 打印文件名预填去扩展名的 md 文件名（非空白）', async () => {
-  await withEditor({}, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
+  await withEditor({ invokeImpl: pdfSaveInvoke }, async (w, ed) => {
+    forceFallbackPath(w, ed);
     const h = installPdfTestHarness(w);
     try {
       ed.activeTab.name = 'RELEASE_NOTES.md';
@@ -192,8 +201,8 @@ test('exportPDF: onload 显式写 contentDocument.title 覆盖已有（srcdoc �
   // 直接验证「iframe.contentDocument.title = escapedTitle」这条显式写入路径：
   // 在 onload 前把 contentDocument.title 污染成别的值，onload 后必须被改回 escapedTitle。
   // （真实 WebView 中 srcdoc 不一定自动采用 <title>，此写入保证文件名预填。）
-  await withEditor({}, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
+  await withEditor({ invokeImpl: pdfSaveInvoke }, async (w, ed) => {
+    forceFallbackPath(w, ed);
     const h = installPdfTestHarness(w);
     try {
       ed.activeTab.name = '我的笔记.md';
@@ -221,8 +230,8 @@ test('exportPDF: onload 显式写 contentDocument.title 覆盖已有（srcdoc �
 test('exportPDF: 主窗口 document.title 临时覆盖为 md 文件名（afterprint 后还原）', async () => {
   // 真正的文件名来源是主窗口（顶层 frame）title，而非 srcdoc 子 frame <title>。
   // 验证 onload 临时覆盖 + afterprint 触发后还原。
-  await withEditor({}, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
+  await withEditor({ invokeImpl: pdfSaveInvoke }, async (w, ed) => {
+    forceFallbackPath(w, ed);
     const h = installPdfTestHarness(w);
     try {
       ed.activeTab.name = 'RELEASE_NOTES.md';
@@ -244,8 +253,8 @@ test('exportPDF: 主窗口 document.title 临时覆盖为 md 文件名（afterpr
 });
 
 test('exportPDF: 无 afterprint 时，30s 超时路径也还原主窗口 title', async () => {
-  await withEditor({}, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
+  await withEditor({ invokeImpl: pdfSaveInvoke }, async (w, ed) => {
+    forceFallbackPath(w, ed);
     const h = installPdfTestHarness(w);
     try {
       ed.activeTab.name = '说明文档.md';
@@ -271,11 +280,12 @@ test('exportPDF: afterprint 后立即收尾（不再保留 loading，警示已�
   let fileMetaCalled = 0;
   await withEditor({
     invokeImpl: (cmd) => {
+      if (cmd === 'plugin:dialog|save') return '/tmp/out.pdf';
       if (cmd === 'file_meta') { fileMetaCalled += 1; return null; }
       return null;
     },
   }, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
+    forceFallbackPath(w, ed);
     const h = installPdfTestHarness(w);
     try {
       ed.activeTab.name = 'DEMO.md';
@@ -312,11 +322,12 @@ test('exportPDF: 图片内联为 base64（srcdoc 不含 blob: / 相对路径，�
   const captured = {};
   await withEditor({
     invokeImpl: (cmd, args) => {
+      if (cmd === 'plugin:dialog|save') return '/tmp/out.pdf';
       if (cmd === 'fetch_image_as_base64') return 'RELBASE64';
       return null;
     },
   }, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
+    forceFallbackPath(w, ed);
     ed.activeTab.name = 'NOTE.md';
     ed.activeTab.filePath = '/docs/note.md';
     // 模拟真实预览：一张 blob:（processImages 缓存），一张相对路径
@@ -356,8 +367,8 @@ test('exportPDF: 暗色模式下导出帧仍取亮色 hljs 配色（白纸可读
   // 根因：导出帧纸面恒为白底（data-theme="light"），但旧实现取「当前已加载」的
   // #highlight-theme CSS——暗色模式下那是 github-dark 的浅灰 token 色，落白纸面几乎不可见
   // （用户反馈：暗黑模式导出 PDF 代码块文字发灰看不清）。修复：一律取亮色 github.min.css。
-  await withEditor({}, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
+  await withEditor({ invokeImpl: pdfSaveInvoke }, async (w, ed) => {
+    forceFallbackPath(w, ed);
     // 模拟应用当前处于暗色模式：isDark + data-theme + hljs 主题链接已切 github-dark
     ed.isDark = true;
     w.document.documentElement.setAttribute('data-theme', 'dark');

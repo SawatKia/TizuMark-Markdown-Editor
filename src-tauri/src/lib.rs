@@ -1509,10 +1509,133 @@ pub fn run() {
             // 更新安装包磁盘缓存（下载落盘 / 查缓存 / 从缓存安装）
             download_update_to_file,
             find_cached_update,
-            install_cached_update
+            install_cached_update,
+            // PDF 导出：WebView2 PrintToPdf 直接落盘（无打印对话框 / 无下载气泡）
+            print_to_pdf
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// PDF 导出落盘参数（单位：英寸 —— WebView2 PrintSettings 的约定）。
+// 用结构体传参而不是七八个散参数：命令注册表在 Windows / 非 Windows 两份实现之间
+// 必须保持同一签名，结构体最省心。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PdfPrintOptions {
+    path: String,
+    page_width: f64,
+    page_height: f64,
+    margin_top: f64,
+    margin_bottom: f64,
+    margin_left: f64,
+    margin_right: f64,
+}
+
+// PDF 导出：直接用 WebView2 的 PrintToPdf 落盘，不经过系统打印对话框、也不经过浏览器下载流程。
+//
+// 原实现（前端 iframe + contentWindow.print()）会拉起 Chromium 的打印预览，用户「另存为 PDF」
+// 时走的是浏览器下载管线 —— 窗口右上角会弹出 Edge 风格的「下载 xxx.pdf」气泡（用户反馈
+// 2026-10-25）；而且打印帧是另建的 srcdoc 文档，需要手工把 appCSS / katex / hljs 样式拼进去，
+// 拼漏一项就与阅读模式不一致（用户反馈的公式重复、代码高亮丢失都出在这条路上）。
+//
+// PrintToPdf 打印的是当前 webview 自身：前端只需把页面切到「打印态」（藏掉工具条/侧栏、
+// 展开滚动容器），样式天然就是阅读模式那一套，不存在「两套 CSS 漂移」；调用返回即表示文件
+// 已落盘，全程无 UI、无气泡、无下载目录残留。
+//
+// 失败面：旧版 WebView2 运行时没有 ICoreWebView2_7::PrintToPdf。此时返回错误，前端据此
+// 回退到原来的系统打印路径，不会让 PDF 导出整个不可用。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn print_to_pdf(
+    window: tauri::WebviewWindow,
+    options: PdfPrintOptions,
+) -> Result<(), String> {
+    use std::sync::mpsc::channel;
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_2, ICoreWebView2_7, ICoreWebView2Environment6,
+    };
+    use webview2_com::PrintToPdfCompletedHandler;
+    use windows::core::{Interface, PCWSTR};
+
+    let (tx, rx) = channel::<Result<(), String>>();
+    let path = options.path.clone();
+    let opts = options;
+
+    window
+        .with_webview(move |platform| {
+            let tx_cb = tx.clone();
+            let core = match unsafe { platform.controller().CoreWebView2() } {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("拿不到 CoreWebView2: {e}")));
+                    return;
+                }
+            };
+            unsafe {
+                let core7 = match core.cast::<ICoreWebView2_7>() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx.send(Err(format!("WebView2 运行时过旧（缺 PrintToPdf）: {e}")));
+                        return;
+                    }
+                };
+                // 打印设置：页面尺寸 + 四边边距 + 打印背景色 + 不要页眉页脚
+                let settings = (|| -> windows::core::Result<_> {
+                    let core2 = core.cast::<ICoreWebView2_2>()?;
+                    let env = core2.Environment()?;
+                    let env6 = env.cast::<ICoreWebView2Environment6>()?;
+                    let s = env6.CreatePrintSettings()?;
+                    s.SetPageWidth(opts.page_width)?;
+                    s.SetPageHeight(opts.page_height)?;
+                    s.SetMarginTop(opts.margin_top)?;
+                    s.SetMarginBottom(opts.margin_bottom)?;
+                    s.SetMarginLeft(opts.margin_left)?;
+                    s.SetMarginRight(opts.margin_right)?;
+                    let _ = s.SetShouldPrintBackgrounds(true);
+                    let _ = s.SetShouldPrintHeaderAndFooter(false);
+                    Ok(s)
+                })();
+                let settings = match settings {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = tx.send(Err(format!("打印设置失败: {e}")));
+                        return;
+                    }
+                };
+                let handler = PrintToPdfCompletedHandler::create(Box::new(move |hr, ok| {
+                    let r = if hr.is_ok() && ok {
+                        Ok(())
+                    } else {
+                        Err(format!("PrintToPdf 失败: {hr:?}"))
+                    };
+                    let _ = tx_cb.send(r);
+                    Ok(())
+                }));
+                // 路径转 UTF-16 + NUL 结尾（PrintToPdf 收 PCWSTR）
+                let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+                if let Err(e) = core7.PrintToPdf(PCWSTR(wide.as_ptr()), &settings, &handler) {
+                    let _ = tx.send(Err(format!("PrintToPdf 调用失败: {e}")));
+                }
+            }
+        })
+        .map_err(|e| format!("with_webview 失败: {e}"))?;
+
+    // 超长文档分页渲染可能要十几秒；180s 只兜异常挂死
+    match rx.recv_timeout(std::time::Duration::from_secs(180)) {
+        Ok(r) => r,
+        Err(_) => Err("PrintToPdf 超时（180s）".to_string()),
+    }
+}
+
+// 非 Windows 平台暂无 PrintToPdf 等价能力：明确报错，让前端回退系统打印
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn print_to_pdf(
+    _window: tauri::WebviewWindow,
+    _options: PdfPrintOptions,
+) -> Result<(), String> {
+    Err("当前平台暂不支持 PrintToPdf，回退系统打印".to_string())
 }
 
 #[cfg(test)]

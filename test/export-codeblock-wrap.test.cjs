@@ -1,25 +1,40 @@
-// exportHTML / exportPDF 代码块换行回归测试
-// 根因：
-//   - HTML 导出内联 <style> 的 `pre` 规则只有 `overflow-x: auto`、没有 `white-space` 换行，
-//     导致长代码行不换行、出现横向滚动条（用户："导出 html 时，代码框里没有换行了"）。
-//   - PDF 导出 printCSS 块完全没有 `pre` 规则，代码块直接继承 styles.css 的默认
-//     `white-space: pre`（不换行），打印时既有横向又有竖向滚动条，代码看不全
-//     （用户："导出PDF，代码带有横向竖向滚动条，没法看全代码了"）。
-// 修复：
-//   - HTML：`pre` 加 `white-space: pre-wrap; word-wrap/word-break: break-word;` 并把
-//     `overflow-x: auto` 改为 `overflow: visible`。
-//   - PDF：printCSS 显式加 `.preview-content pre { white-space: pre-wrap !important; ... overflow: visible !important; }`。
+// 导出（HTML / PDF）代码块换行 + 全量展开回归测试
+//
+// 历史根因（两条都还在守）：
+//   - 导出 HTML 的代码块不换行，出现横向滚动条（用户："导出 html 时，代码框里没有换行了"）；
+//   - 导出 PDF 的代码块带横竖滚动条，看不全代码（用户："导出PDF，代码带有横向竖向滚动条"）。
+//
+// 2026-10-25 架构变更：三个导出链路（HTML / PDF / 长图）不再各自手写一套 CSS，
+// 统一改为「CSSOM 直读完整 styles.css」+ 导出侧 `_exportExpandRules()` 全量展开。
+// 因此断言口径也随之改变：
+//   · 「样式来自 styles.css」 —— 断言导出文档里确实带着 styles.css 的 pre / .code-line 规则；
+//   · 「导出不丢内容」 —— 断言导出侧展开规则带 !important，能压住 styles.css 的
+//     `.code-scroll{max-height:300px}` 和 `.preview-content:not(.code-wrap) .code-line-text{white-space:pre}`。
+//
+// 测试环境注意：jsdom 不加载外链样式表（`link.sheet` 恒为 null），CSSOM 采集在测试里恒为空串。
+// 故这里把**真实** styles.css 文本灌进采集器 —— 既验证 appCSS 真的拼进导出文档，
+// 也避免断言退化成「导出侧自己写了什么」的自说自话。
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const pathMod = require('node:path');
 const { withEditor } = require('./helpers/app-env.cjs');
 
-test('exportHTML: 代码块 pre 换行且不出现横向滚动（无 overflow-x: auto）', async () => {
+const REAL_STYLES_CSS = fs.readFileSync(pathMod.join(__dirname, '../src/styles.css'), 'utf8');
+const REAL_STYLES_BASE = 'http://localhost/src/styles.css';
+
+function stubStyleCollect(ed) {
+  ed._exportStyleFromLink = () => ({ css: REAL_STYLES_CSS, base: REAL_STYLES_BASE });
+}
+
+test('exportHTML: 代码块来自 styles.css + 导出侧全量展开（静态文档没有 JS 去开滚动条）', async () => {
   const captured = {};
   await withEditor({ invokeImpl: (cmd, args) => {
     if (cmd === 'plugin:dialog|save') return '/tmp/out.html';
     if (cmd === 'write_file') { captured.content = args.content; return undefined; }
     return null;
   } }, async (w, ed) => {
+    stubStyleCollect(ed);
     ed.activeTab.filePath = '/docs/note.md';
     w.editor.preview.innerHTML =
       '<pre><code>function longLineDemo() {\n  const x = "这是一行非常非常非常非常非常非常非常非常非常非常非常非常非常非常非常非常非常非常非常非常非常非常长的代码，需要换行才能看全";\n}</code></pre>';
@@ -28,124 +43,117 @@ test('exportHTML: 代码块 pre 换行且不出现横向滚动（无 overflow-x:
 
     assert.ok(captured.content, '应写出 HTML');
     const c = captured.content;
-    // 只取 pre 规则的 CSS（避免误判 .mermaid-container / .math-display 上的 overflow-x: auto）
-    const preRule = /pre\s*\{[^}]*\}/.exec(c);
-    assert.ok(preRule, '导出 HTML 应含 pre { } 规则');
-    const pre = preRule[0];
-    // 换行规则应进入导出的 pre CSS
-    assert.ok(pre.includes('white-space: pre-wrap'), '导出 HTML 的 pre 应包含 white-space: pre-wrap（换行）');
-    // 不应再有导致横向滚动的 overflow-x: auto（作用于 pre 本身）
-    assert.ok(!/overflow-x:\s*auto/.test(pre), '导出 HTML 的 pre 不应含 overflow-x: auto（否则仍横向滚动）');
-    assert.ok(/overflow:\s*visible/.test(pre), '导出 HTML 的 pre 溢出应可见（不裁切）');
-    // 关键：导出 HTML 必须有 .code-line 行结构 CSS，否则 code-block.js 输出的
-    // <span class="code-line"> 默认 inline → 全部挤到一行（用户："格式都没了"）。
-    assert.ok(/\.code-line\s*\{[^}]*display:\s*flex/.test(c), '导出 HTML 应让 .code-line display:flex（每行独占一行）');
-    assert.ok(/\.code-line-text\s*\{[^}]*white-space:\s*pre-wrap/.test(c), '导出 HTML 应让 .code-line-text 换行');
-    assert.ok(/\.code-scroll\s*\{[^}]*overflow:\s*visible/.test(c), '导出 HTML 的 .code-scroll 应可见（无滚动条）');
+
+    // ① 阅读样式确实来自 styles.css（唯一的样式真源）
+    assert.ok(
+      /\.preview-content pre\s*\{[^}]*background-color:\s*var\(--code-bg\)/.test(c),
+      '导出文档未带上 styles.css 的 .preview-content pre 规则（样式没进导出 → 与阅读模式必然不一致）',
+    );
+    assert.ok(/\.code-line\s*\{[^}]*display:\s*flex/.test(c),
+      '导出文档缺 .code-line display:flex（code-block.js 输出的 .code-line 会全挤成一行）');
+    assert.ok(/\.code-line-text\s*\{[^}]*white-space:\s*pre-wrap/.test(c),
+      '导出文档缺 .code-line-text 规则');
+
+    // ② 导出侧展开规则：必须 !important 才压得住 styles.css 的裁切/不换行
+    assert.match(c, /pre \{ white-space: pre-wrap !important/, '导出 HTML 的 pre 未强制换行');
+    assert.match(c, /pre \{ white-space: pre-wrap !important[^}]*overflow: visible !important/,
+      '导出 HTML 的 pre 溢出未可见（仍会出滚动条）');
+    assert.match(c, /\.code-line-text \{ white-space: pre-wrap !important/,
+      '.code-line-text 未强制换行 —— 关掉「代码块换行」设置时 styles.css 给的是 white-space:pre');
+    assert.match(c, /\.code-scroll \{ max-height: none !important; overflow: visible !important; \}/,
+      '.code-scroll 未展开 —— 静态文档里超过 300px 的代码会被直接裁掉（没有任何滚动条可救）');
+    // 注意排除 .preview-content .md2-error pre —— 解析错误回显块**故意**保留横向滚动，
+    // 且已由 _exportExpandRules 的 `.md2-error pre { overflow: visible !important }` 展开。
+    assert.ok(!/(?<!md2-error )pre\s*\{[^}]*overflow-x:\s*auto/.test(c),
+      '导出 HTML 的 pre 不应含 overflow-x: auto');
   });
 });
 
-test('exportHTML: code.hljs 背景透明（修复"内白外灰"——与 styles.css / printCSS 同源）', async () => {
-  // 根因：导出 HTML 内联 hljs 主题，.hljs 元素带 background:#fff（specificity 0,1,0）。
-  // 模板里 pre code{background:none} (0,0,2) 特异性不够，输给了 .hljs，白底盖在 pre 灰底上。
-  // 修复：导出 HTML 模板内联 `pre code.hljs, pre code .hljs { background: transparent !important }`。
-  // 与 styles.css 1615-1621、printCSS 6124-6127 形成"预览 / PDF / 导出 HTML"三处同源覆盖。
+test('exportHTML: code.hljs 背景透明（styles.css 同源，修复"内白外灰"）', async () => {
+  // hljs 主题里 .hljs 元素带 background:#ffffff，pre 内会叠一层白底盖住 pre 的灰底。
+  // 现在「预览 / PDF / 导出 HTML」三处共用 styles.css 里那两条 !important 规则，
+  // 只要 appCSS 真的进了导出文档，导出侧就自动一致。
   const captured = {};
   await withEditor({ invokeImpl: (cmd, args) => {
     if (cmd === 'plugin:dialog|save') return '/tmp/out.html';
     if (cmd === 'write_file') { captured.content = args.content; return undefined; }
     return null;
   } }, async (w, ed) => {
+    stubStyleCollect(ed);
     ed.activeTab.filePath = '/docs/note.md';
     w.editor.preview.innerHTML = '<pre><code class="hljs language-js">const x = 1;</code></pre>';
     await ed.exportHTML();
     assert.ok(captured.content, '应写出 HTML');
     const c = captured.content;
+
     assert.ok(
-      /pre\s+code\.hljs\s*,\s*pre\s+code\s+\.hljs\s*\{[^}]*background:\s*transparent\s*!important/.test(c),
-      '导出 HTML 应让 pre code.hljs, pre code .hljs 背景透明（!important 压住 hljs 主题 #fff）',
+      /\.preview-content pre code\.hljs[^{]*\{[^}]*background:\s*transparent\s*!important/.test(c),
+      '导出文档未带 .preview-content pre code.hljs 透明背景规则（!important 才能压住 hljs 主题 #fff）',
     );
-    // 防退化：模板里 pre code 不能退回 background:none —— 同特异性会被 .hljs 反压
+    assert.ok(
+      /\.preview-content pre \.hljs[^{]*\{[^}]*background:\s*transparent\s*!important/.test(c),
+      '导出文档未带 .preview-content pre .hljs 透明背景规则（漏掉 token span 仍会白底）',
+    );
+    // 防退化：不能退回 background:none —— 同特异性会被 .hljs 反压
     assert.ok(
       !/pre\s+code\s*\{[^}]*background:\s*none\b/.test(c),
-      '导出 HTML 的 pre code 不能再用 background:none（specificity 不如 .hljs）',
+      'pre code 不能再用 background:none（specificity 不如 .hljs）',
     );
   });
 });
 
-test('exportHTML: 代码块 pre 背景是明显浅灰（非极浅/接近白）', async () => {
-  // 用户反馈：导出 HTML 代码块背景 #f0efee 在白底页面下接近白色，看不出是"代码块灰底"。
-  // 改为 #e8e8e8 明显的浅灰，一眼可辨；同时与软件预览 --code-bg（#eeedec 默认）接近。
+test('exportHTML: 代码块背景取自主题 --code-bg（与阅读模式同源，不再硬编码 #f6f5f4）', async () => {
+  // 历史：导出模板曾硬编码 pre 背景 #f0efee → #e8e8e8 → #f6f5f4，与阅读模式（--code-bg）
+  // 永远差一档色，这正是「导出与阅读模式不一致」的一类成因。现在 pre 背景完全由
+  // styles.css 的 var(--code-bg) 决定，导出文档带 data-theme 让变量能解析。
   const captured = {};
   await withEditor({ invokeImpl: (cmd, args) => {
     if (cmd === 'plugin:dialog|save') return '/tmp/out.html';
     if (cmd === 'write_file') { captured.content = args.content; return undefined; }
     return null;
   } }, async (w, ed) => {
+    stubStyleCollect(ed);
     ed.activeTab.filePath = '/docs/note.md';
     await ed.exportHTML();
-    assert.ok(captured.content);
+    assert.ok(captured.content, '应写出 HTML');
     const c = captured.content;
-    const preRule = /pre\s*\{[^}]*\}/.exec(c);
-    assert.ok(preRule, '应含 pre { } 规则');
-    const pre = preRule[0];
-assert.ok(/#f6f5f4/i.test(pre), 'pre 背景应为 #f6f5f4（与 details/blockquote/toc-wrapper 同灰）');
-  // 防回归：不要退回 #fff/#f0efee/#e8e8e8 等极浅/接近白或过深的色值
-  assert.ok(!/#f0efee/i.test(pre), 'pre 背景不应是 #f0efee（在白底页面下接近白）');
-  assert.ok(!/#fff[^\d]/i.test(pre) && !/background:\s*#fff\b/i.test(pre), 'pre 背景不应是 #fff');
-  assert.ok(!/#e8e8e8/i.test(pre), 'pre 背景不应退回 #e8e8e8（已统一为 #f6f5f4）');
+
+    assert.match(c, /\.preview-content pre\s*\{[^}]*background-color:\s*var\(--code-bg\)/,
+      '导出文档的 pre 背景不是 var(--code-bg)（与阅读模式不同源）');
+    // 主题变量必须能解析：导出文档根节点带 data-theme
+    assert.match(c, /<html[^>]*data-theme="[^"]+"/, '导出文档未带 data-theme，--code-bg 取不到值');
+    const m = /--code-bg:\s*(#[0-9a-fA-F]{3,8})/.exec(c);
+    assert.ok(m, '导出文档里没有 --code-bg 定义（pre 背景会退化成透明/白）');
+    assert.ok(!/^#fff{1,2}$/i.test(m[1]) && !/^#ffffff$/i.test(m[1]),
+      `--code-bg 不该是纯白（实际 ${m[1]}）—— 代码块在白底页面上要能看出灰底`);
   });
 });
 
-test('exportPDF: printCSS 显式让 pre 换行且溢出可见（无滚动条）', async () => {
+test('exportPDF: 回退打印帧显式让 pre 换行且溢出可见（无滚动条）', async () => {
+  // PDF 主路径是 WebView2 PrintToPdf（直接落盘、无打印对话框），回退路径才建 iframe。
+  // 两条路径共用 `_preparePdfClone` + `_buildPdfPrintFrameHtml` 的打印帧，故这里直接
+  // 校验打印帧内容，比去拦 iframe 更稳（jsdom 不会真的加载 srcdoc）。
   await withEditor({}, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
-    // 捕获 exportPDF 创建的 iframe 及其 srcdoc（打印 HTML 含 printCSS）
-    const capturedIframes = [];
-    const origCreateElement = w.document.createElement.bind(w.document);
-    w.document.createElement = function (tag) {
-      const el = origCreateElement(tag);
-      if (String(tag).toLowerCase() === 'iframe') capturedIframes.push(el);
-      return el;
-    };
-    try {
-      ed.activeTab.name = 'DEMO.md';
-      await ed.exportPDF().catch(() => {});
-      assert.ok(capturedIframes.length >= 1, 'exportPDF 应创建 iframe');
-      const iframe = capturedIframes[0];
-      assert.ok(iframe.srcdoc, 'iframe 应通过 srcdoc 承载打印 HTML');
+    stubStyleCollect(ed);
+    ed.activeTab.name = 'DEMO.md';
+    ed.preview.innerHTML = '<pre><code class="hljs">const x = 1;</code></pre>';
+    const doc = await ed._buildPdfPrintFrameHtml(ed.preview.cloneNode(true));
 
-      const doc = iframe.srcdoc;
-      // printCSS 中的 pre 规则应强制换行 + 溢出可见
-      assert.ok(
-        doc.includes('.preview-content pre { white-space: pre-wrap !important'),
-        'printCSS 应含 .preview-content pre 换行规则',
-      );
-      assert.ok(
-        doc.includes('overflow: visible !important'),
-        'printCSS 的 pre 应 overflow: visible（无滚动条）',
-      );
-      // 打印 HTML 内不应出现会触发横向滚动的 overflow-x: auto（作用于 pre）
-      assert.ok(
-        !/pre\s*\{[^}]*overflow-x:\s*auto/.test(doc),
-        '打印 HTML 的 pre 不应含 overflow-x: auto',
-      );
-      // 关键：导出 PDF 必须显式块级化 .code-line 行结构（不依赖 styles.css）
-      assert.ok(
-        /\.code-line\s*\{[^}]*display:\s*flex\s*!important/.test(doc),
-        'printCSS 应让 .code-line display:flex !important（每行独占一行）',
-      );
-      assert.ok(
-        /\.code-line-text\s*\{[^}]*white-space:\s*pre-wrap\s*!important/.test(doc),
-        'printCSS 应让 .code-line-text 换行',
-      );
-      assert.ok(
-        /\.code-scroll\s*\{[^}]*overflow:\s*visible\s*!important/.test(doc),
-        'printCSS 的 .code-scroll 应可见（无滚动条）',
-      );
-    } finally {
-      w.document.createElement = origCreateElement;
-    }
+    // printCSS 中的 pre 规则应强制换行 + 溢出可见
+    assert.ok(doc.includes('.preview-content pre { white-space: pre-wrap !important'),
+      'printCSS 应含 .preview-content pre 换行规则');
+    assert.ok(doc.includes('.code-scroll { max-height: none !important; overflow: visible !important; }'),
+      'printCSS 应展开 .code-scroll（否则超 300px 的代码被裁掉）');
+    assert.ok(doc.includes('.code-line-text { white-space: pre-wrap !important'),
+      'printCSS 应让 .code-line-text 换行');
+    // 不应出现会触发横向滚动的 overflow-x: auto（作用于 pre；.md2-error pre 见上一条用例说明）
+    assert.ok(!/(?<!md2-error )pre\s*\{[^}]*overflow-x:\s*auto/.test(doc),
+      '打印帧的 pre 不应含 overflow-x: auto');
+    // 关键：导出 PDF 必须显式块级化 .code-line 行结构（不依赖 styles.css 采集成功）
+    assert.match(doc, /\.code-line\s*\{[^}]*display:\s*flex\s*!important/,
+      'printCSS 应让 .code-line display:flex !important（每行独占一行）');
+    assert.match(doc, /\.code-line-text\s*\{[^}]*flex:\s*1 1 auto\s*!important/,
+      'printCSS 应让 .code-line-text 可伸缩（长行才压得下）');
   });
 });
 
@@ -154,8 +162,8 @@ test('styles.css: .hljs 元素背景透明——统一用 pre 的 --code-bg（�
   // pre 内是 display:block + padding:1em，会在 pre 的 var(--code-bg) 灰色之上叠一层白底，
   // 形成"灰色外框 + 白色内框"的双层背景。用户在 PDF 导出后尤其明显（"灰色中有白色"）。
   // 修复：styles.css 加 .preview-content pre code.hljs / .hljs { background: transparent }。
-  const fs = require('fs');
-  const css = fs.readFileSync(require('path').join(__dirname, '../src/styles.css'), 'utf8');
+  // 现在这条规则是三条导出链路的共同真源，改动它必须跑本文件全部用例。
+  const css = REAL_STYLES_CSS;
   assert.ok(
     /\.preview-content\s+pre\s+code\.hljs[\s\S]{0,200}background:\s*transparent\s*!important/.test(css),
     'styles.css 应让 .preview-content pre code.hljs 背景透明（!important 覆盖 hljs 主题白底）',
@@ -167,32 +175,22 @@ test('styles.css: .hljs 元素背景透明——统一用 pre 的 --code-bg（�
   );
 });
 
-test('exportPDF: printCSS 同步覆盖 .hljs 背景——PDF 与软件统一灰色', async () => {
-  // 与上一条对称：导出 iframe 注入了 appCSS（styles.css 文本）+ hljsCSS（hljs 主题），
-  // 必须由 printCSS 显式覆盖，否则 hljs 主题的 #ffffff 仍会盖住 pre 的灰色。
+test('exportPDF: 回退打印帧带上 appCSS（.hljs 灰底一致由 styles.css 保证）', async () => {
+  // 与上一条对称：PDF 打印帧注入的就是 styles.css 采集结果，只要它没落进帧里，
+  // 上面那两条 .hljs 透明规则就形同虚设（hljs 主题的 #ffffff 会盖住 pre 的灰底）。
   await withEditor({}, async (w, ed) => {
-    ed.showConfirmDialog = async () => true;
-    const capturedIframes = [];
-    const origCreateElement = w.document.createElement.bind(w.document);
-    w.document.createElement = function (tag) {
-      const el = origCreateElement(tag);
-      if (String(tag).toLowerCase() === 'iframe') capturedIframes.push(el);
-      return el;
-    };
-    try {
-      ed.activeTab.name = 'NOTE.md';
-      await ed.exportPDF().catch(() => {});
-      const doc = capturedIframes[0].srcdoc;
-      assert.ok(
-        /\.preview-content\s+pre\s+code\.hljs[\s\S]{0,200}background:\s*transparent\s*!important/.test(doc),
-        'printCSS 应让 .preview-content pre code.hljs 背景透明',
-      );
-      assert.ok(
-        /\.preview-content\s+pre\s+\.hljs[\s\S]{0,200}background:\s*transparent\s*!important/.test(doc),
-        'printCSS 应让 .preview-content pre .hljs 背景透明',
-      );
-    } finally {
-      w.document.createElement = origCreateElement;
-    }
+    stubStyleCollect(ed);
+    ed.activeTab.name = 'NOTE.md';
+    ed.preview.innerHTML = '<pre><code class="hljs">const x = 1;</code></pre>';
+    const doc = await ed._buildPdfPrintFrameHtml(ed.preview.cloneNode(true));
+
+    assert.ok(
+      /\.preview-content\s+pre\s+code\.hljs[\s\S]{0,200}background:\s*transparent\s*!important/.test(doc),
+      '打印帧未带 styles.css 的 .hljs 透明规则（appCSS 没落地）',
+    );
+    assert.ok(
+      /\.preview-content\s+pre\s+\.hljs[\s\S]{0,200}background:\s*transparent\s*!important/.test(doc),
+      '打印帧未带 styles.css 的 .hljs 透明规则（appCSS 没落地）',
+    );
   });
 });

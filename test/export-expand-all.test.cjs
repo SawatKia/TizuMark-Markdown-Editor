@@ -41,21 +41,30 @@ test('S88 源码口径：_exportExpandRules 公共展开方法覆盖全部滚动
     '展开口径缺表格错误回显横向裁切解除');
 });
 
-test('S88 长图：exportImage 注入作用域展开 CSS + 画布宽度兜底 + finally 清理', () => {
-  assert.ok(EXPORT_SRC.includes("clone.id = 'tm-png-export-root';"),
-    'exportImage 未给 clone 设作用域 id（展开 CSS 无法只作用于导出副本）');
+test('S88 长图：exportImage 注入作用域展开 CSS + 宽度兜底 + data:URL + finally 清理', () => {
+  // 2026-10-25 长图换渲染引擎（html2canvas → SVG foreignObject），断言随之改锚点，
+  // 但守的是同一组约束：展开口径必须按导出副本作用域、宽度按内容兜底、结束必须清理干净。
+  assert.ok(EXPORT_SRC.includes("host.id = 'tm-png-export-root';"),
+    'exportImage 未给导出副本设作用域 id（展开 CSS 无法只作用于副本）');
   assert.ok(EXPORT_SRC.includes("expandStyle.id = 'tm-export-expand-style';"),
     'exportImage 未注入展开样式节点');
-  assert.ok(EXPORT_SRC.includes('expandStyle.textContent = this._exportExpandRules(\'#tm-png-export-root\');'),
+  assert.ok(EXPORT_SRC.includes("expandStyle.textContent = this._exportExpandRules('#tm-png-export-root');"),
     'exportImage 展开样式未走公共口径（_exportExpandRules）');
-  assert.ok(EXPORT_SRC.includes('const exportW = Math.max(800, clone.scrollWidth);'),
+  assert.ok(EXPORT_SRC.includes('const W = Math.max(800, Math.ceil(host.scrollWidth));'),
     'exportImage 画布宽度未按内容兜底（超宽公式/宽表会裁切）');
-  assert.match(EXPORT_SRC, /width: exportW,\s*windowWidth: exportW/,
-    'exportImage html2canvas 未使用兜底宽度');
-  // finally 清理（顺序：先样式后 clone）
+  // SVG 必须以 data: URL 交给 <img>：blob: 形式的 SVG 画进 canvas 会污染画布，
+  // toDataURL 直接抛 SecurityError（实测），整条长图导出会失败。
+  assert.ok(EXPORT_SRC.includes("'data:image/svg+xml;base64,' + btoa(svgBin)"),
+    'exportImage 的 SVG 未走 data: URL（blob: 会污染 canvas，toDataURL 抛 SecurityError）');
+  assert.ok(!/new Blob\(\[svgMarkup\]/.test(EXPORT_SRC),
+    'exportImage 仍在用 Blob 包装 SVG（blob: URL 会污染 canvas）');
+  // canvas 上限自适应：超长文档必须降 scale 而不是裁内容
+  assert.match(EXPORT_SRC, /const MAX_SIDE = 32767;[\s\S]{0,300}?Math\.sqrt\(MAX_AREA \/ \(W \* H\)\)/,
+    'exportImage 未按 canvas 上限（单边 32767 / 面积 268MP）自适应降 scale');
+  // finally 清理（顺序：先展开样式后导出副本）
   assert.match(EXPORT_SRC,
-    /finally \{[\s\S]{0,200}?expandStyle\.parentNode\.removeChild\(expandStyle\);[\s\S]{0,200}?clone\.parentNode\.removeChild\(clone\);/,
-    'exportImage finally 未清理展开样式节点（会残留作用域 CSS）');
+    /finally \{[\s\S]{0,300}?expandStyle\.parentNode\.removeChild\(expandStyle\);[\s\S]{0,200}?host\.parentNode\.removeChild\(host\);/,
+    'exportImage finally 未清理展开样式/导出副本（会残留作用域 CSS 与离屏 DOM）');
 });
 
 test('S88 PDF：printCSS 使用公共展开口径（宽表/公式不再裁切）', () => {
@@ -76,39 +85,21 @@ test('S88 HTML/DOCX：_documentExportCSS 公式/图表容器解除横向裁切 +
     '_documentExportCSS 单元格缺断词（宽表长 token 溢出页面）');
 });
 
-test('S88 长图行为：展开样式在截图期间存在且含作用域规则，导出后移除', async () => {
-  const captured = { opts: null, styleDuring: null, cloneDuring: null };
-  await withEditor({ invokeImpl: (cmd, args) => {
+test('S88 长图行为：导出失败也必须清理副本文档节点与遮罩（finally 兜底）', async () => {
+  // jsdom 没有真实布局与 canvas：exportImage 会在「内容高度为 0」处抛错。
+  // 这条用例守的正是 finally —— 导出失败/取消都不能留下离屏副本、作用域 CSS 和全屏遮罩。
+  await withEditor({ invokeImpl: (cmd) => {
     if (cmd === 'plugin:dialog|save') return '/tmp/out.png';
     if (cmd === 'write_binary_file') return undefined;
     return null;
   } }, async (w, ed) => {
-    // 真实结构（code-block.js 输出）：pre > code.hljs > .code-scroll > .code-line×N
-    const lines = Array.from({ length: 60 }, (_, i) =>
-      `<span class="code-line"><span class="code-line-num">${i + 1}</span><span class="code-line-text">line ${i + 1}</span></span>`).join('');
     ed.activeTab.filePath = '/docs/note.md';
-    w.editor.preview.innerHTML = `<p>段落</p><pre><code class="hljs"><div class="code-scroll">${lines}</div></code></pre>`;
-    w.html2canvas = async (el, opts) => {
-      captured.opts = opts;
-      captured.styleDuring = w.document.getElementById('tm-export-expand-style');
-      captured.cloneDuring = w.document.getElementById('tm-png-export-root');
-      return { toDataURL: () => 'data:image/png;base64,FAKE' };
-    };
+    w.editor.preview.innerHTML = '<p>段落</p><pre><code class="hljs"><div class="code-scroll"><span class="code-line">x</span></div></code></pre>';
 
     await ed.exportImage();
 
-    assert.ok(captured.opts, 'html2canvas 应被调用');
-    assert.ok(captured.cloneDuring, '截图时导出副本（#tm-png-export-root）应在文档中');
-    assert.ok(captured.styleDuring, '截图时展开样式节点应在 document.head');
-    const css = captured.styleDuring.textContent;
-    assert.ok(css.includes('#tm-png-export-root .code-scroll { max-height: none !important; overflow: visible !important; }'),
-      '展开样式未按 clone 作用域展开代码块裁切');
-    assert.ok(css.includes('#tm-png-export-root table { display: table !important;'),
-      '展开样式未恢复表格 table 布局');
-    // jsdom 无布局：scrollWidth=0 → 宽度取 800 基线
-    assert.strictEqual(captured.opts.width, 800, '无超宽内容时画布宽度应为 800 基线');
-    // 导出结束后清理
+    assert.strictEqual(w.document.getElementById('tm-png-export-root'), null, '导出后离屏副本未移除');
     assert.strictEqual(w.document.getElementById('tm-export-expand-style'), null, '导出后展开样式节点未移除');
-    assert.strictEqual(w.document.getElementById('tm-png-export-root'), null, '导出后导出副本未移除');
+    assert.strictEqual(w.document.getElementById('tm-export-overlay'), null, '导出后全屏遮罩未移除');
   });
 });

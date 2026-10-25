@@ -28,6 +28,8 @@
     'rename_path', 'remove_path', 'copy_path', 'move_path',
     // 更新安装包磁盘缓存：下载落盘（验签转正）/ 查缓存 / 从缓存安装
     'download_update_to_file', 'find_cached_update', 'install_cached_update',
+    // PDF 导出：WebView2 PrintToPdf 直接落盘（绕开打印对话框与浏览器下载气泡）
+    'print_to_pdf',
   ];
 
   // 延迟求值：调用时才读取 invoke（根治白屏单点）
