@@ -20,6 +20,7 @@ global.TauriApi = {
     truncated: false,
   }),
   removePath: async ({ path }) => { files.delete(path); },
+  renamePath: async ({ from, to }) => { files.set(to, files.get(from)); files.delete(from); },
 };
 const { mixin, helpers } = require('../src/modules/autosave.js');
 
@@ -34,7 +35,11 @@ function makeTab(content, savedContent = '') {
 
 test('helpers: 文件名往返 / 过期判定 / 天数归一化 / 恢复默认文件名', () => {
   const n = helpers.snapshotFileName('tabc1', 123);
-  assert.deepStrictEqual(helpers.parseSnapshotName(n), { docId: 'tabc1', ts: 123 });
+  assert.deepStrictEqual(helpers.parseSnapshotName(n), { docId: 'tabc1', ts: 123, recoveredAt: 0 });
+  const rn = helpers.recoveredFileName(n, 456);
+  assert.strictEqual(rn, 'tabc1__123__r456.json');
+  assert.deepStrictEqual(helpers.parseSnapshotName(rn), { docId: 'tabc1', ts: 123, recoveredAt: 456 });
+  assert.strictEqual(helpers.recoveredFileName(rn, 789), 'tabc1__123__r789.json', '重复恢复只更新时间戳');
   assert.strictEqual(helpers.parseSnapshotName('x.md'), null);
   assert.strictEqual(helpers.isExpired(0, 31 * DAY, 30), true);
   assert.strictEqual(helpers.isExpired(DAY, 30 * DAY, 30), false);
@@ -118,4 +123,39 @@ test('recoverAutosave: 另存到用户选择的新位置并打开', async () => 
   await ed.recoverAutosave({ name: 'a.md', content: 'x' });
   assert.strictEqual(files.size, 0);
   assert.strictEqual(opened, null);
+});
+
+test('recoverAutosave: 恢复成功后快照改名打上恢复时间戳；取消则不改名', async () => {
+  files.clear();
+  const dir = 'C:\\data\\autosave\\';
+  const entry ={ name: 'tone__5.json', path: dir + 'tone__5.json', mtime: Date.now() };
+  files.set(entry.path, { content: '{}', mtime: Date.now() });
+  const ed = makeEditor({ hideAutosaveDialog() {}, openFilePath: async () => {}, showToast() {}, setStatus() {} });
+  saveDialogResult = null;
+  await ed.recoverAutosave({ name: 'a.md', content: 'x' }, entry);
+  assert.deepStrictEqual([...files.keys()], [entry.path], '取消不改名');
+  saveDialogResult = 'D:\\new\\a.md';
+  await ed.recoverAutosave({ name: 'a.md', content: 'x' }, entry);
+  const names = [...files.keys()].filter(k => k.startsWith(dir)).map(k => k.slice(dir.length));
+  assert.strictEqual(names.length, 1);
+  assert.match(names[0], /^tone__5__r\d+\.json$/);
+});
+
+test('cleanupAutosave: 已恢复版本按「恢复时间 + 已恢复保留天数」单独计期', async () => {
+  files.clear();
+  const ed = makeEditor();
+  ed.settings.autoSaveRecoveredRetentionDays = 7;
+  const dir = 'C:\\data\\autosave\\';
+  const now = Date.now();
+  // 已恢复 10 天前：超过 7 天 → 删（即便 mtime 很新、也不受 30 天影响）
+  files.set(dir + 'ta__1__r' + (now - 10 * DAY) + '.json', { content: '{}', mtime: now });
+  // 已恢复 2 天前：保留（即便文件本身 mtime 很旧）
+  files.set(dir + 'tb__2__r' + (now - 2 * DAY) + '.json', { content: '{}', mtime: now - 40 * DAY });
+  // 未恢复且 mtime 40 天前：按 30 天规则删
+  files.set(dir + 'tc__3.json', { content: '{}', mtime: now - 40 * DAY });
+  await ed.cleanupAutosave();
+  assert.deepStrictEqual([...files.keys()].map(k => k.slice(dir.length)), ['tb__2__r' + (now - 2 * DAY) + '.json']);
+  ed.settings.autoSaveRecoveredRetentionDays = 1;
+  await ed.cleanupAutosave();
+  assert.strictEqual(files.size, 0);
 });

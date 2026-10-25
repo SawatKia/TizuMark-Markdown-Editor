@@ -37,6 +37,7 @@
          clearTabsOnQuit: false, // 退出应用时不保存标签会话，下次打开总是空白
           mermaidAutoStyle: true, // Mermaid 流程图无样式时自动配色
           autoSaveRetentionDays: 30, // 自动保存版本保留天数，超期自动删除
+          autoSaveRecoveredRetentionDays: 7, // 已恢复过的自动保存版本保留天数
           showAllFiles: false, // 文件树过滤：默认只列受支持格式（markdown/image/text），true 时显示目录内全部文件
           toolbarCollapsed: false,
           sidebarHidden: false,
@@ -165,6 +166,8 @@
         if (mas) mas.checked = s.mermaidAutoStyle !== false;
         const asd = document.getElementById('set-autosave-days');
         if (asd) asd.value = s.autoSaveRetentionDays;
+        const asrd = document.getElementById('set-autosave-recovered-days');
+        if (asrd) asrd.value = s.autoSaveRecoveredRetentionDays;
         document.getElementById('set-custom-bg').checked = s.customBgEnabled === true;
         const cbg = document.getElementById('set-custom-bg-color');
         if (cbg) cbg.value = s.customBgColor || '#f8f7f4';
@@ -316,6 +319,12 @@
           const n = Math.floor(Number(e.target.value));
           this.settings.autoSaveRetentionDays = Number.isFinite(n) && n >= 1 ? Math.min(n, 3650) : 30;
           e.target.value = this.settings.autoSaveRetentionDays;
+        });
+        const asrdInput = document.getElementById('set-autosave-recovered-days');
+        if (asrdInput) asrdInput.addEventListener('change', (e) => {
+          const n = Math.floor(Number(e.target.value));
+          this.settings.autoSaveRecoveredRetentionDays = Number.isFinite(n) && n >= 1 ? Math.min(n, 3650) : 7;
+          e.target.value = this.settings.autoSaveRecoveredRetentionDays;
         });
         // 图片存储方式 / 路径：已从 radio 升级为自绘下拉（set-image-store-mode / set-image-asset-path-mode），
         // onChange 在 initSettings 里通过 Select 绑定到 this.settings.imageInsertMode / imageAssetPathMode。

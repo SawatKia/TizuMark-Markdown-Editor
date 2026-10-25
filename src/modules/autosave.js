@@ -23,9 +23,16 @@
     return docId + SEP + ts + '.json';
   }
 
+  // 已恢复过的版本在文件名后追加 __r<恢复时间戳>，由「已恢复版本保留天数」单独计期
   function parseSnapshotName(name) {
-    const m = /^([A-Za-z0-9]+)__(\d+)\.json$/.exec(name || '');
-    return m ? { docId: m[1], ts: Number(m[2]) } : null;
+    const m = /^([A-Za-z0-9]+)__(\d+)(?:__r(\d+))?\.json$/.exec(name || '');
+    return m ? { docId: m[1], ts: Number(m[2]), recoveredAt: m[3] ? Number(m[3]) : 0 } : null;
+  }
+
+  function recoveredFileName(name, recoveredTs) {
+    const p = parseSnapshotName(name);
+    if (!p) return null;
+    return p.docId + SEP + p.ts + SEP + 'r' + recoveredTs + '.json';
   }
 
   function isExpired(mtime, now, retentionDays) {
@@ -148,11 +155,16 @@
       },
       // 按「保留天数」设置删除过期版本（以文件最后修改时间为准）
       async cleanupAutosave() {
-        const days = normalizeRetentionDays(this.settings && this.settings.autoSaveRetentionDays);
+        const st = this.settings || {};
+        const days = normalizeRetentionDays(st.autoSaveRetentionDays);
+        const recoveredDays = normalizeRetentionDays(st.autoSaveRecoveredRetentionDays, 7);
         const now = Date.now();
         const entries = await this._listAutosaveEntries();
         for (const e of entries) {
-          if (e.mtime && isExpired(e.mtime, now, days)) {
+          const rec = parseSnapshotName(e.name).recoveredAt;
+          // 已恢复版本按恢复时间 + 「已恢复保留天数」；其余按最后修改时间 + 「保留天数」
+          const expired = rec ? isExpired(rec, now, recoveredDays) : (e.mtime && isExpired(e.mtime, now, days));
+          if (expired) {
             try { await TauriApi.removePath({ path: e.path }); } catch (_) {}
           }
         }
@@ -233,6 +245,12 @@
         const title = document.createElement('div');
         title.className = 'autosave-title';
         title.textContent = info.name || this.t('untitled');
+        if (parseSnapshotName(entry.name).recoveredAt) {
+          const badge = document.createElement('span');
+          badge.className = 'autosave-badge';
+          badge.textContent = this.t('autosaveRecoveredBadge');
+          title.append(' ', badge);
+        }
         const sub = document.createElement('div');
         sub.className = 'autosave-sub';
         const when = new Date(entry.mtime || info.savedAt || Date.now()).toLocaleString();
@@ -267,6 +285,19 @@
         row.append(meta, actions);
         return row;
       },
+      // 恢复后给快照文件名打上恢复时间戳，之后由「已恢复版本保留天数」决定何时清理
+      async _markAutosaveRecovered(entry) {
+        try {
+          if (!entry || !entry.path) return;
+          const name = entry.name || entry.path.split(/[\\/]/).pop();
+          const next = recoveredFileName(name, Date.now());
+          if (!next) return;
+          const dir = entry.path.slice(0, entry.path.length - name.length);
+          await TauriApi.renamePath({ from: entry.path, to: dir + next });
+        } catch (e) {
+          console.warn('[TizuMark] mark recovered failed:', e);
+        }
+      },
       // 选择新位置保存恢复的内容，并在新标签中打开
       async recoverAutosave(info, entry) {
         try {
@@ -279,6 +310,7 @@
           });
           if (!path) return;
           await TauriApi.writeFile({ path, content: info.content });
+          await this._markAutosaveRecovered(entry);
           this.hideAutosaveDialog();
           await this.openFilePath(path);
           this.showToast(this.t('autosaveRecovered'), 'success');
@@ -290,7 +322,7 @@
 
   const api = {
     mixin,
-    helpers: { snapshotFileName, parseSnapshotName, isExpired, normalizeRetentionDays, recoveredDefaultPath },
+    helpers: { snapshotFileName, parseSnapshotName, recoveredFileName, isExpired, normalizeRetentionDays, recoveredDefaultPath },
   };
   window.TMAutosave = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

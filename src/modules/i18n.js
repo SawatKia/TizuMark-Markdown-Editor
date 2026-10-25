@@ -134,6 +134,7 @@
         setRowLabel('set-close-action', t('closeAction'));
         setRowLabel('set-clear-tabs-on-quit', t('clearTabsOnQuit'));
         setRowLabel('set-autosave-days', t('autosaveRetention'));
+        setRowLabel('set-autosave-recovered-days', t('autosaveRecoveredRetention'));
         setRowLabel('set-mermaid-auto-style', t('mermaidAutoStyle'));
         const masHint = document.querySelector('#setting-mermaid-auto-style-hint .hint-text');
         if (masHint) masHint.textContent = t('mermaidAutoStyleHint');
@@ -161,6 +162,8 @@
         if (softBreaksHint) softBreaksHint.textContent = t('softBreaksHint');
         const asdHint = document.querySelector('#setting-autosave-days-hint .hint-text');
         if (asdHint) asdHint.textContent = t('autosaveRetentionHint');
+        const asrdHint = document.querySelector('#setting-autosave-recovered-days-hint .hint-text');
+        if (asrdHint) asrdHint.textContent = t('autosaveRecoveredRetentionHint');
         updateMenuText('btn-autosave-recover-menu', t('autosaveRecoverTitle'));
         setTitle('btn-autosave-recover', t('autosaveRecoverTitle'));
         setText('autosave-title', t('autosaveRecoverTitle'));

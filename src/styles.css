@@ -8186,3 +8186,14 @@ body.custom-bg-active #preview {
   user-select: text;
 }
 .autosave-meta { cursor: pointer; }
+.autosave-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted, #888);
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.35));
+  vertical-align: middle;
+}
