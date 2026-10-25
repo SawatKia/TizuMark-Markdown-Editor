@@ -314,7 +314,7 @@
           { combo: 'Tab', group: 'edit', name: 'Aumentar sangría', desc: 'Añade un nivel de sangría a la línea o selección' },
           { combo: 'Shift+Tab', group: 'edit', name: 'Reducir sangría', desc: 'Reduce un nivel de sangría a la línea o selección' },
         ];
-        const lang = (this.settings && this.settings.language) || 'zh';
+        const lang = (this.settings && this.settings.language) || 'en';
         return lang === 'en' ? EN : (lang === 'es' ? ES : ZH);
       },
       // 把任意来源的键位字符串规范化为「小写修饰键 + 小写主键」的规范串，

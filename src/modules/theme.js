@@ -498,7 +498,7 @@
         setTimeout(doRefresh, 280);
       },
       async openUserGuide() {
-        const lang = (this.settings && this.settings.language) || 'zh';
+        const lang = (this.settings && this.settings.language) || 'en';
         const fileName = lang === 'en' ? 'guide.en.md' : (lang === 'es' ? 'guide.es.md' : 'guide.md');
         const tabName = lang === 'en' ? 'User Guide.md' : (lang === 'es' ? 'Guía de uso.md' : '使用说明.md');
         const existingIndex = this.tabs.findIndex(t => t.name === tabName);

@@ -101,7 +101,7 @@
       },
       // 统一错误上报：用户友好提示 + 开发可诊断（错误码 + 上下文写入 console）
       reportError(code, opts = {}) {
-        const lang = (this.settings && this.settings.language) || 'zh';
+        const lang = (this.settings && this.settings.language) || 'en';
         const dict = ERROR_MESSAGES[code] || {};
         const entry = dict[lang] || dict.en || dict.zh || { title: code, detail: '' };
         let detail = opts.detail || entry.detail || '';

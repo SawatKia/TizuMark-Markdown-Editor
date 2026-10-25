@@ -73,6 +73,8 @@ async function buildEnv(options = {}) {
   const w = dom.window;
   // 跳过 EULA 等待，直奔初始化
   w.localStorage.setItem('tizumark-eula-accepted', 'true');
+  // 应用默认语言为英文；既有用例按中文文案断言，harness 统一预置中文
+  w.localStorage.setItem('tizumark-settings', JSON.stringify({ language: 'zh' }));
 
   const rect = () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 });
   w.Range.prototype.getBoundingClientRect = rect;

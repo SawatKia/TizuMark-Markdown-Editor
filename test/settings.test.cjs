@@ -2,6 +2,8 @@
 // 仅依赖共享 harness（jsdom + 真实 CodeMirror），不触及 Tauri 集成。
 const test = require('node:test');
 const assert = require('node:assert');
+// harness 预置的语言种子（应用默认英文，既有用例按中文断言）；"无持久化"断言即等于仍为该种子
+const SEED = '{"language":"zh"}';
 const { buildEnv, cleanup, delay } = require('./helpers/app-env.cjs');
 
 async function makeEditor() {
@@ -26,7 +28,7 @@ test('settings: defaultSettings 返回完整默认配置', async () => {
     assert.strictEqual(d.colorScheme, 'default');
     assert.strictEqual(d.defaultView, 'preview');
     assert.strictEqual(d.scrollSync, true);
-    assert.strictEqual(d.language, 'zh');
+    assert.strictEqual(d.language, 'en');
     assert.strictEqual(d.imageInsertMode, 'assets');
     assert.strictEqual(d.imageAssetPath, 'assets');
     assert.strictEqual(d.imageAssetPathMode, 'relative');
@@ -545,14 +547,14 @@ test('settings: 面板外 saveSettings 正常落盘', async () => {
 test('settings: 面板内修改不生效不落盘，点保存才生效并落盘', async () => {
   const { w, ed } = await makeEditor();
   try {
-    assert.strictEqual(w.localStorage.getItem('tizumark-settings'), null, '初始无持久化设置');
+    assert.strictEqual(w.localStorage.getItem('tizumark-settings'), SEED, '初始无持久化设置');
     ed.showSettings();
     assert.ok(!w.document.getElementById('settings-dialog').classList.contains('hidden'), '面板应打开');
 
     ed._selects.tabSize.setValue('2');
     assert.strictEqual(ed.settings.tabSize, 2, '内存设置已更新');
     assert.strictEqual(ed.cm.getOption('tabSize'), 4, '未点应用/保存前编辑器不生效');
-    assert.strictEqual(w.localStorage.getItem('tizumark-settings'), null, '未点保存不落盘');
+    assert.strictEqual(w.localStorage.getItem('tizumark-settings'), SEED, '未点保存不落盘');
 
     w.document.getElementById('settings-save-btn').dispatchEvent(new w.Event('click'));
     await delay(400); // rAF 让帧 + applySettings + 落盘 + 最小 loading 可见时长(300ms) + 关闭
@@ -604,13 +606,13 @@ test('settings: 点 × 关闭恢复打开前的设置与控件显示，且不落
     ed.showSettings();
     ed._selects.tabSize.setValue('2');
     assert.strictEqual(ed.settings.tabSize, 2, '改动已进内存');
-    assert.strictEqual(w.localStorage.getItem('tizumark-settings'), null);
+    assert.strictEqual(w.localStorage.getItem('tizumark-settings'), SEED);
 
     w.document.getElementById('settings-close-x').dispatchEvent(new w.Event('click'));
     assert.strictEqual(ed.settings.tabSize, 4, '取消后内存恢复默认 4');
     assert.strictEqual(ed.cm.getOption('tabSize'), 4, '编辑器从未被改动过（应用式）');
     assert.strictEqual(ed._selects.tabSize.getValue(), '4', '取消后控件显示恢复');
-    assert.strictEqual(w.localStorage.getItem('tizumark-settings'), null, '取消全程不落盘');
+    assert.strictEqual(w.localStorage.getItem('tizumark-settings'), SEED, '取消全程不落盘');
     assert.ok(w.document.getElementById('settings-dialog').classList.contains('hidden'), '取消后关闭面板');
   } finally { cleanup(w); }
 });
@@ -624,7 +626,7 @@ test('settings: 点 X 关闭等同取消，恢复打开前的设置', async () =
 
     w.document.getElementById('settings-close-x').dispatchEvent(new w.Event('click'));
     assert.strictEqual(ed.settings.tabSize, 4, 'X 关闭后内存恢复默认 4');
-    assert.strictEqual(w.localStorage.getItem('tizumark-settings'), null, 'X 关闭不落盘');
+    assert.strictEqual(w.localStorage.getItem('tizumark-settings'), SEED, 'X 关闭不落盘');
     assert.ok(w.document.getElementById('settings-dialog').classList.contains('hidden'));
   } finally { cleanup(w); }
 });

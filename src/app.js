@@ -416,7 +416,7 @@ function updateLoadingProgress(percent, text) {
 
 // 初始化阶段（window.editor 未创建）读取当前语言：settings 尚未加载，直接从持久化读
 function tInit(key) {
-  let lang = 'zh';
+  let lang = 'en';
   try {
     const saved = JSON.parse(localStorage.getItem('tizumark-settings') || '{}');
     if (saved && saved.language && I18N[saved.language]) lang = saved.language;

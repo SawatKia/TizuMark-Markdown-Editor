@@ -19,7 +19,7 @@
           colorScheme: 'default',
           defaultView: 'preview',
           scrollSync: true,
-          language: 'zh',
+          language: 'en',
           imageInsertMode: 'assets',
           imageAssetPath: 'assets',
           imageAssetPathMode: 'relative',
@@ -142,7 +142,7 @@
         document.getElementById('set-code-line-numbers').checked = s.codeLineNumbers;
         document.getElementById('set-code-wrap').checked = s.codeWrap;
         document.getElementById('set-code-scroll').checked = s.codeScroll;
-        if (this._selects && this._selects.language) this._selects.language.setValue(s.language || 'zh', true);
+        if (this._selects && this._selects.language) this._selects.language.setValue(s.language || 'en', true);
         document.getElementById('set-soft-breaks').checked = s.softBreaks !== false;
         document.getElementById('set-extended-syntax').checked = s.extendedSyntax !== false;
         document.getElementById('set-show-tray-icon').checked = s.showTrayIcon !== false;
@@ -386,7 +386,7 @@
         const langHost = document.getElementById('set-language');
         if (langHost) {
           this._selects.language = new Select(langHost, {
-            value: this.settings.language || 'zh',
+            value: this.settings.language || 'en',
             t: this.t.bind(this),
             ariaLabelKey: 'language',
             optionsProvider: (t) => ([
