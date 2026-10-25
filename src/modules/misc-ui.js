@@ -240,7 +240,17 @@
         }
         const hint = document.createElement('div');
         hint.className = 'lightbox-hint';
-        hint.innerHTML = '<span>🖱 滚轮缩放 · 拖动平移 · 双击重置 · Esc 关闭</span><span class="lightbox-hint-close">&times;</span>';
+        const vbs = this.getViewerBindings();
+        const hintSpan = document.createElement('span');
+        hintSpan.textContent = '🖱 ' + this.t('lightboxHint', {
+          zoom: this.formatViewerBinding(vbs.zoom),
+          pan: this.formatViewerBinding(vbs.pan),
+          reset: this.formatViewerBinding(vbs.reset),
+        });
+        const hintClose = document.createElement('span');
+        hintClose.className = 'lightbox-hint-close';
+        hintClose.innerHTML = '&times;';
+        hint.append(hintSpan, hintClose);
         hint.querySelector('.lightbox-hint-close').addEventListener('click', () => hint.remove());
         overlay.appendChild(hint);
         overlay.appendChild(el);
@@ -299,9 +309,10 @@
   
         overlay.addEventListener('wheel', (e) => {
           e.preventDefault();
+          if (!this.viewerBindingMatches('zoom', e)) return; // 修饰键不符：不缩放
           const oldS = scale;
-          scale += e.deltaY < 0 ? 0.15 : -0.15;
-          scale = Math.max(0.2, scale);
+          scale *= e.deltaY < 0 ? 1.15 : 1 / 1.15;
+          scale = Math.max(0.1, Math.min(30, scale));
           const ratio = scale / oldS;
           const rect = el.getBoundingClientRect();
           const mx = e.clientX - rect.left - rect.width / 2;
@@ -312,7 +323,15 @@
           updateTransform();
         }, { passive: false });
   
+        // 右键作平移键时屏蔽系统右键菜单
+        overlay.addEventListener('contextmenu', (e) => e.preventDefault());
+        // 中键按下默认会触发浏览器自动滚动，需 preventDefault；平移绑定由「快捷键设置」配置
+        overlay.addEventListener('mousedown', (e) => {
+          if (e.button === 1) e.preventDefault();
+        });
         el.addEventListener('mousedown', (e) => {
+          if (!this.viewerBindingMatches('pan', e)) return;
+          e.preventDefault();
           isDragging = true;
           startX = e.clientX;
           startY = e.clientY;
@@ -337,11 +356,16 @@
         };
         document.addEventListener('mouseup', onMouseUp);
   
-        el.addEventListener('dblclick', () => {
+        const resetView = () => {
           scale = 1;
           tx = 0;
           ty = 0;
           updateTransform();
+        };
+        el.addEventListener('dblclick', (e) => { if (this.viewerBindingMatches('reset', e)) resetView(); });
+        // 重置绑定为「中键点击」时（平移改用其它键）：auxclick 触发
+        overlay.addEventListener('auxclick', (e) => {
+          if (e.button === 1 && this.viewerBindingMatches('reset', e)) resetView();
         });
       },
       initDragDrop() {

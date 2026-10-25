@@ -93,10 +93,11 @@ test('设置布局：内置与可配置两大分类分区渲染（可折叠）',
     const ed = w.editor;
     ed.renderShortcutsList();
     const sections = w.document.querySelectorAll('#shortcuts-list .shortcut-section');
-    assert.strictEqual(sections.length, 2, '应有两个折叠分类（内置 / 可配置）');
+    assert.strictEqual(sections.length, 3, '应有三个折叠分类（内置 / 可配置 / 图片图表查看器鼠标操作）');
     const titles = [...w.document.querySelectorAll('#shortcuts-list .shortcut-section-title .shortcut-section-name')].map(el => el.textContent.trim());
     assert.ok(titles.includes('内置快捷键'), '应有「内置快捷键」分类');
     assert.ok(titles.includes('方案与自定义快捷键'), '应有「方案与自定义快捷键」分类');
+    assert.ok(titles.includes('图片 / 图表查看器'), '应有「图片 / 图表查看器」分类');
     // 可配置区仍包含原有功能分组与全部设置项
     const renderedIds = new Set([...w.document.querySelectorAll('#shortcuts-list .shortcut-row')].map(el => el.dataset.action));
     for (const id of Object.keys(ed.getDefaultShortcuts())) {

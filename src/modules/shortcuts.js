@@ -497,9 +497,30 @@
             <div id="shortcuts-scheme-host" class="scheme-select-host"></div>
           </div>`;
   
+        // —— 图片 / 图表查看器的鼠标操作（缩放 / 平移 / 重置）——
+        const vb = this.getViewerBindings();
+        const viewerRowsHtml = ['zoom', 'pan', 'reset'].map(role => {
+          const rec = this._viewerRecording === role;
+          return `
+            <div class="shortcut-row" data-viewer="${role}">
+              <span class="shortcut-label">${this.t('vb_' + role)}</span>
+              <div class="shortcut-actions">
+                ${this.formatShortcutDisplay(this.formatViewerBinding(vb[role]))}
+                <button class="shortcut-record-btn viewer-rec${rec ? ' recording' : ''}" data-viewer="${role}">${rec ? this.t('vbPress_' + role) : this.t('modify')}</button>
+                <button class="shortcut-clear-btn viewer-reset" data-viewer="${role}">${this.t('resetDefault')}</button>
+              </div>
+            </div>`;
+        }).join('');
+        const viewerHtml = `
+          <div class="shortcut-group">
+            <div class="shortcut-group-title">${this.t('viewerSectionHint')}</div>
+            ${viewerRowsHtml}
+          </div>`;
+
         container.innerHTML =
           sectionHtml('builtin', this.t('builtinShortcutsTitle'), ICON_KEYBOARD, builtinHtml) +
-          sectionHtml('config', this.t('configurableShortcutsTitle'), ICON_SLIDERS, schemeBlockHtml + configGroupsHtml);
+          sectionHtml('config', this.t('configurableShortcutsTitle'), ICON_SLIDERS, schemeBlockHtml + configGroupsHtml) +
+          sectionHtml('viewer', this.t('viewerSectionTitle'), ICON_KEYBOARD, viewerHtml);
   
         // 把方案 Select 的宿主节点移入当前渲染出的占位容器（每次 innerHTML 重建后需重新挂接）。
         if (this._schemeSelect) this._schemeSelect.setValue(this.shortcutScheme || 'default', true);
@@ -515,7 +536,28 @@
           btn.addEventListener('click', (e) => {
             e.stopPropagation();
             const action = btn.dataset.action;
+            if (!action) return; // 查看器鼠标绑定的按钮（data-viewer）由下方单独处理
+            this.cancelViewerRecording();
             this.startRecording(action);
+          });
+        });
+
+        container.querySelectorAll('.viewer-rec').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (this._viewerRecording === btn.dataset.viewer) {
+              this.cancelViewerRecording();
+              this.renderShortcutsList();
+            } else {
+              this.startViewerRecording(btn.dataset.viewer);
+            }
+          });
+        });
+        container.querySelectorAll('.viewer-reset').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.cancelViewerRecording();
+            this.resetViewerBinding(btn.dataset.viewer);
           });
         });
   
@@ -523,12 +565,143 @@
           btn.addEventListener('click', (e) => {
             e.stopPropagation();
             const action = btn.dataset.action;
+            if (!action) return;
             this.clearShortcut(action);
           });
         });
       },
       startRecording(action) {
         this.recordingAction = action;
+        this.renderShortcutsList();
+      },
+      // ===== 图片 / 图表查看器的鼠标绑定（缩放 / 平移 / 重置视图）=====
+      // 绑定串格式：[Ctrl+][Shift+][Alt+]<Wheel|Left|Middle|Right|DoubleClick>。
+      // 与键盘快捷键独立存储（localStorage tizumark-viewer-bindings），不经方案预设，
+      // 在「快捷键设置」里与键盘快捷键并列配置。
+      getDefaultViewerBindings() {
+        return { zoom: 'Wheel', pan: 'Middle', reset: 'DoubleClick' };
+      },
+      loadViewerBindings() {
+        const d = this.getDefaultViewerBindings();
+        try {
+          const raw = JSON.parse(localStorage.getItem('tizumark-viewer-bindings') || 'null');
+          if (raw && typeof raw === 'object') {
+            for (const k of Object.keys(d)) {
+              if (typeof raw[k] === 'string' && this._validViewerBinding(k, raw[k])) d[k] = raw[k];
+            }
+          }
+        } catch (_) { /* 损坏数据回落默认 */ }
+        return d;
+      },
+      getViewerBindings() {
+        return this._viewerBindings || (this._viewerBindings = this.loadViewerBindings());
+      },
+      saveViewerBindings(b) {
+        this._viewerBindings = b;
+        try { localStorage.setItem('tizumark-viewer-bindings', JSON.stringify(b)); } catch (_) {}
+      },
+      _parseViewerBinding(s) {
+        const parts = String(s || '').split('+');
+        const btn = parts.pop();
+        const mods = { ctrl: false, shift: false, alt: false };
+        for (const p of parts) {
+          const k = p.toLowerCase();
+          if (k in mods) mods[k] = true; else return null;
+        }
+        if (!['Wheel', 'Left', 'Middle', 'Right', 'DoubleClick'].includes(btn)) return null;
+        return { ctrl: mods.ctrl, shift: mods.shift, alt: mods.alt, btn };
+      },
+      // 各动作可接受的触发方式：缩放=滚轮；平移=按住某鼠标键拖动；重置=双击 / 中键点击
+      _validViewerBinding(role, s) {
+        const p = this._parseViewerBinding(s);
+        if (!p) return false;
+        if (role === 'zoom') return p.btn === 'Wheel';
+        if (role === 'pan') return p.btn === 'Left' || p.btn === 'Middle' || p.btn === 'Right';
+        if (role === 'reset') return p.btn === 'DoubleClick' || p.btn === 'Middle';
+        return false;
+      },
+      // 事件是否命中某动作的绑定（wheel / mousedown / auxclick / dblclick）
+      viewerBindingMatches(role, e) {
+        const p = this._parseViewerBinding(this.getViewerBindings()[role]);
+        if (!p) return false;
+        if (!!(e.ctrlKey || e.metaKey) !== p.ctrl || !!e.shiftKey !== p.shift || !!e.altKey !== p.alt) return false;
+        if (e.type === 'wheel') return p.btn === 'Wheel';
+        if (e.type === 'dblclick') return p.btn === 'DoubleClick';
+        return ['Left', 'Middle', 'Right'][e.button] === p.btn;
+      },
+      formatViewerBinding(s) {
+        const p = this._parseViewerBinding(s);
+        if (!p) return '';
+        const parts = [];
+        if (p.ctrl) parts.push('Ctrl');
+        if (p.shift) parts.push('Shift');
+        if (p.alt) parts.push('Alt');
+        parts.push(this.t('vb' + p.btn));
+        return parts.join('+');
+      },
+      cancelViewerRecording() {
+        if (this._viewerRecordCleanup) this._viewerRecordCleanup();
+        this._viewerRecordCleanup = null;
+        this._viewerRecording = null;
+      },
+      startViewerRecording(role) {
+        this.cancelViewerRecording();
+        this.recordingAction = null;
+        this._viewerRecording = role;
+        this.renderShortcutsList();
+        const compose = (e, btn) => ((e.ctrlKey || e.metaKey) ? 'Ctrl+' : '') + (e.shiftKey ? 'Shift+' : '') + (e.altKey ? 'Alt+' : '') + btn;
+        const swallow = (e) => { e.preventDefault(); e.stopPropagation(); };
+        const finish = (value) => {
+          const bindings = Object.assign({}, this.getViewerBindings());
+          if (!this._validViewerBinding(role, value)) {
+            this.showToast(this.t('vbInvalid'));
+            return;
+          }
+          const other = role === 'pan' ? 'reset' : (role === 'reset' ? 'pan' : null);
+          if (other && bindings[other] === value) {
+            this.showToast(this.t('vbConflict'));
+            return;
+          }
+          bindings[role] = value;
+          this.saveViewerBindings(bindings);
+          this.cancelViewerRecording();
+          this.renderShortcutsList();
+        };
+        const onWheel = (e) => { swallow(e); if (role === 'zoom') finish(compose(e, 'Wheel')); };
+        const onDown = (e) => {
+          if (e.target.closest && e.target.closest('.viewer-rec')) return; // 点「修改」按钮本身不算录入
+          swallow(e);
+          if (role === 'pan') finish(compose(e, ['Left', 'Middle', 'Right'][e.button] || 'Left'));
+          else if (role === 'reset' && e.button === 1) finish(compose(e, 'Middle'));
+        };
+        const onDbl = (e) => { swallow(e); if (role === 'reset') finish(compose(e, 'DoubleClick')); };
+        const onSuppress = (e) => { if (!(e.target.closest && e.target.closest('.viewer-rec'))) swallow(e); };
+        const onKey = (e) => {
+          if (e.key === 'Escape') { swallow(e); this.cancelViewerRecording(); this.renderShortcutsList(); }
+        };
+        // 延后一拍再挂监听，避免点「修改」按钮的这次点击被当作录入
+        const timer = setTimeout(() => {
+          document.addEventListener('wheel', onWheel, { capture: true, passive: false });
+          document.addEventListener('mousedown', onDown, true);
+          document.addEventListener('dblclick', onDbl, true);
+          document.addEventListener('auxclick', onSuppress, true);
+          document.addEventListener('contextmenu', onSuppress, true);
+          document.addEventListener('keydown', onKey, true);
+        }, 0);
+        this._viewerRecordCleanup = () => {
+          clearTimeout(timer);
+          document.removeEventListener('wheel', onWheel, true);
+          document.removeEventListener('mousedown', onDown, true);
+          document.removeEventListener('dblclick', onDbl, true);
+          document.removeEventListener('auxclick', onSuppress, true);
+          document.removeEventListener('contextmenu', onSuppress, true);
+          document.removeEventListener('keydown', onKey, true);
+        };
+      },
+      resetViewerBinding(role) {
+        const bindings = Object.assign({}, this.getViewerBindings());
+        bindings[role] = this.getDefaultViewerBindings()[role];
+        this.saveViewerBindings(bindings);
         this.renderShortcutsList();
       },
       // 快捷键主键归一化（小写）：e.key 是拉丁字母/数字时按它（兼容 Dvorak/AZERTY），
@@ -725,6 +898,7 @@
       },
       hideShortcutsDialog() {
         this.recordingAction = null;
+        this.cancelViewerRecording();
         document.getElementById('shortcuts-dialog').classList.add('hidden');
       },
       applyShortcuts() {
