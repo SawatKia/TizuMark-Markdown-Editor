@@ -293,7 +293,7 @@
         if (gen !== this.app._renderGeneration) return;
         this.app._resumeScroll();
         const msg = String(error).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        this.app.preview.innerHTML = `<p style="color: red;">预览错误: ${msg}</p>`;
+        this.app.preview.innerHTML = `<p style="color: red;">${this.app.t('previewError')}${msg}</p>`;
       } finally {
         if (needLoad) this.app._endPaneLoad();
       }

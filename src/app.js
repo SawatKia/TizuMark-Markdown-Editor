@@ -190,6 +190,12 @@ class MarkdownEditor {
   }
   // 事件绑定只做「DOM 事件 → 功能方法」的路由，具体交互实现分散在 modules/ 各功能模块。
   // 新增事件请就近放进对应模块，不要往这里堆。
+  // 插入模板：文案取自 i18n（tpl_*），\u0001 标记插入后光标位置
+  _insertTpl(name) {
+    const raw = this.t('tpl_' + name);
+    const i = raw.indexOf('\u0001');
+    this.insertBlock(raw.replace('\u0001', ''), i < 0 ? undefined : i);
+  }
   initEventListeners() {
     this.initToolbarMenus();        // misc-ui
     this.initTabDragEvents();       // tabs
@@ -312,18 +318,18 @@ class MarkdownEditor {
       case 'insert-subscript': this.wrapSelection('<sub>', '</sub>'); break;
       // 内容类型补齐（2026-10-22 全量比对新增，面板默认不启用）：光标偏移=插入文本内
       // 待填位置（insertBlock 口径），wrapSelection 空选区时插入空壳、光标落壳内。
-      case 'insert-dl': this.insertBlock('术语\n: 释义', 2); break;
-      case 'insert-details': this.insertBlock('<details>\n<summary>点击展开</summary>\n\n内容\n\n</details>', 35); break;
-      case 'insert-footnote': this.insertBlock('[^1]: 脚注内容', 6); break;
+      case 'insert-dl': this._insertTpl('dl'); break;
+      case 'insert-details': this._insertTpl('details'); break;
+      case 'insert-footnote': this._insertTpl('footnote'); break;
       case 'insert-progress': this.insertBlock('<progress value="70" max="100"></progress>', 17); break;
-      case 'insert-center': this.insertBlock('<center>\n居中显示的文本\n</center>', 9); break;
+      case 'insert-center': this._insertTpl('center'); break;
       case 'insert-u': this.wrapSelection('<u>', '</u>'); break;
       case 'insert-ins': this.wrapSelection('<ins>', '</ins>'); break;
       case 'insert-del': this.wrapSelection('<del>', '</del>'); break;
-      case 'insert-figure': this.insertBlock('<figure>\n  <img src="图片地址" alt="图片描述">\n  <figcaption>图注文字</figcaption>\n</figure>', 21); break;
+      case 'insert-figure': this._insertTpl('figure'); break;
       case 'insert-kbd': this.wrapSelection('<kbd>', '</kbd>'); break;
-      case 'insert-abbreviation': this.wrapSelection('<abbr title="完整词">', '</abbr>'); break;
-      case 'insert-ruby': this.insertBlock('<ruby>文字<rt>拼音</rt></ruby>', 6); break;
+      case 'insert-abbreviation': this.wrapSelection('<abbr title="' + this.t('tpl_abbrTitle') + '">', '</abbr>'); break;
+      case 'insert-ruby': this._insertTpl('ruby'); break;
 
       case 'insert-h1': this.applyHeadingLevel(1); break;
       case 'insert-h2': this.applyHeadingLevel(2); break;
@@ -333,18 +339,18 @@ class MarkdownEditor {
       case 'insert-h6': this.applyHeadingLevel(6); break;
 
       case 'insert-code-block': this.insertBlock('```javascript\n// code here\n```', 14); break;
-      case 'insert-table': this.insertBlock('| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| 内容 | 内容 | 内容 |', 2); break;
+      case 'insert-table': this._insertTpl('table'); break;
       case 'insert-quote': this.insertLinePrefix('> '); break;
       case 'insert-math-block': this.insertBlock('$$\nE = mc^2\n$$', 3); break;
-      case 'insert-mermaid': this.insertBlock('```mermaid\ngraph TD\n    A[开始] --> B[结束]\n```', 11); break;
+      case 'insert-mermaid': this._insertTpl('mermaid'); break;
       case 'insert-hr': this.insertBlock('---'); break;
       case 'insert-toc': this.insertBlock('[TOC]'); break;
 
-      case 'insert-callout-note': this.insertBlock('> [!NOTE]\n> 提示内容', 12); break;
-      case 'insert-callout-tip': this.insertBlock('> [!TIP]\n> 建议内容', 11); break;
-      case 'insert-callout-warning': this.insertBlock('> [!WARNING]\n> 警告内容', 15); break;
-      case 'insert-callout-caution': this.insertBlock('> [!CAUTION]\n> 注意内容', 15); break;
-      case 'insert-callout-important': this.insertBlock('> [!IMPORTANT]\n> 重要内容', 17); break;
+      case 'insert-callout-note': this._insertTpl('calloutNote'); break;
+      case 'insert-callout-tip': this._insertTpl('calloutTip'); break;
+      case 'insert-callout-warning': this._insertTpl('calloutWarning'); break;
+      case 'insert-callout-caution': this._insertTpl('calloutCaution'); break;
+      case 'insert-callout-important': this._insertTpl('calloutImportant'); break;
 
       case 'insert-ul': this.insertLinePrefix('- '); break;
       case 'insert-ol': this.insertLinePrefix('1. ', true); break;
@@ -583,7 +589,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       }
       const bar = document.createElement('div');
       bar.className = 'fatal-error-bar';
-      bar.textContent = '编辑器初始化失败，请重启应用。如反复出现，请将此界面截图反馈给开发者。';
+      bar.textContent = tInit('initFailedBar');
       // 固定底部条，不遮挡 Tauri 标题栏/窗口控制按钮/工具栏菜单
       bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:100000;' +
         'background:#b00020;color:#fff;font:12px/1.5 system-ui,-apple-system,sans-serif;' +

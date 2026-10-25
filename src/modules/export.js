@@ -946,7 +946,7 @@
             defaultPath: this.activeTab.filePath
               ? this.activeTab.filePath.replace(/\.md$/, '.docx')
               : 'export.docx',
-            filters: [{ name: 'Word 文档', extensions: ['docx'] }]
+            filters: [{ name: this.t('wordDocFilter'), extensions: ['docx'] }]
           });
           if (!path) {
             hideOverlay();
@@ -1047,7 +1047,7 @@
                   `主路径错误: ${docxErr && docxErr.stack ? docxErr.stack : docxErr}\n`;
                 const diagPath = path.replace(/\.docx$/i, '_diagnostic.txt');
                 await TauriApi.writeFile({ path: diagPath, content: diagText });
-                this.showToast('公式导出失败，已生成诊断文件：' + diagPath, 'warning');
+                this.showToast(this.t('formulaExportFailed') + diagPath, 'warning');
               } catch (e) { /* 写诊断文件失败也不阻塞回退 */ }
               await this._fallbackWordHtmlExport(clone, path, watchdog, (ok) => { exported = ok; });
             }

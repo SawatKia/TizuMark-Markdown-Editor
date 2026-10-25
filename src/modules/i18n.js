@@ -236,6 +236,50 @@
         this.updateFolderMenuLabel();
         setTitle('large-file-banner-close', t('closeNotice'));
         setTitle('large-file-banner-dont-remind', t('dontRemind'));
+        this._slashCommands = null; // slash 命令标签随语言重建
+        // 侧边栏 / 面板 / 对话框静态文案补漏（index.html 中的中文兜底值在此按语言覆盖）
+        const setAria = (id, text) => { const el = document.getElementById(id); if (el) el.setAttribute('aria-label', text); };
+        setText('large-file-banner-dont-remind', t('dontRemind'));
+        setText('large-file-banner-close', t('close'));
+        setTitle('sidebar-h-resizer', t('resizeRatioTip'));
+        setAria('files-chevron', t('filesPanelToggleAria'));
+        setAria('outline-chevron', t('outlinePanelToggleAria'));
+        setAria('btn-all-folders', t('foldersToggleAria'));
+        setAria('btn-all-outline', t('outlineToggleAria'));
+        setAria('folder-up', t('folderUp'));
+        setAria('folder-sort-order', t('sortOrderToggleAria'));
+        setAria('sidebar-float-btn', t('toggleSidebar'));
+        setAria('editor-breadcrumb', t('breadcrumbAria'));
+        setTitle('editor-breadcrumb-overflow', t('backToStart'));
+        setAria('editor-breadcrumb-overflow', t('backToStart'));
+        setTitle('btn-side-left', t('collapseEditor'));
+        setTitle('btn-side-right', t('collapsePreview'));
+        setPlaceholder('file-search-input', t('fileSearchPlaceholder'));
+        setText('file-search-title', t('fileSearchDialogTitle'));
+        setText('update-title', t('updateAvailable'));
+        setText('prompt-dialog-title', t('promptInputTitle'));
+        setText('prompt-dialog-cancel', t('cancel'));
+        setText('prompt-dialog-confirm', t('confirm'));
+        setText('docx-page-title', t('docxExportTitle'));
+        document.querySelectorAll('.docx-page-cancel:not(.dialog-close)').forEach(el => { el.textContent = t('cancel'); });
+        document.querySelectorAll('.docx-page-ok').forEach(el => { el.textContent = t('docxExportOk'); });
+        const imgStoreHint = document.querySelector('#insert-image-store-hint .hint-text');
+        if (imgStoreHint) imgStoreHint.textContent = t('insertImageStoreHint');
+        if (this._updateAllFoldersBtn) this._updateAllFoldersBtn();
+        if (this._updateAllOutlineBtn) this._updateAllOutlineBtn();
+        if (this.applyPanelCollapse) this.applyPanelCollapse();
+        // 文件树 / 文件夹右键菜单：按 data-action 映射
+        const treeMenuKeys = {
+          'file-new-file': 'fileNewFile', 'file-new-folder': 'fileNewFolder', 'file-cut': 'cut',
+          'file-copy': 'copy', 'file-paste': 'paste', 'file-rename': 'fileRename',
+          'file-copy-path': 'fileCopyPath', 'file-delete': 'fileDelete',
+          'folder-open-containing': 'openContainingFolder', 'folder-copy-path': 'folderCopyPath',
+        };
+        document.querySelectorAll('#context-menu-file-tree .context-menu-item, #context-menu-folder .context-menu-item').forEach(el => {
+          const key = treeMenuKeys[el.dataset.action];
+          const span = el.querySelector('span:first-child');
+          if (key && span) span.textContent = t(key);
+        });
         // fmt-icon-btn 系列（加粗/斜体/删除线/链接/图片/水平线/高亮/上标/下标）
         const fmtActionTitleKeys = {
           'insert-bold': 'bold',
@@ -347,7 +391,7 @@
           const title = aboutSections[3].querySelector('.dependency-title .dependency-name');
           if (title) title.textContent = t('thirdParty');
           const depDescs = aboutSections[3].querySelectorAll('.dependency-item p');
-          const depKeys = ['depCodeMirror', 'depHighlight', 'depCmark', 'depKatex', 'depMermaid', 'depHtml2canvas', 'depTauri'];
+          const depKeys = ['depCodeMirror', 'depHighlight', 'depCmark', 'depUnified', 'depKatex', 'depMermaid', 'depHtml2canvas', 'depTauri'];
           depDescs.forEach((p, i) => {
             if (i < depKeys.length) p.textContent = t(depKeys[i]);
           });
@@ -463,8 +507,10 @@
         document.querySelectorAll('[data-i18n]').forEach(el => {
           const key = el.dataset.i18n;
           if (key) {
-            const lbl = el.querySelector('.lbl');
+            const lbl = el.querySelector('.lbl') || el.querySelector('.hint-text');
             if (lbl) lbl.textContent = t(key);
+            else if (!el.children.length) el.textContent = t(key);
+            if (el.hasAttribute('title')) el.title = t(key);
           }
         });
   

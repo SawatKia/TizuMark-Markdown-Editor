@@ -282,12 +282,12 @@
         const outlineChevron = document.getElementById('outline-chevron');
         if (filesChevron) {
           filesChevron.classList.toggle('collapsed', filesCollapsed);
-          filesChevron.title = filesCollapsed ? '展开文件面板' : '收起文件面板';
+          filesChevron.title = filesCollapsed ? this.t('filesPanelExpand') : this.t('filesPanelCollapse');
           filesChevron.setAttribute('aria-expanded', String(!filesCollapsed));
         }
         if (outlineChevron) {
           outlineChevron.classList.toggle('collapsed', outlineCollapsed);
-          outlineChevron.title = outlineCollapsed ? '展开大纲面板' : '收起大纲面板';
+          outlineChevron.title = outlineCollapsed ? this.t('outlinePanelExpand') : this.t('outlinePanelCollapse');
           outlineChevron.setAttribute('aria-expanded', String(!outlineCollapsed));
         }
         if (filesCollapsed || outlineCollapsed) {
@@ -339,7 +339,7 @@
   
         // 显示 loading 覆盖层（防重复点击 + 视觉反馈），并设超时兜底强制清除，避免卡死在 loading。
         const TIMEOUT_MS = 20000;
-        const overlay = this._showFolderLoading(expand ? '正在展开全部目录…' : '正在折叠全部目录…');
+        const overlay = this._showFolderLoading(this.t(expand ? 'foldersExpanding' : 'foldersCollapsing'));
         if (btn) btn.disabled = true;
         let timeoutId = null;
         const timeoutPromise = new Promise((_, reject) => {
@@ -389,7 +389,7 @@
           if (err && err.message === 'folder-toggle-timeout') {
             // 超时：目录可能过多/IO 慢，强制结束并提示，不让用户卡在 loading
             token.cancelled = true;
-            this.showToast(expand ? '展开全部目录超时' : '折叠全部目录超时');
+            this.showToast(this.t(expand ? 'foldersExpandTimeout' : 'foldersCollapseTimeout'));
           }
           // 其它异常也继续走 finally 清理
         } finally {
@@ -473,7 +473,7 @@
         const COLLAPSE_ALL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22v-6"/><path d="M12 8V2"/><path d="M4 12H2"/><path d="M10 12H8"/><path d="M16 12h-2"/><path d="M22 12h-2"/><path d="m15 19-3-3-3 3"/><path d="m15 5-3 3-3-3"/></svg>';
         const EXPAND_ALL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22v-6"/><path d="M12 8V2"/><path d="M4 12H2"/><path d="M10 12H8"/><path d="M16 12h-2"/><path d="M22 12h-2"/><path d="m15 19-3 3-3-3"/><path d="m15 5-3-3-3 3"/></svg>';
         btn.innerHTML = this._allFoldersExpanded ? COLLAPSE_ALL : EXPAND_ALL;
-        btn.title = this._allFoldersExpanded ? '折叠全部目录' : '展开全部目录';
+        btn.title = this._allFoldersExpanded ? this.t('foldersCollapseAll') : this.t('foldersExpandAll');
         btn.setAttribute('aria-pressed', String(this._allFoldersExpanded));
       },
       _updateAllOutlineBtn() {
@@ -483,7 +483,7 @@
         const COLLAPSE_ALL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22v-6"/><path d="M12 8V2"/><path d="M4 12H2"/><path d="M10 12H8"/><path d="M16 12h-2"/><path d="M22 12h-2"/><path d="m15 19-3-3-3 3"/><path d="m15 5-3 3-3-3"/></svg>';
         const EXPAND_ALL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22v-6"/><path d="M12 8V2"/><path d="M4 12H2"/><path d="M10 12H8"/><path d="M16 12h-2"/><path d="M22 12h-2"/><path d="m15 19-3 3-3-3"/><path d="m15 5-3-3-3 3"/></svg>';
         btn.innerHTML = this._allOutlineExpanded ? COLLAPSE_ALL : EXPAND_ALL;
-        btn.title = this._allOutlineExpanded ? '折叠全部大纲' : '展开全部大纲';
+        btn.title = this._allOutlineExpanded ? this.t('outlineCollapseAll') : this.t('outlineExpandAll');
         btn.setAttribute('aria-pressed', String(this._allOutlineExpanded));
       },
       initBreadcrumb() {

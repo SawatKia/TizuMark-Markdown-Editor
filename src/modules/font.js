@@ -18,7 +18,7 @@
         try {
           const selected = await dialogOpen({
             multiple: true,
-            filters: [{ name: '字体', extensions: ['ttf', 'otf', 'woff', 'woff2'] }],
+            filters: [{ name: this.t('fontFilterName'), extensions: ['ttf', 'otf', 'woff', 'woff2'] }],
           });
           if (!selected) return;
           const paths = Array.isArray(selected) ? selected : [selected];

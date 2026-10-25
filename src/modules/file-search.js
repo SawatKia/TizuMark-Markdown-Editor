@@ -112,12 +112,17 @@ function fsApplyFilter() {
   fsRenderList();
 }
 
+// 模块级函数无 this：经 window.editor.t 取当前语言文案，编辑器未就绪时回退中文
+function __fsT(key, fallback) {
+  try { return (window.editor && window.editor.t) ? window.editor.t(key) : fallback; } catch (_) { return fallback; }
+}
+
 function fsRenderList() {
   if (!__fs_listEl) return;
   if (!__fs_filteredFiles.length) {
     const msg = (__fs_inputEl && __fs_inputEl.value.trim())
-      ? '未找到匹配的文件'
-      : '当前工作区没有 .md / .markdown / .txt 文件';
+      ? __fsT('fileSearchNoMatch', '未找到匹配的文件')
+      : __fsT('fileSearchNoDocs', '当前工作区没有 .md / .markdown / .txt 文件');
     __fs_listEl.innerHTML = `<div class="file-search-empty">${msg}</div>`;
     return;
   }
@@ -163,7 +168,7 @@ async function fsScanWorkspace(dir) {
   const token = ++__fs_scanToken;     // 新扫描代次：打断任何进行中的旧扫描
   __fs_allFiles = [];
   __fs_filteredFiles = [];
-  if (__fs_listEl) __fs_listEl.innerHTML = '<div class="file-search-empty">正在扫描文件…</div>';
+  if (__fs_listEl) __fs_listEl.innerHTML = '<div class="file-search-empty">' + __fsT('fileSearchScanning', '正在扫描文件…') + '</div>';
 
   // 命令缺失（极旧构建）时回退到前端递归扫描，保证不整体失效。
   if (typeof TauriApi === 'undefined' || typeof TauriApi.searchFiles !== 'function') {

@@ -64,6 +64,12 @@
           { action: 'insert-superscript', label: '上标', hint: '<sup>', keywords: ['sup', 'superscript', 'shangbiao'] },
           { action: 'insert-subscript', label: '下标', hint: '<sub>', keywords: ['sub', 'subscript', 'xiabiao'] },
         ];
+        // 标签/提示按界面语言本地化（关键字保持中英拼音多路匹配，便于任意语言检索）
+        const slashLabels = this.t('slashLabel') || {};
+        for (const c of base) {
+          if (slashLabels[c.action]) c.label = slashLabels[c.action];
+          if (c.action === 'insert-dl') c.hint = this.t('slashDlHint');
+        }
         this._slashBaseCatalog = base;
         this._slashCommands = this._applySlashLayout(base);
         return this._slashCommands;
