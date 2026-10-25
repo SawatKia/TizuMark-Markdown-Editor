@@ -34,8 +34,16 @@
     }
 
     // 文档化 facade API：render() 即原 updatePreview；setDark/refresh 供后续批次调用。
+    // setDark 必须走主题模块的**唯一出口** _applyThemeToDom：只写 this.app.isDark 而不落到 DOM，
+    // 等于重新造一条「主题只换一半」的路径（2026-10-25 把 applyThemeMode / toggleTheme 的
+    // 六步 DOM 应用收口成 _applyThemeToDom 正是为了杜绝这类分叉）。值没变时直接返回，
+    // 避免无谓地重渲染全部 mermaid 图表。
     setDark(dark) {
-      this.app.isDark = !!dark;
+      const next = !!dark;
+      if (this.app.isDark === next) return Promise.resolve();
+      this.app.isDark = next;
+      this.app._applyThemeToDom();
+      return this.app.rerenderMermaid();
     }
 
     refresh() {

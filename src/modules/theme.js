@@ -138,7 +138,11 @@
           mermaid.initialize({
             startOnLoad: false,
             theme: this.isDark ? 'dark' : 'default',
-            securityLevel: 'loose',
+            // 与首次渲染（preview-post.js）和 WYSIWYG 重渲染（_rerenderWysiwygMermaid）统一用
+            // 'strict'：原先这里单独写成 'loose'，等于「切一次主题就换一套渲染规则」——
+            // 含 HTML 标签的图在切主题后外观会变（宽松模式才解析标签）。导出路径（export.js）
+            // 保持 'loose' 是另一回事：导出要的是完整保真，不参与预览一致性。
+            securityLevel: 'strict',
             fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--font-preview').trim() || '-apple-system, sans-serif',
           });
           // 主题切换重渲染全部图表。一次性 mermaid.run(全部节点) 是同步 CPU 密集任务
@@ -264,10 +268,8 @@
         const showTime = Date.now();
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         try {
-          if (this.settings.themeMode !== 'light' && this.settings.themeMode !== 'dark') {
-            this.settings.themeMode = this.isDark ? 'light' : 'dark';
-            if (this._selects && this._selects.themeMode) this._selects.themeMode.setValue(this.settings.themeMode, true);
-          }
+          // 「系统跟随」模式不需要先按旧 isDark 算一遍 themeMode：紧随其后的赋值会按**翻转后**
+          // 的 isDark 无条件重写，两者结果恒等（旧实现是把同一个值写两遍、setValue 也调两次）。
           this.isDark = !this.isDark;
           this.settings.themeMode = this.isDark ? 'dark' : 'light';
           if (this._selects && this._selects.themeMode) this._selects.themeMode.setValue(this.settings.themeMode, true);

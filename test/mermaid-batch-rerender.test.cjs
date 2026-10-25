@@ -213,3 +213,50 @@ test('接线断言：rerenderMermaid 在 WYSIWYG 下必调 _rerenderWysiwygMerma
   assert.ok(/removeAttribute\('data-processed'\)/.test(src),
     '重渲染前必须清 data-processed，否则 mermaid.run 直接跳过该节点');
 });
+
+// 2026-10-25 审查发现：三条 mermaid 渲染路径的 securityLevel 曾不一致 ——
+// 首次渲染（preview-post.js）与 WYSIWYG 重渲染（theme.js:211）都是 'strict'，
+// 而 #preview 的重渲染（theme.js:141）单独写成 'loose'。
+// 后果不是安全问题那么远，而是「切一次主题就换一套渲染规则」：宽松模式才解析图内 HTML 标签，
+// 于是含标签的图在切主题后外观会变。上面那些用例只走 WYSIWYG 路径（lastInit 来自 211 行），
+// 101 行这条 #preview 路径从没被断言过 securityLevel，所以不一致一直没被发现。
+// 口径：应用内（首次渲染 / #preview 重渲染 / WYSIWYG 重渲染）一律 'strict'；
+// 只有导出（export.js）保留 'loose' —— 导出要完整保真，不参与预览一致性。
+test('#preview 重渲染：securityLevel 与首次渲染一致为 strict（不因切主题换渲染规则）', async () => {
+  const { w } = await buildEnv();
+  const ed = await waitForEditor(w);
+  try {
+    const mermaid = fakeMermaidWithSvg();
+    w.mermaid = mermaid;
+    ed.viewMode = 'wysiwyg'; // 遮罩里不放图表 → 只走 #preview 分支
+    ed.isDark = true;
+    const c = w.document.createElement('div');
+    c.className = 'mermaid-container';
+    c.textContent = 'graph TD; P-->Q';
+    ed.preview.appendChild(c);
+
+    await ed.rerenderMermaid();
+
+    assert.ok(mermaid.lastInit, '应调用 mermaid.initialize');
+    assert.strictEqual(mermaid.lastInit.securityLevel, 'strict',
+      '#preview 重渲染不得降级为 loose（否则切主题后含 HTML 标签的图外观会变）');
+    assert.strictEqual(mermaid.lastInit.theme, 'dark', '深色主题应传 theme:dark');
+  } finally { cleanup(w); }
+});
+
+test('接线断言：应用内 mermaid 初始化一律 strict，只有导出路径允许 loose', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const { ROOT } = require('./helpers/app-env.cjs');
+  const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
+
+  for (const f of ['src/modules/theme.js', 'src/modules/preview-post.js']) {
+    const src = read(f);
+    const levels = [...src.matchAll(/securityLevel\s*:\s*'([a-z]+)'/g)].map((m) => m[1]);
+    assert.ok(levels.length > 0, `${f} 应至少有一处 mermaid.initialize`);
+    assert.ok(levels.every((l) => l === 'strict'), `${f} 内的 securityLevel 必须全为 strict，实得 ${levels.join('/')}`);
+  }
+  // 导出路径故意保留 loose（保真优先），这里明确记下这条例外，避免下次又"统一"掉
+  const exp = read('src/modules/export.js');
+  assert.ok(/securityLevel\s*:\s*'loose'/.test(exp), '导出路径应保留 loose（保真），不要跟着改成 strict');
+});
