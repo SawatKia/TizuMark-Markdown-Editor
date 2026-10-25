@@ -8197,3 +8197,11 @@ body.custom-bg-active #preview {
   border: 1px solid var(--border-color, rgba(128, 128, 128, 0.35));
   vertical-align: middle;
 }
+
+/* 文件面板「刷新」按钮：刷新期间图标旋转 */
+#btn-refresh-folders.is-refreshing svg {
+  animation: files-refresh-spin 0.8s linear infinite;
+}
+@keyframes files-refresh-spin {
+  to { transform: rotate(360deg); }
+}

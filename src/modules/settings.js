@@ -619,6 +619,8 @@
         this.applyLanguage();       // 语言/界面文本生效
         this.applyWindowBehavior(); // 托盘显隐生效
         this.saveSettings();        // 应用 = 落盘
+        // 文件树相关设置（点开头文件夹 / 显示所有文件 / 排序）变更后确保文件面板按最新设置重新列目录
+        if (this.workspaceFolder) { try { await this.renderFolderTree(); } catch (_) {} }
         // 应用即确认：快照推进到当前值，之后「取消」回滚到最近一次应用/保存的状态
         this._settingsSnapshot = JSON.parse(JSON.stringify(this.settings));
       },

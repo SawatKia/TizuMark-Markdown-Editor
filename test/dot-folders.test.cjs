@@ -37,14 +37,54 @@ test('文件树列目录时按设置传 includeDotDirs', async () => {
   } finally { cleanup(w); }
 });
 
-test('应用设置会重渲染文件树，使开关即时生效', async () => {
+test('刷新按钮：点击重新列目录并显示新内容，期间转圈、完成后恢复', async () => {
   const { w, ed } = await makeEditor();
   try {
-    let renders = 0;
-    ed.renderFolderTree = async () => { renders++; };
+    let entries = [{ name: 'a.md', path: '/root/a.md', is_dir: false, mtime: 1, size: 1 }];
+    let calls = 0;
+    w.TauriApi.listDir = async () => { calls++; return entries; };
     ed.workspaceFolder = '/root';
+    await ed.renderFolderTree();
+    const btn = w.document.getElementById('btn-refresh-folders');
+    assert.ok(btn, '应有刷新按钮');
+    const before = calls;
+    entries = entries.concat([{ name: 'b.md', path: '/root/b.md', is_dir: false, mtime: 2, size: 1 }]);
+    btn.dispatchEvent(new w.Event('click'));
+    assert.ok(btn.classList.contains('is-refreshing'), '刷新中应转圈');
+    await delay(50);
+    assert.ok(calls > before);
+    assert.ok(!btn.classList.contains('is-refreshing'));
+    assert.ok(w.document.getElementById('folder-tree').textContent.includes('b.md'));
+  } finally { cleanup(w); }
+});
+
+test('并发渲染串行化：不会重复追加节点，且最终反映最新状态', async () => {
+  const { w, ed } = await makeEditor();
+  try {
+    let entries = [{ name: 'a.md', path: '/root/a.md', is_dir: false, mtime: 1, size: 1 }];
+    w.TauriApi.listDir = async () => { await delay(20); return entries; };
+    ed.workspaceFolder = '/root';
+    const p1 = ed.renderFolderTree();
+    entries = [{ name: 'z.md', path: '/root/z.md', is_dir: false, mtime: 1, size: 1 }];
+    const p2 = ed.renderFolderTree();
+    await Promise.all([p1, p2]);
+    const rows = w.document.querySelectorAll('#folder-tree .tree-node');
+    assert.strictEqual(rows.length, 1);
+    assert.ok(rows[0].textContent.includes('z.md'));
+  } finally { cleanup(w); }
+});
+
+test('应用设置后文件树按新的 showDotFolders 重新列目录', async () => {
+  const { w, ed } = await makeEditor();
+  try {
+    const seen = [];
+    w.TauriApi.listDir = async (a) => { seen.push(a.includeDotDirs); return a.includeDotDirs ? [{ name: '.notes', path: '/root/.notes', is_dir: true, mtime: 1, size: 0 }] : []; };
+    ed.workspaceFolder = '/root';
+    await ed.renderFolderTree();
+    assert.ok(!w.document.getElementById('folder-tree').textContent.includes('.notes'));
     ed.settings.showDotFolders = true;
     await ed.applyPendingSettings();
-    assert.ok(renders >= 1);
+    assert.ok(w.document.getElementById('folder-tree').textContent.includes('.notes'), '保存/应用后立即出现点开头文件夹');
+    assert.strictEqual(seen[seen.length - 1], true);
   } finally { cleanup(w); }
 });

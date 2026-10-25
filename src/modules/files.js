@@ -1026,7 +1026,37 @@
         if (!window.FileTypes || !window.FileTypes.classifyFile) return entries;
         return entries.filter((e) => e && e.is_dir ? true : window.FileTypes.classifyFile(e.name) !== 'unsupported');
       },
-      async renderFolderTree() {
+      // 文件树渲染串行化：渲染进行中再次请求只做「合并重跑」，避免两次并发渲染互相清空/重复追加，
+      // 也保证设置变更、手动刷新、目录监听同时触发时最终呈现的是最新状态。
+      renderFolderTree() {
+        if (this._treeRendering) {
+          this._treeRenderAgain = true;
+          return this._treeRenderPromise;
+        }
+        this._treeRendering = true;
+        this._treeRenderPromise = (async () => {
+          try {
+            do {
+              this._treeRenderAgain = false;
+              await this._renderFolderTreeNow();
+            } while (this._treeRenderAgain);
+          } finally {
+            this._treeRendering = false;
+          }
+        })();
+        return this._treeRenderPromise;
+      },
+      // 手动刷新文件树（保留已展开目录）：按钮转圈直到完成
+      async refreshFileTree() {
+        const btn = document.getElementById('btn-refresh-folders');
+        if (btn) { btn.classList.add('is-refreshing'); btn.disabled = true; }
+        try {
+          if (this.workspaceFolder) await this.renderFolderTree();
+        } finally {
+          if (btn) { btn.classList.remove('is-refreshing'); btn.disabled = false; }
+        }
+      },
+      async _renderFolderTreeNow() {
         const treeEl = document.getElementById('folder-tree');
         if (!treeEl) return;
         // 拖拽进行中重渲染（folder-changed 防抖、关闭工作区等）：源行即将被移除，

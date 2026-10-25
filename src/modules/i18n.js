@@ -256,6 +256,8 @@
         setAria('files-chevron', t('filesPanelToggleAria'));
         setAria('outline-chevron', t('outlinePanelToggleAria'));
         setAria('btn-all-folders', t('foldersToggleAria'));
+        setTitle('btn-refresh-folders', t('foldersRefresh'));
+        setAria('btn-refresh-folders', t('foldersRefresh'));
         setAria('btn-all-outline', t('outlineToggleAria'));
         setAria('folder-up', t('folderUp'));
         setAria('folder-sort-order', t('sortOrderToggleAria'));

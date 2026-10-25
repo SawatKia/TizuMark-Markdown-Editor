@@ -80,6 +80,8 @@
       initPanelHeaders() {
         const filesChevron = document.getElementById('files-chevron');
         const outlineChevron = document.getElementById('outline-chevron');
+        const btnRefresh = document.getElementById('btn-refresh-folders');
+        if (btnRefresh) btnRefresh.addEventListener('click', () => this.refreshFileTree());
         const btnAllFolders = document.getElementById('btn-all-folders');
         const btnAllOutline = document.getElementById('btn-all-outline');
         if (filesChevron) {
