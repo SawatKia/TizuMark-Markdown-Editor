@@ -12,6 +12,7 @@
           // 1. 处理未保存文档
           const modified = this.tabs.filter(t => t.isModified);
           if (modified.length > 0) {
+            await this.flushAutosave(modified); // 退出/丢弃前留快照
             const result = await this.showSaveDialog(
               this.t('saveChanges'),
               this.t('filesModifiedConfirm', { n: modified.length }),

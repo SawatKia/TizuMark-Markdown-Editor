@@ -96,6 +96,7 @@ class MarkdownEditor {
     this.initExternalLinks();
     this.initDragDrop();
     this.initSettings();
+    this.initAutosave();
     this.applyWindowBehavior();
     this.initShortcutsDialog();
     this.bindCollapseToggle();
@@ -402,6 +403,7 @@ Object.assign(MarkdownEditor.prototype, TMEmptyHint.mixin);
 Object.assign(MarkdownEditor.prototype, TMWysiwyg.mixin);
 Object.assign(MarkdownEditor.prototype, TMLifecycle.mixin);
 Object.assign(MarkdownEditor.prototype, TMToolbar.mixin);
+Object.assign(MarkdownEditor.prototype, TMAutosave.mixin);
 Object.assign(MarkdownEditor, TMExport.statics);
 
 

@@ -335,6 +335,7 @@
         this.cm.on('change', (cmObj, c) => {
           this.activeTab.content = this.cm.getValue();
           this.updateTabDisplay();
+          this.scheduleAutosave();
           // 大文档滑动窗口模式：打字时把窗口焦点同步到光标当前行（0-based），
           // 否则 updatePreview 仍按旧 _previewFocusLine 渲染切片，导致光标处新输入不显示、且预览跳到旧焦点。
           // 滚动驱动的虚拟重渲染走各自的焦点计算，这里只在窗口模式下跟随光标。

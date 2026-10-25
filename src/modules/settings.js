@@ -35,6 +35,7 @@
          // 自动检查遇到同版本不再弹窗；更高版本不受影响。空串=未跳过。
          skippedUpdateVersion: '',
          clearTabsOnQuit: false, // 退出应用时不保存标签会话，下次打开总是空白
+          autoSaveRetentionDays: 30, // 自动保存版本保留天数，超期自动删除
           showAllFiles: false, // 文件树过滤：默认只列受支持格式（markdown/image/text），true 时显示目录内全部文件
           toolbarCollapsed: false,
           sidebarHidden: false,
@@ -159,6 +160,8 @@
         if (efW) { efW.value = s.editorFontWeight; document.getElementById('editor-font-weight-label').textContent = s.editorFontWeight; }
         document.getElementById('settings-image-asset-path').value = s.imageAssetPath || 'assets';
         document.getElementById('set-clear-tabs-on-quit').checked = s.clearTabsOnQuit === true;
+        const asd = document.getElementById('set-autosave-days');
+        if (asd) asd.value = s.autoSaveRetentionDays;
         document.getElementById('set-custom-bg').checked = s.customBgEnabled === true;
         const cbg = document.getElementById('set-custom-bg-color');
         if (cbg) cbg.value = s.customBgColor || '#f8f7f4';
@@ -303,6 +306,12 @@
         });
         const ctoq = document.getElementById('set-clear-tabs-on-quit');
         if (ctoq) ctoq.addEventListener('change', (e) => { this.settings.clearTabsOnQuit = e.target.checked; });
+        const asdInput = document.getElementById('set-autosave-days');
+        if (asdInput) asdInput.addEventListener('change', (e) => {
+          const n = Math.floor(Number(e.target.value));
+          this.settings.autoSaveRetentionDays = Number.isFinite(n) && n >= 1 ? Math.min(n, 3650) : 30;
+          e.target.value = this.settings.autoSaveRetentionDays;
+        });
         // 图片存储方式 / 路径：已从 radio 升级为自绘下拉（set-image-store-mode / set-image-asset-path-mode），
         // onChange 在 initSettings 里通过 Select 绑定到 this.settings.imageInsertMode / imageAssetPathMode。
   

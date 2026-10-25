@@ -133,6 +133,7 @@
         setRowLabel('set-custom-bg', t('customBg'));
         setRowLabel('set-close-action', t('closeAction'));
         setRowLabel('set-clear-tabs-on-quit', t('clearTabsOnQuit'));
+        setRowLabel('set-autosave-days', t('autosaveRetention'));
         setRowLabel('set-show-tray-icon', t('showTrayIcon'));
         setRowLabel('set-show-all-files-label', t('showAllFiles'));
         setRowLabel('set-image-store-mode-label', t('imageSettingLabel'));
@@ -155,6 +156,13 @@
         setRowLabel('set-editor-font-weight', t('editorFontWeight'));
         const softBreaksHint = document.querySelector('#setting-soft-breaks-hint .hint-text');
         if (softBreaksHint) softBreaksHint.textContent = t('softBreaksHint');
+        const asdHint = document.querySelector('#setting-autosave-days-hint .hint-text');
+        if (asdHint) asdHint.textContent = t('autosaveRetentionHint');
+        updateMenuText('btn-autosave-recover-menu', t('autosaveRecoverTitle'));
+        setTitle('btn-autosave-recover', t('autosaveRecoverTitle'));
+        setText('autosave-title', t('autosaveRecoverTitle'));
+        setText('autosave-hint', t('autosaveHint'));
+        setText('autosave-done', t('autosaveClose'));
         const ctoqHint = document.querySelector('#setting-clear-tabs-on-quit-hint .hint-text');
         if (ctoqHint) ctoqHint.textContent = t('clearTabsOnQuitHint');
         const extendedSyntaxHint = document.querySelector('#setting-extended-syntax-hint .hint-text');

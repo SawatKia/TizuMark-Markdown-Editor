@@ -156,6 +156,11 @@
                 <span>重新加载</span>
                 <span class="shortcut">Ctrl+R</span>
               </div>
+              <div class="dropdown-item" id="btn-autosave-recover-menu">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+                <span>恢复自动保存</span>
+                <span class="shortcut"></span>
+              </div>
               <div class="dropdown-separator"></div>
               <div class="dropdown-item" id="btn-export-html">
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
@@ -230,6 +235,9 @@
           </div>
         </div>
         <div class="toolbar-right">
+          <button id="btn-autosave-recover" class="toolbar-btn" title="恢复自动保存">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+          </button>
           <button id="btn-reload" class="toolbar-btn" title="重新加载文件">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="23 4 23 10 17 10"/>
@@ -1128,6 +1136,14 @@
             </p>
           </div>
           <div class="settings-row">
+            <label>自动保存保留天数</label>
+            <input type="number" id="set-autosave-days" min="1" max="3650" step="1" value="30" class="settings-text-input" />
+            <p class="form-hint" id="setting-autosave-days-hint">
+              <svg class="hint-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+              <span class="hint-text">超过该天数的自动保存版本会被自动删除（默认 30 天）。</span>
+            </p>
+          </div>
+          <div class="settings-row">
             <label>显示托盘图标</label>
             <label class="toggle"><input type="checkbox" id="set-show-tray-icon" checked><span class="toggle-slider"></span></label>
             <p class="form-hint" id="setting-show-tray-icon-hint">
@@ -1276,6 +1292,24 @@
       <div class="dialog-footer">
         <button id="slash-order-reset" class="dialog-btn">恢复默认</button>
         <button id="slash-order-done" class="dialog-btn dialog-btn-primary">完成</button>
+      </div>
+      <div class="dialog-resize-handle" aria-hidden="true"></div>
+    </div>
+  </div>
+
+  <!-- 自动保存恢复对话框 -->
+  <div id="autosave-dialog" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="autosave-title">
+    <div class="dialog autosave-dialog">
+      <div class="dialog-header dialog-drag-handle">
+        <h2 id="autosave-title">恢复自动保存</h2>
+        <button class="dialog-close" id="autosave-close-x" aria-label="关闭">&times;</button>
+      </div>
+      <div class="dialog-content">
+        <p class="form-hint"><svg class="hint-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg><span class="hint-text" id="autosave-hint">编辑过程中会自动保存快照。选择一个版本，另存到新位置并打开。</span></p>
+        <div id="autosave-list" class="autosave-list"></div>
+      </div>
+      <div class="dialog-footer">
+        <button id="autosave-done" class="dialog-btn dialog-btn-primary">关闭</button>
       </div>
       <div class="dialog-resize-handle" aria-hidden="true"></div>
     </div>
@@ -1456,6 +1490,7 @@
 <script src="modules/notify.js"></script>
 <script src="modules/updater.js"></script>
 <script src="modules/format.js"></script>
+<script src="modules/autosave.js"></script>
 <script src="modules/context-menu.js"></script>
 <script src="modules/slash.js"></script>
 <script src="modules/empty-hint.js"></script>

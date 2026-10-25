@@ -117,6 +117,7 @@
   
         const tab = this.tabs[index];
         if (tab.isModified) {
+          await this.flushAutosave([tab]); // 丢弃前先留一份快照，误关可从「恢复自动保存」找回
           const result = await this.showSaveDialog(this.t('saveChanges'), `${tab.name} ${this.t('fileModified')}`);
           if (result === 'cancel') return;
           if (result === 'save') {
@@ -508,6 +509,7 @@
       async closeAllTabs() {
         const modified = this.tabs.filter(t => t.isModified);
         if (modified.length > 0) {
+          await this.flushAutosave(modified);
           const result = await this.showSaveDialog(
             this.t('saveChanges'),
             this.t('filesModifiedConfirm', { n: modified.length }),

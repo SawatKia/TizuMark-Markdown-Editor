@@ -8078,3 +8078,79 @@ body.custom-bg-active #preview {
   background-color: var(--custom-bg, var(--bg-primary)) !important;
   color: var(--custom-fg, var(--text-primary));
 }
+
+/* 自动保存恢复对话框 */
+#autosave-dialog .dialog {
+  width: 560px;
+  max-width: 92vw;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+}
+
+#autosave-dialog .dialog-content {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+}
+
+#autosave-dialog .dialog-content > .form-hint:first-child {
+  margin-top: 0;
+}
+
+.autosave-list {
+  overflow-y: auto;
+  flex: 1;
+  margin-top: 8px;
+}
+
+.autosave-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background-color: var(--bg-primary);
+}
+
+.autosave-row + .autosave-row {
+  margin-top: 4px;
+}
+
+.autosave-row:hover {
+  background-color: var(--bg-secondary);
+}
+
+.autosave-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.autosave-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.autosave-sub,
+.autosave-preview {
+  font-size: 0.9em;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.autosave-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.autosave-empty {
+  padding: 24px 0;
+  text-align: center;
+  opacity: 0.6;
+}
