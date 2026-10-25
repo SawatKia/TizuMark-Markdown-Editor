@@ -631,13 +631,22 @@ test('settings: 点 X 关闭等同取消，恢复打开前的设置', async () =
   } finally { cleanup(w); }
 });
 
-test('settings: 点击遮罩层不关闭设置框（只能 × 关闭）', async () => {
+test('settings: 点击遮罩层等价于 ×（放弃改动并关闭）；在弹框内按下、遮罩上抬起不关闭', async () => {
   const { w, ed } = await makeEditor();
   try {
     ed.showSettings();
     const overlay = w.document.getElementById('settings-dialog');
-    overlay.dispatchEvent(new w.Event('click'));
-    assert.ok(!overlay.classList.contains('hidden'), '点击遮罩不应关闭设置框');
+    const inner = overlay.querySelector('.dialog');
+    // 弹框内按下、遮罩上抬起（选字拖出弹框）：不关闭
+    inner.dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true }));
+    overlay.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    assert.ok(!overlay.classList.contains('hidden'), '弹框内按下不应触发遮罩关闭');
+    // 遮罩上按下并抬起：关闭
+    ed.settings.tabSize = 8;
+    overlay.dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true }));
+    overlay.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    assert.ok(overlay.classList.contains('hidden'), '点击遮罩应关闭设置框');
+    assert.strictEqual(ed.settings.tabSize, 4, '与 × 一致：按快照回滚未应用的改动');
   } finally { cleanup(w); }
 });
 

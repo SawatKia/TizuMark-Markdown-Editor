@@ -867,6 +867,28 @@
             window.initDialogDragResize(el, { minWidth: 360, minHeight: 260, onFirstInteract });
           }
         });
+        this.initDialogOutsideDismiss();
+      },
+      // 点击弹框外的遮罩关闭：按下与抬起都落在遮罩本身才算（在弹框内选中文字拖到外面松手不会误关）。
+      // 复用弹框自己的 × / 取消按钮，因此各弹框原有的关闭语义（设置回滚、Promise 弹框 resolve 取消）保持不变。
+      // 协议确认（EULA）与非模态的跨文件搜索不参与。
+      initDialogOutsideDismiss() {
+        if (this._dialogOutsideDismissBound) return;
+        this._dialogOutsideDismissBound = true;
+        const SKIP = new Set(['eula-dialog', 'cross-search-dialog']);
+        let downOn = null;
+        document.addEventListener('mousedown', (e) => {
+          const t = e.target;
+          downOn = (t && t.classList && t.classList.contains('dialog-overlay')) ? t : null;
+        });
+        document.addEventListener('click', (e) => {
+          const ov = e.target;
+          if (!downOn || ov !== downOn) return;
+          downOn = null;
+          if (SKIP.has(ov.id) || ov.classList.contains('hidden')) return;
+          const btn = ov.querySelector('.dialog-close') || ov.querySelector('[id$="-cancel"]');
+          if (btn) btn.click();
+        });
       },
       showShortcutsDialog() {
         // 每次打开重置为默认居中尺寸（拖动/缩放状态不记忆，符合预期）

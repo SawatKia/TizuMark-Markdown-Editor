@@ -238,7 +238,7 @@
             saveBtn.textContent = this.t('save');
           }
         });
-        // 注：设置框不支持点击遮罩层关闭，也去掉了「取消」按钮；只能通过「×」放弃改动关闭，
+        // 注：设置框没有「取消」按钮；「×」与点击遮罩（见 initDialogOutsideDismiss）等价，都按打开时快照放弃改动，
         // 或点「应用」/「保存」生效。× 与旧的「取消」行为一致（按打开时快照回滚）。
         document.getElementById('settings-reset').addEventListener('click', () => this.resetSettings());
   
