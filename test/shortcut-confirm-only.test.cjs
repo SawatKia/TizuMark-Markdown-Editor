@@ -34,7 +34,7 @@ function extractMethod(s, name) {
 }
 
 const methods = ['getDefaultShortcuts', 'loadShortcuts', 'loadShortcutScheme',
-  'handleShortcutRecording', 'findDuplicateShortcut', 'clearShortcut', 'resetShortcuts',
+  'handleShortcutRecording', '_shortcutKey', 'findDuplicateShortcut', 'clearShortcut', 'resetShortcuts',
   'showShortcutsDialog', 'saveShortcuts', '_normalizeShortcuts', '_normalizeShortcutEntry'];
 let methodSrc = methods.map(n => extractMethod(src, n)).join(',\n');
 // 包成对象字面量（方法简写），并附 _validConfigObject stub

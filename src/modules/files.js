@@ -1436,7 +1436,7 @@
       if (e.key === 'F2') { e.preventDefault(); this.fileTreeRename(); return true; }
       if (e.key === 'Delete') { e.preventDefault(); this.fileTreeDelete(); return true; }
       if (ctrl && !e.shiftKey && !e.altKey) {
-        const k = e.key.toLowerCase();
+        const k = this._shortcutKey(e);
         // 检查编辑器或预览区是否有文本选区——有选区时交给浏览器原生 copy/cut，
         // 不走文件树操作。预览区是 HTML 内容，window.getSelection() 检测其选区。
         const hasTextSelection = (this.cm && this.cm.somethingSelected())
@@ -1458,12 +1458,12 @@
           return true;
         }
       }
-      if (ctrl && e.altKey && !e.shiftKey && e.key.toLowerCase() === 'n') {
+      if (ctrl && e.altKey && !e.shiftKey && this._shortcutKey(e) === 'n') {
         e.preventDefault();
         if (this._fileTreeTargetDir()) this.fileTreeNewFile();
         return true;
       }
-      if (ctrl && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+      if (ctrl && e.shiftKey && !e.altKey && this._shortcutKey(e) === 'n') {
         e.preventDefault();
         if (this._fileTreeTargetDir()) this.fileTreeNewFolder();
         return true;

@@ -46,8 +46,9 @@ function mkEvent(over = {}) {
 }
 
 // 伪 this：globalShortcutLookup 由用例注入
+const _shortcutKey = extractMethod('_shortcutKey(e) {');
 function mkCtx(lookup = {}) {
-  return { globalShortcutLookup: lookup };
+  return { globalShortcutLookup: lookup, _shortcutKey };
 }
 
 // ---------- Alt 系 ----------

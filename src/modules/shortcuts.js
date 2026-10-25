@@ -531,6 +531,17 @@
         this.recordingAction = action;
         this.renderShortcutsList();
       },
+      // 快捷键主键归一化（小写）：e.key 是拉丁字母/数字时按它（兼容 Dvorak/AZERTY），
+      // 否则（泰语、俄语等非拉丁布局下 e.key 是本地字符）回退到物理键位 e.code，
+      // 使 Ctrl+Z/C/V 等不依赖当前输入语言。
+      _shortcutKey(e) {
+        const k = e.key || '';
+        if (/^[A-Za-z0-9]$/.test(k)) return k.toLowerCase();
+        const c = e.code || '';
+        if (/^Key[A-Z]$/.test(c)) return c.slice(3).toLowerCase();
+        if (/^Digit[0-9]$/.test(c)) return c.slice(5);
+        return k.toLowerCase();
+      },
       handleShortcutRecording(e) {
         if (!this.recordingAction) return false;
   
@@ -549,7 +560,8 @@
         if (e.ctrlKey || e.metaKey) parts.push('Ctrl');
         if (e.shiftKey) parts.push('Shift');
         if (e.altKey) parts.push('Alt');
-        parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
+        const sk = this._shortcutKey(e);
+        parts.push(sk.length === 1 ? sk.toUpperCase() : e.key);
   
         const keyStr = parts.join('+');
         const dup = this.findDuplicateShortcut(keyStr, this.recordingAction);
@@ -921,7 +933,7 @@
       // 文档导航键（Home/End/←/→）+ 浏览器编辑键（a/c/v/x/z/y）：仅 Ctrl/Meta 组合
       // 时处理，行为与重构前一致；裸按键或 Alt 组合不在此拦截（避免误吞打字/系统组合）。
       if (ctrl) {
-        const key = e.key.toLowerCase();
+        const key = this._shortcutKey(e);
 
         // 文档导航键（Home/End）：与 a/c/v/x 同逻辑，放行给 CodeMirror 处理。
         // 事件自然到达 CM，由 extraKeys 注册的 handler 接管（Ctrl+End 落末行末列、
