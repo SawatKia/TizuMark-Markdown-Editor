@@ -1315,6 +1315,14 @@
       <div class="dialog-content">
         <p class="form-hint"><svg class="hint-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg><span class="hint-text" id="autosave-hint">编辑过程中会自动保存快照。选择一个版本，另存到新位置并打开。</span></p>
         <div id="autosave-list" class="autosave-list"></div>
+        <div id="autosave-preview-pane" class="autosave-preview-pane hidden">
+          <div class="autosave-preview-bar">
+            <button id="autosave-preview-back" class="dialog-btn">返回列表</button>
+            <div id="autosave-preview-meta" class="autosave-preview-meta"></div>
+            <button id="autosave-preview-recover" class="dialog-btn dialog-btn-primary">恢复到…</button>
+          </div>
+          <pre id="autosave-preview-text" class="autosave-preview-text"></pre>
+        </div>
       </div>
       <div class="dialog-footer">
         <button id="autosave-done" class="dialog-btn dialog-btn-primary">关闭</button>

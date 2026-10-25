@@ -63,6 +63,12 @@
         });
         const closeX = document.getElementById('autosave-close-x');
         if (closeX) closeX.addEventListener('click', () => this.hideAutosaveDialog());
+        const pvBack = document.getElementById('autosave-preview-back');
+        if (pvBack) pvBack.addEventListener('click', () => this.closeAutosavePreview());
+        const pvRecover = document.getElementById('autosave-preview-recover');
+        if (pvRecover) pvRecover.addEventListener('click', () => {
+          if (this._autosavePreviewing) this.recoverAutosave(this._autosavePreviewing.info, this._autosavePreviewing.entry);
+        });
         const done = document.getElementById('autosave-done');
         if (done) done.addEventListener('click', () => this.hideAutosaveDialog());
         // 启动清理一次，之后长时间运行（托盘常驻）定期清理
@@ -164,6 +170,28 @@
       hideAutosaveDialog() {
         const dlg = document.getElementById('autosave-dialog');
         if (dlg) dlg.classList.add('hidden');
+        this.closeAutosavePreview();
+      },
+      // 预览某个版本的内容（只读纯文本），确认无误后再恢复
+      showAutosavePreview(entry, info) {
+        const pane = document.getElementById('autosave-preview-pane');
+        const list = document.getElementById('autosave-list');
+        if (!pane || !list) return;
+        this._autosavePreviewing = { entry, info };
+        document.getElementById('autosave-preview-text').textContent = info.content;
+        const lines = info.content ? info.content.split(/\r\n|\r|\n/).length : 0;
+        const when = new Date(entry.mtime || info.savedAt || Date.now()).toLocaleString();
+        document.getElementById('autosave-preview-meta').textContent =
+          `${info.name || this.t('untitled')} · ${when} · ` + this.t('autosavePreviewStats', { lines, chars: info.content.length });
+        list.classList.add('hidden');
+        pane.classList.remove('hidden');
+      },
+      closeAutosavePreview() {
+        this._autosavePreviewing = null;
+        const pane = document.getElementById('autosave-preview-pane');
+        const list = document.getElementById('autosave-list');
+        if (pane) pane.classList.add('hidden');
+        if (list) list.classList.remove('hidden');
       },
       async renderAutosaveList() {
         const listEl = document.getElementById('autosave-list');
@@ -215,12 +243,17 @@
         preview.textContent = info.content.slice(0, 120).replace(/\s+/g, ' ');
         meta.append(title, sub, preview);
 
+        meta.addEventListener('click', () => this.showAutosavePreview(entry, info));
         const actions = document.createElement('div');
         actions.className = 'autosave-actions';
+        const view = document.createElement('button');
+        view.className = 'dialog-btn';
+        view.textContent = this.t('autosavePreview');
+        view.addEventListener('click', () => this.showAutosavePreview(entry, info));
         const recover = document.createElement('button');
         recover.className = 'dialog-btn dialog-btn-primary';
         recover.textContent = this.t('autosaveRecover');
-        recover.addEventListener('click', () => this.recoverAutosave(info));
+        recover.addEventListener('click', () => this.recoverAutosave(info, entry));
         const del = document.createElement('button');
         del.className = 'dialog-btn';
         del.textContent = this.t('autosaveDelete');
@@ -230,12 +263,12 @@
           const listEl = document.getElementById('autosave-list');
           if (listEl && !listEl.firstChild) this.renderAutosaveList();
         });
-        actions.append(recover, del);
+        actions.append(view, recover, del);
         row.append(meta, actions);
         return row;
       },
       // 选择新位置保存恢复的内容，并在新标签中打开
-      async recoverAutosave(info) {
+      async recoverAutosave(info, entry) {
         try {
           const path = await dialogSave({
             defaultPath: recoveredDefaultPath(info),

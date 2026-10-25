@@ -166,6 +166,8 @@
         setText('autosave-title', t('autosaveRecoverTitle'));
         setText('autosave-hint', t('autosaveHint'));
         setText('autosave-done', t('autosaveClose'));
+        setText('autosave-preview-back', t('autosaveBack'));
+        setText('autosave-preview-recover', t('autosaveRecover'));
         const ctoqHint = document.querySelector('#setting-clear-tabs-on-quit-hint .hint-text');
         if (ctoqHint) ctoqHint.textContent = t('clearTabsOnQuitHint');
         const extendedSyntaxHint = document.querySelector('#setting-extended-syntax-hint .hint-text');

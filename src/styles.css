@@ -8154,3 +8154,35 @@ body.custom-bg-active #preview {
   text-align: center;
   opacity: 0.6;
 }
+
+/* 自动保存预览 */
+.autosave-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.autosave-preview-meta {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.autosave-preview-text {
+  margin: 0;
+  max-height: 46vh;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
+  border-radius: 6px;
+  font-family: var(--font-mono, Consolas, monospace);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+.autosave-meta { cursor: pointer; }
