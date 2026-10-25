@@ -1,0 +1,154 @@
+name: Sync upstream and release
+
+# 每天检查原仓库 master；有新提交就合并、测试、打包并发布到本 fork。
+# 合并冲突时不推送、不发布，改为开 issue 通知。
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: '版本升级级别（patch / minor / major）'
+        required: false
+        default: 'patch'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge upstream, test, build, release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout fork (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "tizumark-sync-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+      - name: Fetch upstream and check for new commits
+        id: fetch
+        shell: bash
+        run: |
+          git remote add upstream https://github.com/tizuio/TizuMark-Markdown-Editor.git
+          git fetch upstream master
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream (no conflict resolution)
+        id: merge
+        if: steps.fetch.outputs.changed == 'true'
+        shell: bash
+        run: |
+          if git merge --no-ff --no-edit upstream/master; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report merge conflict and stop
+        if: steps.fetch.outputs.changed == 'true' && steps.merge.outputs.clean == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "上游同步冲突：需要手动合并 upstream/master" \
+            --body "原仓库 master 有新提交，自动合并时产生冲突，本次未发布。
+
+          手动处理：
+          \`\`\`
+          git remote add upstream https://github.com/tizuio/TizuMark-Markdown-Editor.git
+          git fetch upstream master
+          git merge upstream/master   # 解决冲突后
+          \`\`\`
+          运行 \`npm test\` 与 \`npm run check\` 通过后再 push。
+
+          运行记录：$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Setup Node.js 22
+        if: steps.merge.outputs.clean == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain (stable)
+        if: steps.merge.outputs.clean == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        if: steps.merge.outputs.clean == 'true'
+        run: npm ci
+
+      - name: Guardrails and full test suite (gate)
+        if: steps.merge.outputs.clean == 'true'
+        run: |
+          npm run check
+          npm test
+
+      - name: Bump fork version
+        if: steps.merge.outputs.clean == 'true'
+        id: bump
+        shell: bash
+        env:
+          BUMP: ${{ github.event.inputs.bump || 'patch' }}
+        run: |
+          NEXT=$(node -e "
+            const [ma, mi, pa] = require('./package.json').version.split('.').map(Number);
+            const kind = process.env.BUMP;
+            const v = kind === 'major' ? [ma + 1, 0, 0]
+              : kind === 'minor' ? [ma, mi + 1, 0]
+              : [ma, mi, pa + 1];
+            console.log(v.join('.'));")
+          node scripts/bump-version.cjs "$NEXT"
+          node scripts/check-version.mjs
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Build Windows x64 installer and portable exe
+        if: steps.merge.outputs.clean == 'true'
+        run: |
+          npm run build:renderer
+          npm run build
+
+      - name: Commit, tag and push (only after a successful build)
+        if: steps.merge.outputs.clean == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          git add -A
+          git commit -m "chore: 同步上游并发布 v$VERSION
+
+          合并原仓库 master，并将版本号升至 $VERSION。
+
+          Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>"
+          git tag -a "v$VERSION" -m "TizuMark v$VERSION"
+          git push origin HEAD:master "v$VERSION"
+
+      - name: Publish GitHub Release with installers
+        if: steps.merge.outputs.clean == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          gh release create "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "TizuMark v$VERSION" \
+            --notes "自动同步原仓库 master 并构建的 Windows x64 版本（未签名，自动更新已关闭）。" \
+            "src-tauri/target/release/bundle/nsis/TizuMark_${VERSION}_x64-setup.exe" \
+            "src-tauri/target/release/TizuMark_${VERSION}_x64.exe"
