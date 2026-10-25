@@ -189,6 +189,8 @@
               cm.replaceSelection(' '.repeat(this.settings.tabSize), 'end');
             },
             'Shift-Tab': (cm) => cm.indentSelection('subtract'),
+            // 禁用 Insert 键的覆盖模式：CM5 默认 Insert=toggleOverwrite，误触后在行中输入会吞掉后面的字
+            'Insert': () => {},
           }
         });
   
@@ -327,6 +329,9 @@
           this.showZoomHint('preview');
         }, true);  // capture：先于预览内部可能的滚动监听拦截
   
+        // 兜底：无论经何种途径（键位/命令）打开覆盖模式，立即关回插入模式，输入不再吞后面的字
+        this.cm.on('overwriteToggle', (cmObj, on) => { if (on) cmObj.toggleOverwrite(false); });
+
         this.cm.on('change', (cmObj, c) => {
           this.activeTab.content = this.cm.getValue();
           this.updateTabDisplay();

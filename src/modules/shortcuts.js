@@ -734,6 +734,8 @@
             cm.replaceSelection(' '.repeat(this.settings.tabSize), 'end');
           },
           'Shift-Tab': (cm) => cm.indentSelection('subtract'),
+          // 禁用 Insert 键的覆盖模式（见 editor-core.js）
+          'Insert': () => {},
         });
   
         // 把 DOM 键名规范化为 CodeMirror 5 的 keyName（CM5 用 'Up'/'Down' 而非 'ArrowUp'，
