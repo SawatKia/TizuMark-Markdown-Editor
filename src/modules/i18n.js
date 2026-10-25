@@ -134,6 +134,9 @@
         setRowLabel('set-close-action', t('closeAction'));
         setRowLabel('set-clear-tabs-on-quit', t('clearTabsOnQuit'));
         setRowLabel('set-autosave-days', t('autosaveRetention'));
+        setRowLabel('set-show-dot-folders', t('showDotFolders'));
+        const sdfHint = document.querySelector('#setting-show-dot-folders-hint .hint-text');
+        if (sdfHint) sdfHint.textContent = t('showDotFoldersHint');
         setRowLabel('set-autosave-recovered-days', t('autosaveRecoveredRetention'));
         setRowLabel('set-mermaid-auto-style', t('mermaidAutoStyle'));
         const masHint = document.querySelector('#setting-mermaid-auto-style-hint .hint-text');

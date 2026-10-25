@@ -410,7 +410,7 @@ impl Deref for DirListing {
 }
 
 #[tauri::command]
-fn list_dir(path: String) -> Result<DirListing, String> {
+fn list_dir(path: String, include_dot_dirs: Option<bool>) -> Result<DirListing, String> {
     let p = std::path::Path::new(&path);
     let _ = safe_write_target(&path).map_err(|e| e)?; // 复用规范化以拒绝越界/关键目录
     let mut entries: Vec<DirEntryInfo> = Vec::new();
@@ -426,7 +426,8 @@ fn list_dir(path: String) -> Result<DirListing, String> {
         };
         let is_dir = meta.is_dir();
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
+        // 以 . 开头的条目默认隐藏；设置开启 include_dot_dirs 时仅放行目录（.git 等仍由 IGNORE_DIRS 过滤）
+        if name.starts_with('.') && !(is_dir && include_dot_dirs.unwrap_or(false)) {
             continue;
         }
         // 跳过重型/非笔记目录（不进树，避免撑爆）
@@ -1791,12 +1792,29 @@ mod tests {
         fs::write(base.join("a.md"), "m").unwrap();
         fs::write(base.join("c.png"), "p").unwrap();       // 非文档扩展不过滤
         fs::write(base.join(".hidden.md"), "h").unwrap();  // 点文件应被过滤
-        let res = list_dir(base.to_str().unwrap().to_string()).expect("list_dir 应成功");
+        let res = list_dir(base.to_str().unwrap().to_string(), None).expect("list_dir 应成功");
         // DirListing 是结构体（Deref 到 Vec<DirEntryInfo>），按 Rust 方法解析规则
         // .iter() / [index] 须显式走 .entries 字段（不能依赖 Deref coercion）。
         let names: Vec<&str> = res.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["zdir", "a.md", "b.txt", "c.png"], "目录排最前，文件按名排序，点文件被过滤");
         assert!(res.entries[0].is_dir && !res.entries[1].is_dir);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_list_dir_include_dot_dirs() {
+        let base = std::env::temp_dir().join("tizumark_listdir_dot_test");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join(".notes")).unwrap();
+        fs::create_dir_all(base.join(".git")).unwrap();
+        fs::write(base.join(".hidden.md"), "h").unwrap();
+        fs::write(base.join("a.md"), "m").unwrap();
+        let off = list_dir(base.to_str().unwrap().to_string(), Some(false)).unwrap();
+        let off_names: Vec<&str> = off.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(off_names, vec!["a.md"], "默认隐藏所有点开头条目");
+        let on = list_dir(base.to_str().unwrap().to_string(), Some(true)).unwrap();
+        let on_names: Vec<&str> = on.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(on_names, vec![".notes", "a.md"], "开启后放行点开头目录；点文件与 .git 仍过滤");
         let _ = fs::remove_dir_all(&base);
     }
 

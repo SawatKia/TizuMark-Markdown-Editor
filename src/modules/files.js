@@ -1086,7 +1086,9 @@
   
         let listing;
         try {
-          listing = await TauriApi.listDir({ path: dirPath });
+          // 设置「显示以 . 开头的文件夹」：交给后端放行点开头目录（点文件与 .git 等仍过滤）
+          this._treeDotFolders = this.settings.showDotFolders === true;
+          listing = await TauriApi.listDir({ path: dirPath, includeDotDirs: this._treeDotFolders });
         } catch (e) {
           return;
         }
