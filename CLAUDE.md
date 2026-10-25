@@ -1,3 +1,39 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+npm ci                                   # also runs `prepare`: builds renderer bundle + regenerates src/lib vendor dirs
+npm run dev                              # build:renderer + `tauri dev` (dev server = scripts/dev-server.mjs, serves src/ on :1420)
+npm run build                            # build:renderer + `tauri build` (RED LINE: only when the user explicitly asks)
+npm run build:renderer                   # esbuild: src/unified-renderer.js -> src/lib/unified-bundle.js (gitignored; required before tests)
+npm test                                 # full suite, each test file in its own Node process (user runs this, not you)
+node scripts/run-tests.cjs preview outline   # only test files whose name contains "preview" or "outline"
+node test/<name>.test.cjs                # single test file (node:test)
+npm run check                            # guardrails: check-globals, coupling-report, check-version, entry-scripts, tauri-api contract
+node scripts/wysiwyg-browser-check.mjs   # headless-browser WYSIWYG regression (playwright is installed globally)
+cd src-tauri && cargo check              # Rust backend (needs MSVC link.exe + Windows SDK, see docs/DEV_SETUP.md)
+```
+
+## Architecture
+
+Tauri v2 desktop shell + native CodeMirror 5 (not CM6) + plain JS. Details and ADRs are in `ARCHITECTURE.md` (partly stale: `src/modules/` has grown well beyond the files listed there; trust the directory).
+
+- **Classic `<script>` globals, not ESM.** `src/index.html` loads `src/app.js` (the large "god object") plus every `src/modules/*.js` as plain scripts. A new module file must be added to `index.html` (`test/entry-scripts.test.cjs` enforces this) and may export exactly one namespace global, which must be registered in `KNOWN_GLOBALS` in `scripts/check-globals.cjs`. Modules use the lazy dual-export pattern (`window.X` when no `module`, `module.exports` otherwise) so tests can `require` them.
+- **App decomposition is a Strangler migration** (ADR-3): logic moves out of `app.js` into `src/modules/` (pure/DI-friendly) and `src/controllers/` (e.g. `PreviewController`, wrapped in an IIFE, reaches app state via `this.app`), leaving thin delegates in `app.js`. No big-bang rewrites; run `render-generation` tests after touching preview orchestration.
+- **IPC has one boundary: `src/modules/tauri-api.js`.** No bare `invoke(` or `window.__TAURI__` elsewhere (the coupling report fails on it). It must stay a no-op wrapper: reject values pass through untouched, because `_mapReadFileError` `JSON.parse`s the raw Rust error to get its `kind`. Command names are single-quoted literals and must match `generate_handler!` in `src-tauri/src/lib.rs`.
+- **Preview rendering** has a single source of truth, `src/unified-renderer.js` (unified/remark/rehype with sanitize), bundled to `src/lib/unified-bundle.js`. XSS sanitizing lives there, not in Rust. `src/md2/` is a separate markdown parser/AST (grid tables etc.) with its own `md2-*` tests. Editor modes include a WYSIWYG view (`src/modules/wysiwyg.js`).
+- **Vendor libs** (`src/lib/{codemirror,katex,mermaid,highlight.js,...}`) are regenerated from `node_modules` by `scripts/ensure-vendor.mjs` and gitignored; do not edit them.
+- **Tests** (`test/*.test.cjs`, jsdom + real CM5) use `test/helpers/app-env.cjs`, which `eval`s `app.js` after `md-links.js`, `controllers/*`, `modules/*`. `buildEnv` must be awaited. jsdom objects have a different `Object.prototype`, so use field-level asserts rather than `deepStrictEqual`. Rendering/event tests must use the real bundle and real events.
+- **Version numbers** live in ~10 places; `npm run check` (`check-version.mjs`) verifies them against `package.json`.
+
+## Working rules from the maintainer (details in the Chinese sections below)
+
+- Run only the tests related to your change, never the full `npm test`. For WYSIWYG changes: `node test/view-mode-wysiwyg.test.cjs` and `node scripts/wysiwyg-browser-check.mjs`.
+- Build and push are red-line operations: never do them unless the user explicitly asks, and confirm first. Never delete a published Release.
+
 <!-- superpowers-zh:begin (do not edit between these markers) -->
 
 # Superpowers-ZH 中文增强版
