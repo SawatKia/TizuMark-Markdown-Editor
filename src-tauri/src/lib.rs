@@ -427,6 +427,13 @@ fn list_dir(path: String, include_dot_dirs: Option<bool>) -> Result<DirListing, 
             Ok(m) => m,
             Err(_) => continue,
         };
+        // 符号链接 / 目录联接：DirEntry::metadata 不跟随链接，会把「指向文件夹的链接」当成文件。
+        // 跟随到目标取真实类型、大小与时间；目标不可达（悬空链接）则保留链接自身的元数据。
+        let meta = if meta.file_type().is_symlink() {
+            std::fs::metadata(entry.path()).unwrap_or(meta)
+        } else {
+            meta
+        };
         let is_dir = meta.is_dir();
         let name = entry.file_name().to_string_lossy().to_string();
         // 以 . 开头的条目默认隐藏；设置开启 include_dot_dirs 时仅放行目录（.git 等仍由 IGNORE_DIRS 过滤）
@@ -1944,6 +1951,38 @@ mod tests {
         let on = list_dir(base.to_str().unwrap().to_string(), Some(true)).unwrap();
         let on_names: Vec<&str> = on.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(on_names, vec![".notes", "a.md"], "开启后放行点开头目录；点文件与 .git 仍过滤");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_list_dir_symlinked_folder_is_listed_as_folder() {
+        let base = std::env::temp_dir().join("tizumark_listdir_symlink_test");
+        let _ = fs::remove_dir_all(&base);
+        let target = base.join("real-folder");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("inner.md"), "x").unwrap();
+        let link = base.join("linked-folder");
+        // Windows 用目录联接（junction，无需管理员权限）；其余平台用符号链接
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .map_err(|e| e.to_string())
+            .and_then(|o| if o.status.success() { Ok(()) } else { Err("mklink failed".to_string()) });
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&target, &link).map_err(|e| e.to_string());
+        if made.is_err() {
+            // 无法创建链接（权限等）时跳过
+            let _ = fs::remove_dir_all(&base);
+            return;
+        }
+        let listing = list_dir(base.to_str().unwrap().to_string(), None).unwrap();
+        let linked = listing.entries.iter().find(|e| e.name == "linked-folder").expect("链接应出现在列表中");
+        assert!(linked.is_dir, "指向文件夹的链接应按文件夹处理");
+        let inner = list_dir(link.to_str().unwrap().to_string(), None).unwrap();
+        assert!(inner.entries.iter().any(|e| e.name == "inner.md"), "应能读取链接目录内容");
         let _ = fs::remove_dir_all(&base);
     }
 
