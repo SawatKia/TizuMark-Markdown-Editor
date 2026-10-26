@@ -16,3 +16,9 @@
 - 改动：遇到符号链接 / junction 时用 `std::fs::metadata` 跟随到目标取真实类型、大小、时间；悬空链接保留链接自身元数据。
 - 测试：新增 `test_list_dir_symlinked_folder_is_listed_as_folder`（Windows 用 `mklink /J` 目录联接，无需管理员；已确认关闭修复时该测试会失败）。
 - 未处理：`search_files` 仍不进入链接目录（避免循环）。
+
+## feat(files-tree): 文件列表新增按大小排序
+
+- 文件：`src/modules/files.js`、`src/modules/i18n-data.js`、`test/folder-sort.test.cjs`
+- 排序下拉在「名称 / 修改时间 / 创建时间」之外新增「大小」（三语文案）。文件按大小排；文件夹没有有意义的大小，文件夹之间按名称，且仍置顶。升/降序按钮对其同样生效。
+- 测试：`folder-sort` 新增 size 升/降序用例；`folder-sort file-tree dot-folders i18n` 6/6 通过。

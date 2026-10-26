@@ -418,6 +418,9 @@
             cmp = (a.mtime || 0) - (b.mtime || 0);
           } else if (key === 'created') {
             cmp = (a.created || a.mtime || 0) - (b.created || b.mtime || 0);
+          } else if (key === 'size' && !(a.is_dir && b.is_dir)) {
+            // 文件夹没有有意义的「大小」：两个文件夹之间退回按名称排
+            cmp = (a.size || 0) - (b.size || 0);
           } else {
             cmp = String(a.name).toLowerCase().localeCompare(String(b.name).toLowerCase());
           }
@@ -1436,6 +1439,7 @@
             { value: 'name', label: t('sortByName') },
             { value: 'time', label: t('sortByTime') },
             { value: 'created', label: t('sortByCreated') },
+            { value: 'size', label: t('sortBySize') },
           ]),
           onChange: (v) => {
             this.settings.fileSortKey = v;
