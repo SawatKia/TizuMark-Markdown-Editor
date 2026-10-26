@@ -87,7 +87,7 @@ test('相对路径（非 isBundled）本地失败：绝不回退 read_bundled_im
   const { calls, deps } = makeDeps({ activeTab: { filePath: 'D:/docs/note.md' }, fetchThrow: true });
   await processImages(preview, deps);
   assert.equal(calls.filter((c) => c.cmd === 'bundled').length, 0, '普通文档缺图严禁回退打包资源');
-  assert.match(preview.querySelector('img').getAttribute('alt'), /加载失败/, '缺图应标记加载失败');
+  assert.match(preview.querySelector('img').getAttribute('alt'), /加载失败|failed to load/i, '缺图应标记加载失败');
 });
 
 test('相对路径（isBundled）本地失败：回退 read_bundled_image_as_base64，filename 用原始相对路径', async () => {

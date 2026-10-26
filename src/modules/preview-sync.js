@@ -547,6 +547,7 @@
           tauri: TauriApi,
           getCachedImageURL: (dataUri) => this.getCachedImageURL(dataUri),
           getRenderGeneration: () => this._renderGeneration,
+          t: (k, p) => this.t(k, p),
         });
       },
       processFootnotes() {
