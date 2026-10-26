@@ -107,8 +107,7 @@ function fail(img, reason, tried, ctx) {
   const origAlt = img.alt || '';
   // 清除有效 src → 浏览器才会渲染 alt 文本（有效 data URI 下 alt 不显示）。
   img.removeAttribute('src');
-  img.style.border = '1px solid #d00';
-  img.style.backgroundColor = 'rgba(208,0,0,0.06)';
+  img.classList.add('img-load-failed');
   img.alt = (origAlt + ' ' + tr('imageLoadFailed')).trim();
   // 把失败原因直接显示在图片旁（tooltip 之外用户很难发现）：尝试读取的路径 + 底层错误
   const detail = [tried ? tr('imgErrPath') + ': ' + tried : '', reason ? tr('imgErrReason') + ': ' + reason : ''].filter(Boolean).join('\n');
@@ -119,13 +118,11 @@ function fail(img, reason, tried, ctx) {
   const note = doc.createElement('span');
   note.className = 'img-load-error';
   note.setAttribute('data-img-error', '1');
-  note.style.cssText = 'display:block;color:#d00;font-size:0.85em;white-space:pre-wrap;word-break:break-all;text-align:left;';
   note.appendChild(doc.createTextNode(tr('imgErrTitle') + '\n' + detail + '\n'));
   const btn = doc.createElement('button');
   btn.type = 'button';
   btn.className = 'img-load-error-copy';
   btn.textContent = tr('imgErrCopy');
-  btn.style.cssText = 'margin-top:4px;font-size:1em;cursor:pointer;';
   btn.addEventListener('click', (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
