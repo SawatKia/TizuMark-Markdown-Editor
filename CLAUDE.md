@@ -34,6 +34,14 @@ Tauri v2 desktop shell + native CodeMirror 5 (not CM6) + plain JS. Details and A
 - Run only the tests related to your change, never the full `npm test`. For WYSIWYG changes: `node test/view-mode-wysiwyg.test.cjs` and `node scripts/wysiwyg-browser-check.mjs`.
 - Build and push are red-line operations: never do them unless the user explicitly asks, and confirm first. Never delete a published Release.
 
+## Fork releases (SawatKia/TizuMark-Markdown-Editor)
+
+- This working copy releases from the **fork**, remote `fork`. `origin` is upstream (`tizuio`) and is read-only for us. Use the `fork-release` skill (`.claude/skills/fork-release/SKILL.md`) for every fork release, not the upstream `tizu-release` flow.
+- Versions follow SemVer. Bump with `node scripts/bump-version.cjs <x.y.z>`, then check with `node scripts/check-version.mjs`.
+- Install text in release notes lives in `docs/release-install-notes.md`. It must say that `.exe` setup upgrades in place, `.msi` installs need an uninstall first, and the portable build shares data with the installed one. Keep it in sync with the skill and the sync workflow.
+- Builds are unsigned and auto-update is off. Upstream's updater key and `CLAUDE.md`'s signing section below do not apply to fork releases. Do not use them.
+- Automated sync: `.github/workflows/sync-upstream.yml`. Decisions and their reasons are in `decisions.md`.
+
 <!-- superpowers-zh:begin (do not edit between these markers) -->
 
 # Superpowers-ZH 中文增强版

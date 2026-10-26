@@ -146,9 +146,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.bump.outputs.version }}
         run: |
+          {
+            echo "Automated Windows x64 build of TizuMark v$VERSION (fork). Unsigned; in-app auto-update is disabled."
+            echo
+            cat docs/release-install-notes.md
+          } > "$RUNNER_TEMP/notes.md"
           gh release create "v$VERSION" \
             --repo "$GITHUB_REPOSITORY" \
             --title "TizuMark v$VERSION" \
-            --notes "自动同步原仓库 master 并构建的 Windows x64 版本（未签名，自动更新已关闭）。" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
             "src-tauri/target/release/bundle/nsis/TizuMark_${VERSION}_x64-setup.exe" \
             "src-tauri/target/release/TizuMark_${VERSION}_x64.exe"
