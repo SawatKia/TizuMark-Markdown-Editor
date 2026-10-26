@@ -383,8 +383,9 @@ const IGNORE_DIRS: &[&str] = &[
     "build", "out", "bin", "obj",
 ];
 
-// 单目录条目上限：超过则截断并置 truncated，防止单文件夹上万文件把 DOM/渲染卡死。
-const MAX_DIR_ENTRIES: usize = 3000;
+// 单目录「文件」上限：超过则跳过多余文件并置 truncated，防止单文件夹上万文件把 DOM/渲染卡死。
+// 子文件夹不计入上限：若按读取顺序截断，排在后面的文件夹会整体消失。
+const MAX_DIR_FILES: usize = 3000;
 
 #[derive(serde::Serialize, Clone)]
 struct DirEntryInfo {
@@ -414,6 +415,8 @@ fn list_dir(path: String, include_dot_dirs: Option<bool>) -> Result<DirListing, 
     let p = std::path::Path::new(&path);
     let _ = safe_write_target(&path).map_err(|e| e)?; // 复用规范化以拒绝越界/关键目录
     let mut entries: Vec<DirEntryInfo> = Vec::new();
+    let mut file_count = 0usize;
+    let mut truncated = false;
     let read = std::fs::read_dir(&p).map_err(|e| e.to_string())?;
     for entry in read {
         let entry = match entry {
@@ -448,6 +451,13 @@ fn list_dir(path: String, include_dot_dirs: Option<bool>) -> Result<DirListing, 
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         let size = meta.len();
+        if !is_dir {
+            if file_count >= MAX_DIR_FILES {
+                truncated = true;
+                continue;
+            }
+            file_count += 1;
+        }
         entries.push(DirEntryInfo {
             name,
             path: entry.path().to_string_lossy().to_string(),
@@ -456,11 +466,7 @@ fn list_dir(path: String, include_dot_dirs: Option<bool>) -> Result<DirListing, 
             mtime,
             size,
         });
-        if entries.len() >= MAX_DIR_ENTRIES {
-            break;
-        }
     }
-    let truncated = entries.len() >= MAX_DIR_ENTRIES;
     entries.sort_by(|a, b| {
         if a.is_dir != b.is_dir {
             return if a.is_dir {
@@ -1938,6 +1944,25 @@ mod tests {
         let on = list_dir(base.to_str().unwrap().to_string(), Some(true)).unwrap();
         let on_names: Vec<&str> = on.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(on_names, vec![".notes", "a.md"], "开启后放行点开头目录；点文件与 .git 仍过滤");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_list_dir_keeps_all_folders_when_files_exceed_cap() {
+        let base = std::env::temp_dir().join("tizumark_listdir_cap_test");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        for i in 0..(MAX_DIR_FILES + 5) {
+            fs::write(base.join(format!("f{i}.md")), "x").unwrap();
+        }
+        fs::create_dir_all(base.join("zz-last-folder")).unwrap();
+        let listing = list_dir(base.to_str().unwrap().to_string(), None).unwrap();
+        assert!(listing.truncated, "超过文件上限应置 truncated");
+        assert_eq!(listing.entries.iter().filter(|e| !e.is_dir).count(), MAX_DIR_FILES);
+        assert!(
+            listing.entries.iter().any(|e| e.is_dir && e.name == "zz-last-folder"),
+            "文件数超过上限时，子文件夹不能被截掉"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
