@@ -26,12 +26,81 @@ function mimeOf(s) {
   return 'image/png';
 }
 
-function fail(img) {
+// 可直接粘贴给 AI 的诊断提示词：带上文档路径、图片原始写法、实际尝试的路径与底层错误
+function buildErrorPrompt(ctx, reason, tried, alt) {
+  const c = ctx || {};
+  return [
+    'I am using the TizuMark Markdown editor (Tauri desktop app). An image in my document does not render in the preview. Please help me fix it.',
+    '',
+    '- Markdown file: ' + (c.docPath || '(unsaved document, no file path)'),
+    '- Image src as written in the document: ' + (c.src || '(empty)'),
+    '- Image alt: ' + (alt || '(empty)'),
+    '- Path the app actually tried to read: ' + (tried || '(none)'),
+    '- Error: ' + (reason || '(none)'),
+    '',
+    'Rules the app uses: relative paths resolve against the .md file\'s folder; absolute paths (D:/... or /...) and file:// are read from disk; http(s)/data/blob are loaded as-is; an unsaved document cannot resolve relative paths.',
+    'Tell me the most likely cause and the exact change to make (fix the path, move the file, or save the document first).',
+  ].join('\n');
+}
+
+function copyText(doc, text) {
+  const win = doc.defaultView;
+  if (win && win.navigator && win.navigator.clipboard && win.navigator.clipboard.writeText) {
+    return win.navigator.clipboard.writeText(text);
+  }
+  // 兜底：隐藏 textarea + execCommand
+  return new Promise((resolve, reject) => {
+    const ta = doc.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;';
+    doc.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = doc.execCommand('copy'); } catch (e) { /* ignore */ }
+    doc.body.removeChild(ta);
+    ok ? resolve() : reject(new Error('copy failed'));
+  });
+}
+
+function fail(img, reason, tried, ctx) {
+  const origAlt = img.alt || '';
   // 清除有效 src → 浏览器才会渲染 alt 文本（有效 data URI 下 alt 不显示）。
   img.removeAttribute('src');
   img.style.border = '1px solid #d00';
   img.style.backgroundColor = 'rgba(208,0,0,0.06)';
-  img.alt = (img.alt || '') + ' [加载失败]';
+  img.alt = origAlt + ' [加载失败]';
+  // 把失败原因直接显示在图片旁（tooltip 之外用户很难发现）：尝试读取的路径 + 底层错误
+  const detail = [tried ? '路径: ' + tried : '', reason ? '原因: ' + reason : ''].filter(Boolean).join('\n');
+  if (!detail) return;
+  img.title = detail;
+  const doc = img.ownerDocument;
+  if (!doc || !img.parentNode) return;
+  const note = doc.createElement('span');
+  note.className = 'img-load-error';
+  note.setAttribute('data-img-error', '1');
+  note.style.cssText = 'display:block;color:#d00;font-size:0.85em;white-space:pre-wrap;word-break:break-all;text-align:left;';
+  note.appendChild(doc.createTextNode('图片未显示\n' + detail + '\n'));
+  const btn = doc.createElement('button');
+  btn.type = 'button';
+  btn.className = 'img-load-error-copy';
+  btn.textContent = '复制错误信息（可直接发给 AI）';
+  btn.style.cssText = 'margin-top:4px;font-size:1em;cursor:pointer;';
+  btn.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    copyText(doc, buildErrorPrompt(ctx, reason, tried, origAlt)).then(
+      () => { btn.textContent = '已复制 ✓'; },
+      () => { btn.textContent = '复制失败，请手动选中文字复制'; }
+    );
+  });
+  note.appendChild(btn);
+  img.parentNode.insertBefore(note, img.nextSibling);
+}
+
+function errText(e) {
+  if (e == null) return '未知错误';
+  if (typeof e === 'string') return e;
+  return e.message || e.error || String(e);
 }
 
 // 还原 unified 渲染器对非 ASCII 路径做的 percent-encode（如 图片/截图.png → %E5%9B%BE...）。
@@ -114,7 +183,7 @@ async function processImages(preview, deps) {
         img.src = getCachedImageURL(dataUri);
       } catch (e) {
         console.warn('[preview] Failed to load image:', rawSrc, e);
-        fail(img);
+        fail(img, errText(e), rawSrc, { src, docPath: filePath });
       }
       return;
     }
@@ -147,7 +216,7 @@ async function processImages(preview, deps) {
           } catch (e2) { /* 落到统一失败处理 */ }
         }
         console.warn('[preview] Failed to load image:', rawSrc, e);
-        fail(img);
+        fail(img, errText(e), absPath, { src, docPath: filePath });
       }
       return;
     }
@@ -168,14 +237,14 @@ async function processImages(preview, deps) {
     // 最后兜底：尝试页面相对 fetch（通常 404，仅作最后努力）
     try {
       const resp = await fetch(rawSrc);
-      if (!resp.ok) { fail(img); return; }
+      if (!resp.ok) { fail(img, '相对路径无法解析：当前文档尚未保存到磁盘（HTTP ' + resp.status + '）。请先保存文档，或改用绝对路径', rawSrc, { src, docPath: filePath }); return; }
       const blob = await resp.blob();
       // 代际检查 #7（校验）
       if (gen !== getRenderGeneration()) return;
       img.src = URL.createObjectURL(blob);
     } catch (e) {
       console.warn('[preview] Failed to load image:', rawSrc, e);
-      fail(img);
+      fail(img, '相对路径无法解析：当前文档尚未保存到磁盘（' + errText(e) + '）', rawSrc, { src, docPath: filePath });
     }
   });
   await Promise.allSettled(promises);
@@ -188,5 +257,5 @@ if (typeof window !== 'undefined' && typeof module === 'undefined') {
 }
 // Node（测试 / 构建）：CommonJS 导出
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { processImages, mimeOf, fail, TRANSPARENT_PIXEL };
+  module.exports = { processImages, mimeOf, fail, buildErrorPrompt, TRANSPARENT_PIXEL };
 }
