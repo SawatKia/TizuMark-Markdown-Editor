@@ -1710,6 +1710,7 @@
           tauri: (typeof TauriApi !== 'undefined' ? TauriApi : undefined),
           getCachedImageURL: (u) => (this.getCachedImageURL ? this.getCachedImageURL(u) : u),
           getRenderGeneration: () => (this._wysiwygNodeGen ? this._wysiwygNodeGen.get(node) || 0 : 0),
+          t: (k, p) => this.t(k, p),
         }).then(() => { if (settled()) this._wysiwygRefreshAfterMaskChange(); })
           .catch((e) => console.warn('[wysiwyg] Images error:', e));
       }

@@ -26,21 +26,40 @@ function mimeOf(s) {
   return 'image/png';
 }
 
-// 可直接粘贴给 AI 的诊断提示词：带上文档路径、图片原始写法、实际尝试的路径与底层错误
+// 可直接粘贴给 AI 的诊断提示词：文档路径、图片原始写法与 HTML、逐步尝试轨迹（trace）、
+// 底层错误与堆栈、运行环境。提示词固定英文，不随界面语言变化。
 function buildErrorPrompt(ctx, reason, tried, alt) {
   const c = ctx || {};
-  return [
+  const err = c.err;
+  const stack = err && typeof err === 'object' && err.stack ? String(err.stack) : '';
+  const trace = (c.trace && c.trace.length) ? c.trace.map((l, i) => (i + 1) + '. ' + l).join('\n') : '(no attempts recorded)';
+  const lines = [
     'I am using the TizuMark Markdown editor (Tauri desktop app). An image in my document does not render in the preview. Please help me fix it.',
     '',
+    '## Context',
     '- Markdown file: ' + (c.docPath || '(unsaved document, no file path)'),
+    '- Bundled document (built-in guide/demo): ' + (c.isBundled ? 'yes' : 'no'),
     '- Image src as written in the document: ' + (c.src || '(empty)'),
     '- Image alt: ' + (alt || '(empty)'),
+    '- Image HTML: ' + (c.html || '(unavailable)'),
     '- Path the app actually tried to read: ' + (tried || '(none)'),
-    '- Error: ' + (reason || '(none)'),
     '',
-    'Rules the app uses: relative paths resolve against the .md file\'s folder; absolute paths (D:/... or /...) and file:// are read from disk; http(s)/data/blob are loaded as-is; an unsaved document cannot resolve relative paths.',
-    'Tell me the most likely cause and the exact change to make (fix the path, move the file, or save the document first).',
-  ].join('\n');
+    '## Error message',
+    reason || '(none)',
+    '',
+    '## Trace (what the app tried, in order)',
+    trace,
+  ];
+  if (stack) lines.push('', '## Stack trace', stack);
+  if (c.env) lines.push('', '## Environment', c.env);
+  lines.push(
+    '',
+    '## App rules',
+    'Relative paths resolve against the folder of the .md file; absolute paths (D:/... or /...) and file:// are read from disk via the Rust command fetch_image_as_base64; http(s)/data/blob are loaded as-is; an unsaved document cannot resolve relative paths; built-in documents also fall back to read_bundled_image_as_base64.',
+    '',
+    'Tell me the most likely cause and the exact change to make (fix the path, move the file, or save the document first).'
+  );
+  return lines.join('\n');
 }
 
 function copyText(doc, text) {
@@ -62,15 +81,37 @@ function copyText(doc, text) {
   });
 }
 
+// 文案走注入的 i18n（deps.t）；未注入时（单测 / 纯函数调用）退回英文默认值
+const DEFAULT_TEXT = {
+  imageLoadFailed: '[Image failed to load]',
+  imgErrTitle: 'Image not displayed',
+  imgErrPath: 'Path',
+  imgErrReason: 'Reason',
+  imgErrUnsaved: 'Cannot resolve the relative path: this document has not been saved to disk yet ({detail}). Save the document first, or use an absolute path',
+  imgErrCopy: 'Copy error info (ready to send to an AI)',
+  imgErrCopied: 'Copied ✓',
+  imgErrCopyFailed: 'Copy failed, please select the text and copy it manually',
+};
+
+function makeT(t) {
+  return (key, params) => {
+    if (typeof t === 'function') return t(key, params);
+    let text = DEFAULT_TEXT[key] || key;
+    Object.keys(params || {}).forEach((k) => { text = text.replace('{' + k + '}', params[k]); });
+    return text;
+  };
+}
+
 function fail(img, reason, tried, ctx) {
+  const tr = makeT(ctx && ctx.t);
   const origAlt = img.alt || '';
   // 清除有效 src → 浏览器才会渲染 alt 文本（有效 data URI 下 alt 不显示）。
   img.removeAttribute('src');
   img.style.border = '1px solid #d00';
   img.style.backgroundColor = 'rgba(208,0,0,0.06)';
-  img.alt = origAlt + ' [加载失败]';
+  img.alt = (origAlt + ' ' + tr('imageLoadFailed')).trim();
   // 把失败原因直接显示在图片旁（tooltip 之外用户很难发现）：尝试读取的路径 + 底层错误
-  const detail = [tried ? '路径: ' + tried : '', reason ? '原因: ' + reason : ''].filter(Boolean).join('\n');
+  const detail = [tried ? tr('imgErrPath') + ': ' + tried : '', reason ? tr('imgErrReason') + ': ' + reason : ''].filter(Boolean).join('\n');
   if (!detail) return;
   img.title = detail;
   const doc = img.ownerDocument;
@@ -79,22 +120,28 @@ function fail(img, reason, tried, ctx) {
   note.className = 'img-load-error';
   note.setAttribute('data-img-error', '1');
   note.style.cssText = 'display:block;color:#d00;font-size:0.85em;white-space:pre-wrap;word-break:break-all;text-align:left;';
-  note.appendChild(doc.createTextNode('图片未显示\n' + detail + '\n'));
+  note.appendChild(doc.createTextNode(tr('imgErrTitle') + '\n' + detail + '\n'));
   const btn = doc.createElement('button');
   btn.type = 'button';
   btn.className = 'img-load-error-copy';
-  btn.textContent = '复制错误信息（可直接发给 AI）';
+  btn.textContent = tr('imgErrCopy');
   btn.style.cssText = 'margin-top:4px;font-size:1em;cursor:pointer;';
   btn.addEventListener('click', (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
     copyText(doc, buildErrorPrompt(ctx, reason, tried, origAlt)).then(
-      () => { btn.textContent = '已复制 ✓'; },
-      () => { btn.textContent = '复制失败，请手动选中文字复制'; }
+      () => { btn.textContent = tr('imgErrCopied'); },
+      () => { btn.textContent = tr('imgErrCopyFailed'); }
     );
   });
   note.appendChild(btn);
   img.parentNode.insertBefore(note, img.nextSibling);
+}
+
+function describeEnv(img) {
+  const win = img.ownerDocument && img.ownerDocument.defaultView;
+  const nav = win && win.navigator;
+  return nav && nav.userAgent ? 'User agent: ' + nav.userAgent : '';
 }
 
 function errText(e) {
@@ -131,6 +178,7 @@ async function processImages(preview, deps) {
     getCachedImageURL,
     getRenderGeneration,
   } = deps;
+  const tr = makeT(deps.t);
 
   // 代际检查 #1（捕获）+ #2（校验）：进入即快照，若此刻已过期直接返回。
   const gen = getRenderGeneration();
@@ -160,6 +208,15 @@ async function processImages(preview, deps) {
   const promises = Array.from(images).map(async (img) => {
     let src = img.getAttribute('src');
     if (!src) return;
+    const ctx = {
+      src,
+      docPath: filePath,
+      t: deps.t,
+      isBundled: !!(activeTab && activeTab.isBundled),
+      html: (img.outerHTML || '').slice(0, 500),
+      trace: [],
+      env: describeEnv(img),
+    };
     // 已可显示的内联 / 远程资源直接跳过
     if (SKIP_PREFIXES.some((p) => src.startsWith(p))) return;
 
@@ -177,13 +234,16 @@ async function processImages(preview, deps) {
     // 绝对路径（Unix /... 或 Windows D:/...）：直接走 Rust 读磁盘
     if (rawSrc.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(rawSrc)) {
       try {
+        ctx.trace.push('absolute path -> fetch_image_as_base64(' + rawSrc + ')');
         const dataUri = await loadBase64(rawSrc, mimeOf(rawSrc));
         // 代际检查 #4（校验）
         if (gen !== getRenderGeneration()) return;
         img.src = getCachedImageURL(dataUri);
       } catch (e) {
         console.warn('[preview] Failed to load image:', rawSrc, e);
-        fail(img, errText(e), rawSrc, { src, docPath: filePath });
+        ctx.trace.push('FAILED: ' + errText(e));
+        ctx.err = e;
+        fail(img, errText(e), rawSrc, ctx);
       }
       return;
     }
@@ -194,6 +254,7 @@ async function processImages(preview, deps) {
       // 用绝对路径 key（dir/rawSrc）缓存，避免 absPath 重复 IO
       const cacheKey = absPath;
       try {
+        ctx.trace.push('relative path "' + rawSrc + '" joined with the document folder "' + dir + '" -> fetch_image_as_base64(' + absPath + ')');
         const base64 = await tauri.fetchImageAsBase64({ url: absPath });
         // 代际检查 #5（校验）
         if (gen !== getRenderGeneration()) return;
@@ -204,8 +265,11 @@ async function processImages(preview, deps) {
         // 仅打包资源 tab（使用说明/demo）回退到资源定位命令：dev 模式从项目根、
         // prod 模式从资源目录读。普通本地文档不回退——避免本地缺图时误加载
         // 打包资源里恰好同名的文件（如用户自己的 assets/icon.png）。
+        ctx.trace.push('FAILED: ' + errText(e));
+        ctx.err = e;
         if (activeTab && activeTab.isBundled) {
           try {
+            ctx.trace.push('bundled document -> fallback read_bundled_image_as_base64(' + rawSrc + ')');
             const base64 = await tauri.readBundledImageAsBase64({ filename: rawSrc });
             // 代际检查 #6（校验）
             if (gen !== getRenderGeneration()) return;
@@ -213,18 +277,20 @@ async function processImages(preview, deps) {
             imageCache.set(cacheKey, dataUri);
             img.src = getCachedImageURL(dataUri);
             return;
-          } catch (e2) { /* 落到统一失败处理 */ }
+          } catch (e2) { ctx.trace.push('FAILED: ' + errText(e2)); /* 落到统一失败处理 */ }
         }
         console.warn('[preview] Failed to load image:', rawSrc, e);
-        fail(img, errText(e), absPath, { src, docPath: filePath });
+        fail(img, errText(e), absPath, ctx);
       }
       return;
     }
     // 打包文档（使用说明 / demo，activeTab.isBundled=true）：相对资源由 _openBundledFile
     // 记录真实资源路径。优先走打包资源定位命令 read_bundled_image_as_base64（按 dev 项目根 /
     // prod 资源目录解析），避免页面相对 fetch（404 噪音且图片出不来）。
+    ctx.trace.push('no file path (unsaved document), relative path "' + rawSrc + '" cannot be joined with a folder');
     if (activeTab && activeTab.isBundled) {
       try {
+        ctx.trace.push('bundled document -> read_bundled_image_as_base64(' + rawSrc + ')');
         const base64 = await tauri.readBundledImageAsBase64({ filename: rawSrc });
         // 代际检查 #6b（打包回退校验）
         if (gen !== getRenderGeneration()) return;
@@ -232,19 +298,22 @@ async function processImages(preview, deps) {
         imageCache.set(rawSrc, dataUri);
         img.src = getCachedImageURL(dataUri);
         return;
-      } catch (e2) { /* 落到下面的兜底 fetch */ }
+      } catch (e2) { ctx.trace.push('FAILED: ' + errText(e2)); /* 落到下面的兜底 fetch */ }
     }
     // 最后兜底：尝试页面相对 fetch（通常 404，仅作最后努力）
     try {
+      ctx.trace.push('last resort -> page-relative fetch(' + rawSrc + ')');
       const resp = await fetch(rawSrc);
-      if (!resp.ok) { fail(img, '相对路径无法解析：当前文档尚未保存到磁盘（HTTP ' + resp.status + '）。请先保存文档，或改用绝对路径', rawSrc, { src, docPath: filePath }); return; }
+      if (!resp.ok) { ctx.trace.push('FAILED: HTTP ' + resp.status); fail(img, tr('imgErrUnsaved', { detail: 'HTTP ' + resp.status }), rawSrc, ctx); return; }
       const blob = await resp.blob();
       // 代际检查 #7（校验）
       if (gen !== getRenderGeneration()) return;
       img.src = URL.createObjectURL(blob);
     } catch (e) {
       console.warn('[preview] Failed to load image:', rawSrc, e);
-      fail(img, '相对路径无法解析：当前文档尚未保存到磁盘（' + errText(e) + '）', rawSrc, { src, docPath: filePath });
+      ctx.trace.push('FAILED: ' + errText(e));
+      ctx.err = e;
+      fail(img, tr('imgErrUnsaved', { detail: errText(e) }), rawSrc, ctx);
     }
   });
   await Promise.allSettled(promises);

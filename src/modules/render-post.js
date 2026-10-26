@@ -117,6 +117,7 @@
           tauri: deps.tauri,
           getCachedImageURL: optFn(deps.getCachedImageURL, (u) => u),
           getRenderGeneration: optFn(deps.getRenderGeneration, () => 0),
+          t: deps.t,
         });
       } catch (e) {
         return Promise.reject(e);

@@ -41,5 +41,61 @@ test('错误说明带「复制」按钮，复制内容是带上下文、可直�
     assert.ok(copied.includes(part), '提示词应含 ' + part + ' | ' + copied);
   }
   assert.ok(!copied.includes('[加载失败]'), 'alt 应为原始值');
+  assert.strictEqual(btn.textContent, 'Copied ✓');
+});
+
+test('文案走注入的 t()；复制给 AI 的提示词始终是英文', async () => {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<div id="p"><img src="a.png" alt="x"></div>');
+  let copied = '';
+  Object.defineProperty(dom.window.navigator, 'clipboard', { value: { writeText: async (t) => { copied = t; } } });
+  const preview = dom.window.document.getElementById('p');
+  const zh = { imgErrTitle: '图片未显示', imgErrPath: '路径', imgErrReason: '原因', imgErrCopy: '复制错误信息', imgErrCopied: '已复制 ✓', imageLoadFailed: '[图片加载失败]' };
+  await processImages(preview, {
+    activeTab: { filePath: 'D:/n/d.md' },
+    imageCache: new Map(),
+    tauri: { fetchImageAsBase64: async () => { throw 'boom'; } },
+    getCachedImageURL: (u) => u,
+    getRenderGeneration: () => 1,
+    t: (k) => zh[k] || k,
+  });
+  const note = preview.querySelector('.img-load-error');
+  assert.ok(note.textContent.includes('图片未显示') && note.textContent.includes('路径: ') && note.textContent.includes('原因: boom'), note.textContent);
+  const btn = preview.querySelector('.img-load-error-copy');
+  assert.strictEqual(btn.textContent, '复制错误信息');
+  btn.click();
+  await new Promise((r) => setTimeout(r, 10));
   assert.strictEqual(btn.textContent, '已复制 ✓');
+  assert.ok(copied.startsWith('I am using the TizuMark Markdown editor'), copied);
+  assert.ok(!/[\u4e00-\u9fff]/.test(copied.replace('D:/n/d.md', '')), '提示词不应含中文: ' + copied);
+});
+
+test('未注入 t 时退回英文默认文案', async () => {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<div id="p"><img src="a.png"></div>');
+  const preview = dom.window.document.getElementById('p');
+  await processImages(preview, {
+    activeTab: null, imageCache: new Map(), tauri: {}, getCachedImageURL: (u) => u, getRenderGeneration: () => 1,
+  });
+  const txt = preview.querySelector('.img-load-error').textContent; assert.ok(txt.startsWith('Image not displayed'), txt);
+});
+
+test('复制的提示词包含错误信息、逐步 trace、堆栈与图片 HTML', async () => {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<div id="p"><img src="figures/a.png" alt="图"></div>');
+  let copied = '';
+  Object.defineProperty(dom.window.navigator, 'clipboard', { value: { writeText: async (t) => { copied = t; } } });
+  const preview = dom.window.document.getElementById('p');
+  await processImages(preview, {
+    activeTab: { filePath: 'D:/n/d.md' },
+    imageCache: new Map(),
+    tauri: { fetchImageAsBase64: async () => { throw new Error('os error 3'); } },
+    getCachedImageURL: (u) => u,
+    getRenderGeneration: () => 1,
+  });
+  preview.querySelector('.img-load-error-copy').click();
+  await new Promise((r) => setTimeout(r, 10));
+  for (const part of ['## Error message', 'os error 3', '## Trace', 'fetch_image_as_base64(D:/n/figures/a.png)', 'FAILED: os error 3', '## Stack trace', 'at ', '<img src="figures/a.png"', '## Environment']) {
+    assert.ok(copied.includes(part), '应含 ' + part + ' | ' + copied);
+  }
 });
