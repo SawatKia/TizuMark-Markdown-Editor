@@ -2398,6 +2398,10 @@ body.is-resizing .side-btn {
 }
 
 .preview-content img { max-width: 100%; height: auto; border-radius: 4px; cursor: pointer; }
+/* <figure>/<figcaption>：去掉浏览器默认 40px 左右缩进，图居中，图注小号次要色 */
+.preview-content figure { margin: 1em 0; text-align: center; }
+.preview-content figure > img { display: block; margin: 0 auto; }
+.preview-content figcaption { margin-top: 0.5em; font-size: 0.9em; opacity: 0.75; text-align: left; }
 .mermaid-container svg { cursor: pointer; }
 
 /* Image Lightbox */
