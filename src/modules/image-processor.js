@@ -160,6 +160,9 @@ function safeDecodeURI(s) {
 }
 
 // 已可显示的内联 / 远程资源，直接跳过（与原 app.js 一致）
+// 相对路径在文档目录找不到时，向上回退查找的祖先目录层数
+const PARENT_LOOKUP_LEVELS = 3;
+
 const SKIP_PREFIXES = ['data:', 'http://', 'https://', 'blob:'];
 
 // 1×1 透明像素：在异步读取磁盘图片之前，先同步把 img.src 替换为此占位，
@@ -264,6 +267,28 @@ async function processImages(preview, deps) {
         // 打包资源里恰好同名的文件（如用户自己的 assets/icon.png）。
         ctx.trace.push('FAILED: ' + errText(e));
         ctx.err = e;
+        // 文档所在目录找不到时，向上逐级（最多 PARENT_LOOKUP_LEVELS 层）在祖先目录找同一相对路径：
+        // 兼容「章节 md 在 manuscript/，图片在书籍根 figures/」这类按项目根书写的路径。
+        // 仅对不含 ../ 的普通相对路径生效；每一次尝试都记入 trace。
+        if (!rawSrc.startsWith('..') && !(activeTab && activeTab.isBundled)) {
+          let up = dir;
+          for (let i = 0; i < PARENT_LOOKUP_LEVELS; i++) {
+            const parent = up.replace(/[/\\][^/\\]*$/, '');
+            if (!parent || parent === up || /^[a-zA-Z]:$/.test(parent)) break;
+            up = parent;
+            const candidate = up + '/' + rawSrc;
+            try {
+              ctx.trace.push('not found next to the document -> try parent folder: fetch_image_as_base64(' + candidate + ')');
+              const base64 = await tauri.fetchImageAsBase64({ url: candidate });
+              if (gen !== getRenderGeneration()) return;
+              const dataUri = `data:${mimeOf(rawSrc)};base64,${base64}`;
+              imageCache.set(cacheKey, dataUri);
+              img.src = getCachedImageURL(dataUri);
+              img.classList.remove('img-load-failed');
+              return;
+            } catch (e3) { ctx.trace.push('FAILED: ' + errText(e3)); }
+          }
+        }
         if (activeTab && activeTab.isBundled) {
           try {
             ctx.trace.push('bundled document -> fallback read_bundled_image_as_base64(' + rawSrc + ')');

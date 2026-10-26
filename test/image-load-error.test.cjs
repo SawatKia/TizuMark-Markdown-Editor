@@ -99,3 +99,57 @@ test('复制的提示词包含错误信息、逐步 trace、堆栈与图片 HTML
     assert.ok(copied.includes(part), '应含 ' + part + ' | ' + copied);
   }
 });
+
+test('相对路径在文档目录找不到时，向上在祖先目录查找（manuscript/ → 书籍根 figures/）', async () => {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<div id="p"><img src="figures/a.png" alt="x"></div>');
+  const preview = dom.window.document.getElementById('p');
+  const asked = [];
+  await processImages(preview, {
+    activeTab: { filePath: 'D:/book/manuscript/ch3.md' },
+    imageCache: new Map(),
+    tauri: {
+      fetchImageAsBase64: async ({ url }) => {
+        asked.push(url);
+        if (url === 'D:/book/figures/a.png') return 'QUJD';
+        throw new Error('os error 3');
+      },
+    },
+    getCachedImageURL: (u) => u,
+    getRenderGeneration: () => 1,
+  });
+  assert.deepStrictEqual(asked, ['D:/book/manuscript/figures/a.png', 'D:/book/figures/a.png']);
+  const img = preview.querySelector('img');
+  assert.ok(img.src.startsWith('data:image/png;base64,'), img.src);
+  assert.strictEqual(preview.querySelector('.img-load-error'), null);
+});
+
+test('祖先目录也找不到：报错 trace 列出每一次尝试，且不越过盘符根', async () => {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<div id="p"><img src="figures/a.png"></div>');
+  const preview = dom.window.document.getElementById('p');
+  const asked = [];
+  await processImages(preview, {
+    activeTab: { filePath: 'D:/book/manuscript/ch3.md' },
+    imageCache: new Map(),
+    tauri: { fetchImageAsBase64: async ({ url }) => { asked.push(url); throw new Error('os error 3'); } },
+    getCachedImageURL: (u) => u,
+    getRenderGeneration: () => 1,
+  });
+  assert.deepStrictEqual(asked, ['D:/book/manuscript/figures/a.png', 'D:/book/figures/a.png']);
+  assert.ok(preview.querySelector('.img-load-error'));
+});
+
+test('../ 开头的相对路径不做祖先回退', async () => {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<div id="p"><img src="../figures/a.png"></div>');
+  const asked = [];
+  await processImages(dom.window.document.getElementById('p'), {
+    activeTab: { filePath: 'D:/book/manuscript/ch3.md' },
+    imageCache: new Map(),
+    tauri: { fetchImageAsBase64: async ({ url }) => { asked.push(url); throw new Error('x'); } },
+    getCachedImageURL: (u) => u,
+    getRenderGeneration: () => 1,
+  });
+  assert.strictEqual(asked.length, 1);
+});
