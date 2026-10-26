@@ -448,3 +448,13 @@ test('folder-ctx: 菜单首项文案按 is_dir 动态切换（文件夹→打开
     assert.strictEqual(span.textContent, 'Open Containing Folder', '英文文件应显示 Open Containing Folder');
   } finally { cleanup(w); }
 });
+
+test('folder-sort: sortFolderEntries size 升/降序（文件按大小，文件夹之间按名称）', async () => {
+  const { w, ed } = await makeEditor();
+  try {
+    const asc = ed.sortFolderEntries(sampleEntries(), 'size', 'asc');
+    assert.deepStrictEqual(asc.map((e) => e.name), ['docs', 'proj', 'a.md', 'c.md']);
+    const desc = ed.sortFolderEntries(sampleEntries(), 'size', 'desc');
+    assert.deepStrictEqual(desc.map((e) => e.name), ['proj', 'docs', 'c.md', 'a.md']);
+  } finally { cleanup(w); }
+});
